@@ -5,16 +5,16 @@
  * Parser for typed wiki links in markdown content.
  *
  * Link syntax:
- *   [[entity:e_01ARZ3NDEKTSV4RRFFQ69G5FAV]]   — known entity by ID
- *   [[resolve:"Label"|"Description"]]           — find existing or create
- *   [[resolve:"Label"]]                         — find existing or create (no description)
- *   [[draft:"Label"|"Description"]]             — placeholder, author will draft
- *   [[gap:"Label"|"Description"]]               — marker, no draft commitment
+ *   [[entity:e_01ARZ3NDEKTSV4RRFFQ69G5FAV]]     — known entity by ID
+ *   [[resolve:"Label"|"Description"]]           — let the server find a match; falls back to placeholder on miss / no LLM
+ *   [[placeholder:"Label"|"Description"]]       — unwritten stub. Not queued. May be left or filled later.
+ *   [[assign:"Label"|"Description"]]            — hand off to the background drafter. Queued for auto-drafting.
  *
- * At depth >= maxDepth, draft: links are automatically promoted to gap: links.
+ * At depth >= maxDepth, assign: links are demoted to placeholder: (no further
+ * recursive queueing — prevents unbounded fan-out).
  */
 
-export type LinkType = "entity" | "resolve" | "draft" | "gap";
+export type LinkType = "entity" | "resolve" | "placeholder" | "assign";
 
 export interface ParsedLink {
   type: LinkType;
@@ -89,7 +89,7 @@ export function parseWikiLinks(
         raw,
         offset,
         reason:
-          'Expected typed link like [[entity:ULID]], [[resolve:"Label"|"Description"]], [[draft:"Label"|"Description"]], or [[gap:"Label"|"Description"]]. See GET /help/guide/wiki.',
+          'Expected typed link like [[entity:ULID]], [[resolve:"Label"|"Description"]], [[placeholder:"Label"|"Description"]], or [[assign:"Label"|"Description"]]. See GET /help/guide/wiki.',
       });
       continue;
     }
@@ -100,7 +100,7 @@ export function parseWikiLinks(
       errors.push({
         raw,
         offset,
-        reason: `Unknown wiki link type "${typeText}". Valid types are: entity, resolve, draft, gap. See GET /help/guide/wiki.`,
+        reason: `Unknown wiki link type "${typeText}". Valid types: entity, resolve, placeholder, assign. See GET /help/guide/wiki.`,
       });
       continue;
     }
@@ -111,9 +111,11 @@ export function parseWikiLinks(
 
     let type = typeText;
 
-    // Promote draft → gap at max depth
-    if (type === "draft" && depth >= maxDepth) {
-      type = "gap";
+    // Demote assign → placeholder at max depth. Stops runaway recursive
+    // queueing when a background drafter's own output references more
+    // assigns — further levels become inert stubs.
+    if (type === "assign" && depth >= maxDepth) {
+      type = "placeholder";
     }
 
     const spanText = extractSpanText(content, offset, length);
@@ -166,7 +168,12 @@ export function parseWikiLinks(
 }
 
 function isLinkType(value: string): value is LinkType {
-  return value === "entity" || value === "resolve" || value === "draft" || value === "gap";
+  return (
+    value === "entity" ||
+    value === "resolve" ||
+    value === "placeholder" ||
+    value === "assign"
+  );
 }
 
 /**

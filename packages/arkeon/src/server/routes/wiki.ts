@@ -39,17 +39,18 @@ const WIKI_CONTENT_DESCRIPTION = [
   "Markdown body. Typed [[links]] in the content are parsed and turned into relationships when the wiki is published.",
   "",
   "Four link forms — all wrapped in double square brackets:",
-  "  [[entity:ULID]]                     Hard reference to an existing visible entity.",
-  "  [[resolve:\"Label\"|\"Description\"]]   Let the server find a matching entity via Meilisearch + LLM judge. Requires an LLM provider configured.",
-  "  [[draft:\"Label\"|\"Description\"]]     Mint a placeholder entity the author intends to flesh out later. Queued for background drafting.",
-  "  [[gap:\"Label\"|\"Description\"]]       Flag a named thing that should exist but doesn't. No draft commitment.",
+  "  [[entity:ULID]]                         Hard reference to an existing visible entity.",
+  "  [[resolve:\"Label\"|\"Description\"]]       Let the server find a match via Meilisearch + LLM judge. Soft-degrades to placeholder on miss or when no LLM is configured; never fails the request.",
+  "  [[placeholder:\"Label\"|\"Description\"]]   Unwritten stub. Not queued. Leave it, or fill it in later.",
+  "  [[assign:\"Label\"|\"Description\"]]        Hand off to the background drafter. Queued for auto-drafting.",
   "",
-  "Labels must be double-quoted. Description is optional for resolve/draft/gap but recommended — it gives the resolver and future drafters context.",
-  "Entity IDs are unquoted ULIDs.",
+  "Labels must be double-quoted. Description is optional for resolve/placeholder/assign but recommended — it gives the resolver and future drafters context. Entity IDs are unquoted ULIDs.",
   "",
   "Every parsed link materializes as a `references` relationship from the published wiki to the target (or to a newly-minted placeholder). `primary_entities` materialize as `about` relationships.",
   "",
-  "Caveat: the parser scans every `[[...]]` pair in the content, including ones inside fenced code blocks. To discuss link syntax in prose, use alternative delimiters (e.g. `<<entity:id>>`). See GET /help/guide/wiki for a worked example.",
+  "Choosing between resolve / placeholder / assign: use `resolve` when the thing probably already exists and you want the server to find it; use `placeholder` when you want a stub but don't want anything auto-drafted; use `assign` to hand off actual drafting to a background worker.",
+  "",
+  "Caveat: the parser scans every `[[...]]` pair in the content, including inside fenced code blocks. To discuss link syntax in prose, use alternative delimiters (e.g. `<<entity:id>>`). See GET /help/guide/wiki for a worked example.",
 ].join("\n");
 
 const createWikiRoute = createRoute({
@@ -63,7 +64,7 @@ const createWikiRoute = createRoute({
   "x-arke-rules": [
     "Requires contributor role or above on the target space",
     "All [[entity:ULID]] links must reference existing visible entities — 404 otherwise",
-    "[[resolve:\"...\"]] links require an LLM provider configured on the server — 503 otherwise",
+    "[[resolve:...]] links soft-degrade to placeholders on LLM miss / no-match — the wiki still publishes with resolve_warnings",
     "Returns 409 if a wiki with overlapping primary_entities already exists in the space",
     "If space_id is omitted, falls back to the only space the actor can contribute to; 400 if ambiguous or none",
   ],
@@ -117,14 +118,27 @@ const createWikiRoute = createRoute({
             z.object({
               id: EntityIdParam,
               label: z.string(),
-              status: z.enum(["draft", "gap"]),
+              status: z
+                .enum(["placeholder", "assigned"])
+                .describe("`placeholder` = unwritten stub, not queued. `assigned` = queued for the background drafter."),
             }),
           ),
           relationships_created: z.number().int(),
+          resolve_warnings: z
+            .array(
+              z.object({
+                label: z.string(),
+                reason: z.enum(["llm_not_configured", "no_match"]),
+              }),
+            )
+            .optional()
+            .describe(
+              "Emitted when [[resolve:...]] links soft-degrade to placeholders — either because the server has no LLM configured, or because the LLM judge found no matching entity. Never fails the request.",
+            ),
         }),
       ),
     },
-    ...errorResponses([400, 401, 403, 404, 409, 503]),
+    ...errorResponses([400, 401, 403, 404, 409]),
   },
 });
 
@@ -218,27 +232,37 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
 
   // --- Stage 1: Mint placeholders and persist draft wiki ---
 
-  const draftLinks = links.filter((l) => l.type === "draft");
-  const gapLinks = links.filter((l) => l.type === "gap");
+  const placeholderLinksIn = links.filter((l) => l.type === "placeholder");
+  const assignLinksIn = links.filter((l) => l.type === "assign");
   const resolveLinksArr = links.filter((l) => l.type === "resolve");
 
-  // Resolve before Stage 1 writes anything. If candidate disambiguation
-  // needs an unconfigured LLM, the request fails without leaving a draft.
+  // Resolve before Stage 1 writes anything. resolve: links soft-degrade to
+  // placeholders on any failure mode — LLM missing, no match, or judge error —
+  // so the wiki publishes with warnings rather than failing the whole request.
+  type PlaceholderStatus = "placeholder" | "assigned";
+  const resolveWarnings: Array<{ label: string; reason: "llm_not_configured" | "no_match" }> = [];
   let resolved: Awaited<ReturnType<typeof resolveLinks>>;
   try {
     resolved = await resolveLinks(resolveLinksArr, actor, space_id);
   } catch (err) {
     if ((err as Error).message.includes("LLM configuration missing")) {
-      throw new ApiError(
-        503,
-        "llm_not_configured",
-        "No LLM provider is configured. Run `arkeon init --llm-*` or set OPENAI_API_KEY.",
-      );
+      // Mark every resolve: link as unresolved; they'll mint placeholders below.
+      resolved = resolveLinksArr.map((link) => ({ link, entityId: null, confidence: 0 }));
+      for (const link of resolveLinksArr) {
+        resolveWarnings.push({ label: link.label ?? "", reason: "llm_not_configured" });
+      }
+    } else {
+      throw err;
     }
-    throw err;
+  }
+  // For any resolve: link that ran but didn't match, record a no_match warning.
+  for (const r of resolved) {
+    if (!r.entityId && !resolveWarnings.some((w) => w.label === (r.link.label ?? ""))) {
+      resolveWarnings.push({ label: r.link.label ?? "", reason: "no_match" });
+    }
   }
 
-  const placeholders: Array<{ id: string; label: string; status: "draft" | "gap" }> = [];
+  const placeholders: Array<{ id: string; label: string; status: PlaceholderStatus }> = [];
   const placeholderLinks: Array<{ id: string; link: ParsedLink }> = [];
 
   const wikiId = generateUlid();
@@ -311,10 +335,16 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
       ON CONFLICT (space_id, entity_id) DO NOTHING
     `;
 
-    // Mint placeholder entities for draft: links
-    for (const link of draftLinks) {
+    // Mint placeholder entities for placeholder: and assign: links.
+    // Only assign: links are enqueued for the background drafter.
+    const stage1Mints: Array<{ link: ParsedLink; status: PlaceholderStatus }> = [
+      ...placeholderLinksIn.map((link) => ({ link, status: "placeholder" as const })),
+      ...assignLinksIn.map((link) => ({ link, status: "assigned" as const })),
+    ];
+
+    for (const { link, status } of stage1Mints) {
       const phId = generateUlid();
-      const phProps = { label: link.label, description: link.description ?? null, status: "draft" };
+      const phProps = { label: link.label, description: link.description ?? null, status };
 
       await tx`
         INSERT INTO entities (
@@ -332,41 +362,16 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
         ON CONFLICT (space_id, entity_id) DO NOTHING
       `;
 
-      // Enqueue for background processing
-      await tx`
-        INSERT INTO wiki_draft_queue (entity_id, depth, owner_agent, deadline, status, created_at)
-        VALUES (${phId}, ${depth + 1}, ${actor.id}, ${new Date(Date.now() + 3600_000).toISOString()}::timestamptz, 'pending', ${now}::timestamptz)
-      `;
+      if (status === "assigned") {
+        await tx`
+          INSERT INTO wiki_draft_queue (entity_id, depth, owner_agent, deadline, status, created_at)
+          VALUES (${phId}, ${depth + 1}, ${actor.id}, ${new Date(Date.now() + 3600_000).toISOString()}::timestamptz, 'pending', ${now}::timestamptz)
+        `;
+      }
 
-      placeholders.push({ id: phId, label: link.label ?? "", status: "draft" });
+      placeholders.push({ id: phId, label: link.label ?? "", status });
       placeholderLinks.push({ id: phId, link });
       replacements.push({ offset: link.offset, length: link.length, value: `[[entity:${phId}]]` });
-    }
-
-    // Gap links get non-queued placeholder entities so references remain visible in the graph.
-    for (const link of gapLinks) {
-      const gapId = generateUlid();
-      const gapProps = { label: link.label, description: link.description ?? null, status: "gap" };
-
-      await tx`
-        INSERT INTO entities (
-          id, kind, type, ver, properties, owner_id,
-          read_level, write_level, edited_by, note, created_at, updated_at
-        ) VALUES (
-          ${gapId}, 'entity', 'placeholder', 1, ${gapProps}::jsonb, ${actor.id},
-          ${read_level}, ${write_level}, ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
-        )
-      `;
-
-      await tx`
-        INSERT INTO space_entities (space_id, entity_id, added_by, added_at)
-        VALUES (${space_id}, ${gapId}, ${actor.id}, ${now}::timestamptz)
-        ON CONFLICT (space_id, entity_id) DO NOTHING
-      `;
-
-      placeholders.push({ id: gapId, label: link.label ?? "", status: "gap" });
-      placeholderLinks.push({ id: gapId, link });
-      replacements.push({ offset: link.offset, length: link.length, value: `[[entity:${gapId}]]` });
     }
 
     return wiki;
@@ -377,7 +382,7 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   // Collect all links that need relationships:
   //   - entity: links → direct reference
   //   - resolved resolve: links → matched entity
-  //   - unresolved resolve: links → mint placeholder or gap
+  //   - unresolved resolve: links → mint placeholder (unqueued)
   interface LinkTarget {
     targetId: string;
     predicate: string;
@@ -400,7 +405,7 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
     });
   }
 
-  // Draft/gap links get relationships to their newly minted placeholders.
+  // placeholder: and assign: links get relationships to their newly minted placeholders.
   for (const placeholderLink of placeholderLinks) {
     targets.push({
       targetId: placeholderLink.id,
@@ -420,65 +425,37 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
     }
   }
 
-  // Unresolved resolve: links → mint placeholders or gap based on depth
+  // Unresolved resolve: links soft-degrade to unqueued placeholders.
+  // The caller wrote `resolve:` (intent: find an existing match), so on
+  // miss we DON'T queue for auto-drafting — they'd have used `assign:` if
+  // they wanted that. Warnings are recorded above.
   const unresolvedPlaceholders = await withTransaction(async (tx) => {
     for (const q of setActorContext(tx, actor)) await q;
-    const minted: Array<{ id: string; label: string; status: "draft" | "gap" }> = [];
+    const minted: Array<{ id: string; label: string; status: PlaceholderStatus }> = [];
 
     for (const link of unresolvedLinks) {
-      if (depth < MAX_DEPTH) {
-        // Mint placeholder
-        const phId = generateUlid();
-        const phProps = { label: link.label, description: link.description ?? null, status: "draft" };
+      const phId = generateUlid();
+      const phProps = { label: link.label, description: link.description ?? null, status: "placeholder" };
 
-        await tx`
-          INSERT INTO entities (
-            id, kind, type, ver, properties, owner_id,
-            read_level, write_level, edited_by, note, created_at, updated_at
-          ) VALUES (
-            ${phId}, 'entity', 'placeholder', 1, ${phProps}::jsonb, ${actor.id},
-            ${read_level}, ${write_level}, ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
-          )
-        `;
+      await tx`
+        INSERT INTO entities (
+          id, kind, type, ver, properties, owner_id,
+          read_level, write_level, edited_by, note, created_at, updated_at
+        ) VALUES (
+          ${phId}, 'entity', 'placeholder', 1, ${phProps}::jsonb, ${actor.id},
+          ${read_level}, ${write_level}, ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
+        )
+      `;
 
-        await tx`
-          INSERT INTO space_entities (space_id, entity_id, added_by, added_at)
-          VALUES (${space_id}, ${phId}, ${actor.id}, ${now}::timestamptz)
-          ON CONFLICT (space_id, entity_id) DO NOTHING
-        `;
+      await tx`
+        INSERT INTO space_entities (space_id, entity_id, added_by, added_at)
+        VALUES (${space_id}, ${phId}, ${actor.id}, ${now}::timestamptz)
+        ON CONFLICT (space_id, entity_id) DO NOTHING
+      `;
 
-        await tx`
-          INSERT INTO wiki_draft_queue (entity_id, depth, owner_agent, deadline, status, created_at)
-          VALUES (${phId}, ${depth + 1}, ${actor.id}, ${new Date(Date.now() + 3600_000).toISOString()}::timestamptz, 'pending', ${now}::timestamptz)
-        `;
-
-        targets.push({ targetId: phId, predicate: REL_PREDICATE_REFERENCES, spanText: link.spanText });
-        minted.push({ id: phId, label: link.label ?? "", status: "draft" });
-        replacements.push({ offset: link.offset, length: link.length, value: `[[entity:${phId}]]` });
-      } else {
-        const gapId = generateUlid();
-        const gapProps = { label: link.label, description: link.description ?? null, status: "gap" };
-
-        await tx`
-          INSERT INTO entities (
-            id, kind, type, ver, properties, owner_id,
-            read_level, write_level, edited_by, note, created_at, updated_at
-          ) VALUES (
-            ${gapId}, 'entity', 'placeholder', 1, ${gapProps}::jsonb, ${actor.id},
-            ${read_level}, ${write_level}, ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
-          )
-        `;
-
-        await tx`
-          INSERT INTO space_entities (space_id, entity_id, added_by, added_at)
-          VALUES (${space_id}, ${gapId}, ${actor.id}, ${now}::timestamptz)
-          ON CONFLICT (space_id, entity_id) DO NOTHING
-        `;
-
-        targets.push({ targetId: gapId, predicate: REL_PREDICATE_REFERENCES, spanText: link.spanText });
-        minted.push({ id: gapId, label: link.label ?? "", status: "gap" });
-        replacements.push({ offset: link.offset, length: link.length, value: `[[entity:${gapId}]]` });
-      }
+      targets.push({ targetId: phId, predicate: REL_PREDICATE_REFERENCES, spanText: link.spanText });
+      minted.push({ id: phId, label: link.label ?? "", status: "placeholder" });
+      replacements.push({ offset: link.offset, length: link.length, value: `[[entity:${phId}]]` });
     }
     return minted;
   });
@@ -562,6 +539,7 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
       wiki: publishedWiki,
       placeholders,
       relationships_created: relationshipsCreated,
+      ...(resolveWarnings.length > 0 ? { resolve_warnings: resolveWarnings } : {}),
     },
     201,
   );

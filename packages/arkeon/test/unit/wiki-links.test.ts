@@ -6,22 +6,32 @@ import { describe, expect, test } from "vitest";
 import { parseWikiLinks, WikiLinkParseError } from "../../src/server/lib/wiki-links";
 
 describe("wiki link parsing", () => {
-  test("parses typed links and promotes draft links at max depth", () => {
+  test("parses typed links and demotes assign→placeholder at max depth", () => {
     const content = [
       "Known [[entity:01ABC_def-123]].",
       "Resolve [[resolve:\"Matt Connelly\"|\"Columbia historian\"]].",
-      "Draft [[draft:\"Mosaic Theory\"|\"classification concept\"]].",
-      "Gap [[gap:\"Open Concept\"|\"not expanded\"]].",
+      "Placeholder [[placeholder:\"Mosaic Theory\"|\"classification concept\"]].",
+      "Assign [[assign:\"Open Concept\"|\"worker should draft\"]].",
     ].join(" ");
 
     const links = parseWikiLinks(content, 2, 2);
 
-    expect(links.map((l) => l.type)).toEqual(["entity", "resolve", "gap", "gap"]);
+    // At depth >= maxDepth, assign is demoted to placeholder.
+    expect(links.map((l) => l.type)).toEqual(["entity", "resolve", "placeholder", "placeholder"]);
     expect(links[0]!.id).toBe("01ABC_def-123");
     expect(links[1]!.label).toBe("Matt Connelly");
     expect(links[1]!.description).toBe("Columbia historian");
     expect(links[2]!.label).toBe("Mosaic Theory");
-    expect(links[2]!.spanText).toContain("Draft");
+    expect(links[2]!.spanText).toContain("Placeholder");
+    expect(links[3]!.label).toBe("Open Concept");
+  });
+
+  test("assign stays assign when depth below max", () => {
+    const content = "Assign [[assign:\"Widget\"|\"to be drafted\"]].";
+    const links = parseWikiLinks(content, 0, 2);
+    expect(links).toHaveLength(1);
+    expect(links[0]!.type).toBe("assign");
+    expect(links[0]!.label).toBe("Widget");
   });
 
   test("rejects bare and malformed wiki links with offsets", () => {
