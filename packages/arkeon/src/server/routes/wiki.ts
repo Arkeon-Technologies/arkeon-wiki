@@ -15,6 +15,7 @@ import { createRoute, z } from "@hono/zod-openapi";
 
 import { requireActor, parseJsonBody } from "../lib/http";
 import { requireSpaceRole, resolveDefaultSpace } from "../lib/spaces";
+import { isLlmConfigured } from "../lib/llm";
 import { ApiError } from "../lib/errors";
 import { generateUlid } from "../lib/ids";
 import { createRouter } from "../lib/openapi";
@@ -242,23 +243,36 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   type PlaceholderStatus = "placeholder" | "assigned";
   const resolveWarnings: Array<{ label: string; reason: "llm_not_configured" | "no_match" }> = [];
   let resolved: Awaited<ReturnType<typeof resolveLinks>>;
-  try {
-    resolved = await resolveLinks(resolveLinksArr, actor, space_id);
-  } catch (err) {
-    if ((err as Error).message.includes("LLM configuration missing")) {
-      // Mark every resolve: link as unresolved; they'll mint placeholders below.
-      resolved = resolveLinksArr.map((link) => ({ link, entityId: null, confidence: 0 }));
-      for (const link of resolveLinksArr) {
-        resolveWarnings.push({ label: link.label ?? "", reason: "llm_not_configured" });
-      }
-    } else {
-      throw err;
+
+  if (resolveLinksArr.length > 0 && !isLlmConfigured()) {
+    // Server has no LLM — resolve: can't actually match anything, even if
+    // Meilisearch would return candidates. Emit llm_not_configured for every
+    // resolve: link and skip the resolver entirely. Authors see the true
+    // reason rather than a misleading "no_match".
+    resolved = resolveLinksArr.map((link) => ({ link, entityId: null, confidence: 0 }));
+    for (const link of resolveLinksArr) {
+      resolveWarnings.push({ label: link.label ?? "", reason: "llm_not_configured" });
     }
-  }
-  // For any resolve: link that ran but didn't match, record a no_match warning.
-  for (const r of resolved) {
-    if (!r.entityId && !resolveWarnings.some((w) => w.label === (r.link.label ?? ""))) {
-      resolveWarnings.push({ label: r.link.label ?? "", reason: "no_match" });
+  } else {
+    try {
+      resolved = await resolveLinks(resolveLinksArr, actor, space_id);
+    } catch (err) {
+      if ((err as Error).message.includes("LLM configuration missing")) {
+        // Defensive fallback: config races with our upfront check (e.g. the
+        // file was deleted between isLlmConfigured() and the LLM call).
+        resolved = resolveLinksArr.map((link) => ({ link, entityId: null, confidence: 0 }));
+        for (const link of resolveLinksArr) {
+          resolveWarnings.push({ label: link.label ?? "", reason: "llm_not_configured" });
+        }
+      } else {
+        throw err;
+      }
+    }
+    // For any resolve: link that ran against an LLM but didn't match.
+    for (const r of resolved) {
+      if (!r.entityId && !resolveWarnings.some((w) => w.label === (r.link.label ?? ""))) {
+        resolveWarnings.push({ label: r.link.label ?? "", reason: "no_match" });
+      }
     }
   }
 
