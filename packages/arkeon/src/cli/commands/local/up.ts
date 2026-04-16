@@ -8,13 +8,15 @@
  * Shape of the flow:
  *   1. Refuse if a live daemon already owns the pidfile
  *   2. Ensure ~/.arkeon, load or generate secrets
- *   3. Spawn `arkeon start` as a detached child with stdio piped to
+ *   3. If ~/.arkeon/pending-llm.json exists (written by `arkeon init
+ *      --llm-*`), apply it as OPENAI_API_KEY / OPENAI_BASE_URL /
+ *      WIKI_RESOLVE_MODEL env vars in the child environment, then clear
+ *      the file.
+ *   4. Spawn `arkeon start` as a detached child with stdio piped to
  *      ~/.arkeon/arkeon.log (append). The child writes the pidfile
  *      once the API is listening.
- *   4. Poll http://localhost:<port>/health with a 120s deadline.
+ *   5. Poll http://localhost:<port>/health with a 120s deadline.
  *      On timeout, tail the log and surface it.
- *   5. If ~/.arkeon/pending-llm.json exists, PUT it to /knowledge/config
- *      using the admin key, then clear the file.
  *   6. Save credentials so subsequent `arkeon entities list` etc. are
  *      auto-authenticated against this stack.
  *   7. Print a JSON result + exit 0; the detached child keeps running.
@@ -45,7 +47,6 @@ import {
   readPendingLlm,
   readPidfile,
   removePidfile,
-  type PendingLlmConfig,
 } from "../../lib/local-runtime.js";
 import { output } from "../../lib/output.js";
 
@@ -54,7 +55,6 @@ interface UpOptions {
   port?: string;
   pgPort?: string;
   meiliPort?: string;
-  knowledge?: boolean;
   timeout?: string;
 }
 
@@ -70,15 +70,11 @@ function nameToPortSlot(name: string): number {
 export function registerUpCommand(program: Command): void {
   program
     .command("up")
-    .description("Start the Arkeon stack as a detached background daemon, wait for health, apply LLM config")
+    .description("Start the Arkeon stack as a detached background daemon, wait for health")
     .option("--name <name>", "Named instance — auto-picks ports and isolates state in ~/.arkeon/<name>/")
     .option("--port <port>", `API port (default: ${DEFAULT_API_PORT})`)
     .option("--pg-port <port>", `Embedded Postgres port (default: ${DEFAULT_PG_PORT})`)
     .option("--meili-port <port>", `Meilisearch port (default: ${DEFAULT_MEILI_PORT})`)
-    .option(
-      "--knowledge",
-      "Enable the LLM knowledge extraction pipeline (requires a staged or existing LLM config)",
-    )
     .option("--timeout <seconds>", "Health-check timeout in seconds", "120")
     .action(async (opts: UpOptions) => {
       try {
@@ -199,8 +195,6 @@ async function runUp(opts: UpOptions): Promise<void> {
     "--pg-port", String(pgPort),
     "--meili-port", String(meiliPort),
   ];
-  if (opts.knowledge) childArgs.push("--knowledge");
-
   // fd-based redirect so the child's stdout/stderr append to arkeon.log
   // without leaving a pipe open on our side. Parent can exit freely.
   const logFd = openSync(logPath, "a");
@@ -223,6 +217,18 @@ async function runUp(opts: UpOptions): Promise<void> {
     }
   }
 
+  // Apply any LLM config pre-staged by `arkeon init --llm-*` so the wiki
+  // resolver can call the configured provider. We thread the config through
+  // env vars rather than a config file so the daemon's existing env-based
+  // config path just works.
+  const pendingLlm = readPendingLlm();
+  const llmEnv: Record<string, string> = {};
+  if (pendingLlm) {
+    llmEnv.OPENAI_API_KEY = pendingLlm.api_key;
+    if (pendingLlm.base_url) llmEnv.OPENAI_BASE_URL = pendingLlm.base_url;
+    if (pendingLlm.model) llmEnv.WIKI_RESOLVE_MODEL = pendingLlm.model;
+  }
+
   const child = spawn(entry.cmd, childArgs, {
     detached: true,
     stdio: ["ignore", logFd, logFd],
@@ -230,6 +236,7 @@ async function runUp(opts: UpOptions): Promise<void> {
     env: {
       ...process.env,
       ...explorerDistEnv,
+      ...llmEnv,
     },
   });
 
@@ -300,17 +307,6 @@ async function runUp(opts: UpOptions): Promise<void> {
     // Non-fatal — admin profile just won't be available
   }
 
-  // Apply any pending LLM config staged by `arkeon init --llm-*`.
-  let pushedLlm: PendingLlmConfig | null = null;
-  try {
-    pushedLlm = await pushPendingLlmConfig(secrets.adminBootstrapKey, apiUrl);
-  } catch (error) {
-    output.warn(
-      `Stack is up, but pushing the pending LLM config failed: ${(error as Error).message}. ` +
-        `Re-run \`arkeon up\` later or configure manually via \`arkeon knowledge config update\`.`,
-    );
-  }
-
   // Wire up the CLI for the user: point at the local instance and
   // store the admin bootstrap key as the active API key.
   config.set("apiUrl", apiUrl);
@@ -319,17 +315,22 @@ async function runUp(opts: UpOptions): Promise<void> {
     keyPrefix: secrets.adminBootstrapKey.slice(0, 8),
   });
 
+  // Clear the pending LLM config now that it's been applied via env.
+  // This prevents a stale key from being re-applied on subsequent `up` runs
+  // with a different staged config.
+  if (pendingLlm) clearPendingLlm();
+
   output.result({
     operation: "up",
     api_url: apiUrl,
     explorer_url: `${apiUrl}/explore`,
     health_url: `${apiUrl}/health`,
     ready_url: `${apiUrl}/ready`,
+    llm_configured: pendingLlm
+      ? { provider: pendingLlm.provider, base_url: pendingLlm.base_url, model: pendingLlm.model }
+      : null,
     admin_key_stored: true,
     admin_key_prefix: `${secrets.adminBootstrapKey.slice(0, 8)}...`,
-    llm_configured: pushedLlm
-      ? { provider: pushedLlm.provider, base_url: pushedLlm.base_url, model: pushedLlm.model }
-      : null,
     logs_hint: "arkeon logs",
     next: "arkeon seed",
   });
@@ -405,8 +406,7 @@ async function pollHealthWithProgress(
         if (
           trimmed.startsWith("[arkeon]") ||
           trimmed.startsWith("[meili]") ||
-          trimmed.startsWith("[bootstrap]") ||
-          trimmed.startsWith("[knowledge")
+          trimmed.startsWith("[bootstrap]")
         ) {
           output.progress(`  ${trimmed}`);
         }
@@ -435,44 +435,6 @@ async function pollHealthWithProgress(
     await new Promise((r) => setTimeout(r, 500));
   }
   return false;
-}
-
-async function pushPendingLlmConfig(
-  adminKey: string,
-  apiUrl: string,
-): Promise<PendingLlmConfig | null> {
-  const llm = readPendingLlm();
-  if (!llm) return null;
-
-  const response = await fetch(`${apiUrl.replace(/\/$/, "")}/knowledge/config`, {
-    method: "PUT",
-    headers: {
-      "content-type": "application/json",
-      authorization: `ApiKey ${adminKey}`,
-    },
-    body: JSON.stringify({
-      llm: {
-        default: {
-          provider: llm.provider,
-          base_url: llm.base_url,
-          api_key: llm.api_key,
-          model: llm.model,
-        },
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as
-      | { error?: { message?: string } }
-      | null;
-    throw new Error(
-      `Failed to push LLM config to ${apiUrl}/knowledge/config: ${response.status} ${response.statusText} — ${body?.error?.message ?? "no detail"}`,
-    );
-  }
-
-  clearPendingLlm();
-  return llm;
 }
 
 /**

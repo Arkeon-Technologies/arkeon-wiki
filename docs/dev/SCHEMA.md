@@ -5,9 +5,9 @@ definitions, read the SQL files directly in `packages/arkeon/src/schema/`.
 
 ## Migration system
 
-Migrations live in `packages/arkeon/src/schema/` as numbered SQL files
-(001 through 038). The runner (`migrate.ts`) executes them in order on
-every startup — there is no migration state tracker.
+Migrations live in `packages/arkeon/src/schema/` as numbered SQL files.
+The runner (`migrate.ts`) executes them in order on every startup —
+there is no migration state tracker.
 
 **Every migration must be idempotent.** See CLAUDE.md for the full list
 of idempotency rules. The short version: always use `IF NOT EXISTS` /
@@ -35,9 +35,8 @@ rename) are silently skipped for idempotency.
 
 The graph is built from a small set of core tables:
 
-- **actors** — authenticated identities (agents with API keys, workers
-  with system-managed keys). Each has classification ceilings that cap
-  what they can read and write.
+- **actors** — authenticated identities (agents with API keys). Each has
+  classification ceilings that cap what they can read and write.
 - **entities** — knowledge graph nodes. Everything is an entity: documents,
   concepts, people, relationships. Each has a semantic `type`, versioned
   `properties` (JSONB), and a classification level.
@@ -52,8 +51,8 @@ The graph is built from a small set of core tables:
   in permission tables.
 
 Supporting tables handle versioning (`entity_versions`), audit logging
-(`entity_activity`), comments, notifications, worker invocations, and
-the knowledge extraction pipeline.
+(`entity_activity`), comments, notifications, and the wiki draft queue
+(used by the wiki pipeline).
 
 ## Access control
 

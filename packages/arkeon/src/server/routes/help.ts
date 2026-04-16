@@ -141,7 +141,6 @@ This guide covers operations that require admin privileges.
 ## What Admins Can Do
 
 - Create and manage networks, actors, and API keys
-- Configure and invoke workers (LLM agents)
 - Set classification levels on content
 - Rebuild search indexes
 - View instance-wide statistics
@@ -160,9 +159,9 @@ Create an actor:
 Generate an API key for them:
   POST /actors/{id}/keys
 
-Actors come in two kinds:
-  agent   interactive use (human, bot, CLI)
-  worker  automated — runs sandboxed code with LLM backing
+Only kind "agent" is supported. (Legacy "worker" actors from earlier
+releases remain readable, but the runtime that invoked them has been
+removed.)
 
 ## Classification Levels
 
@@ -181,32 +180,6 @@ Rule: an actor can only read entities where
   entity.read_level <= actor.max_read_level
 and only write where
   entity.write_level <= actor.max_write_level
-
-## Workers
-
-Workers are actors with kind "worker". They run sandboxed code with LLM
-backing and have access to the Arke API via environment variables.
-
-Configure a worker:
-  POST /actors
-  {
-    "kind": "worker",
-    "properties": {
-      "name": "observer",
-      "system_prompt": "You are an observer...",
-      "llm": { "model": "...", "base_url": "...", "api_key": "..." },
-      "schedule": "0 * * * *",
-      "max_iterations": 50
-    }
-  }
-
-Workers automatically receive ARKE_API_URL and ARKE_API_KEY in their
-environment. Invoke manually:
-  POST /workers/{id}/invoke
-  { "prompt": "..." }
-
-View invocation history:
-  GET /workers/{id}/invocations
 
 ## Spaces & Permissions
 

@@ -88,30 +88,6 @@ export const ActorResponse = z
   })
   .openapi("ActorResponse");
 
-// --- Worker ---
-
-export const WorkerConfigSchema = z
-  .object({
-    name: z.string(),
-    system_prompt: z.string(),
-    llm: z.object({
-      base_url: z.string(),
-      model: z.string(),
-      api_key_hint: z.string(),
-    }),
-    arke_key_hint: z.string(),
-    max_iterations: z.number().int().optional(),
-    resource_limits: z
-      .object({
-        memory_mb: z.number().int().optional(),
-        cpu_percent: z.number().int().optional(),
-        max_pids: z.number().int().optional(),
-        timeout_ms: z.number().int().optional(),
-      })
-      .optional(),
-  })
-  .openapi("WorkerConfig");
-
 // --- Space ---
 
 export const SpaceSchema = z

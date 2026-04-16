@@ -2,11 +2,10 @@
 
 Three npm workspaces. Only two are published to npm.
 
-- `packages/arkeon` — the main package, published as `arkeon` on npm. Contains the CLI binary, the Hono API server, the sandboxed worker runtime, the database schema migrations, and shared TypeScript types. Single source tree under `src/`:
+- `packages/arkeon` — the main package, published as `arkeon` on npm. Contains the CLI binary, the Hono API server, the database schema migrations, and shared TypeScript types. Single source tree under `src/`:
   - `src/index.ts` — CLI entry (commander wiring)
   - `src/cli/commands/**` + `src/cli/lib/**` — CLI commands and helpers
-  - `src/server/**` — Hono API server (routes, middleware, knowledge pipeline)
-  - `src/runtime/**` — sandboxed agent runtime (formerly `packages/runtime`)
+  - `src/server/**` — Hono API server (routes, middleware, wiki pipeline)
   - `src/schema/*.sql` + `src/schema/migrate.ts` — migrations and the in-process runner
   - `src/shared/**` — concept text and OpenAPI helpers shared between CLI codegen and the server
   - `src/generated/**` — checked-in codegen outputs (OpenAPI snapshot → CLI commands + bundled Genesis seed)
@@ -39,7 +38,6 @@ npm run typecheck -w packages/arkeon         # Typecheck everything in one shot
 npm test -w packages/arkeon                  # Unit tests (test/unit/**)
 npm run test:e2e -w packages/arkeon          # API e2e tests (needs a running stack)
 ./scripts/test-local.sh                      # Full pre-push check: typecheck + unit + start + e2e
-./scripts/test-sandbox.sh                    # Worker sandbox tests (requires bubblewrap on Linux)
 ```
 
 ## Configuration
@@ -47,13 +45,12 @@ npm run test:e2e -w packages/arkeon          # API e2e tests (needs a running st
 Local-mode defaults are fine out of the box — secrets are generated on first run. For advanced setups see `.env.example` for host-mode overrides:
 - `DATABASE_URL` — point at an external Postgres instead of embedded
 - `MEILI_URL` / `MEILI_MASTER_KEY` — point at an external Meilisearch
-- `ENABLE_KNOWLEDGE_PIPELINE=true` — opt in to the LLM knowledge extraction pipeline (requires `OPENAI_API_KEY`; see `docs/ADVANCED.md`)
 - `STORAGE_BACKEND=s3` — switch from local filesystem to S3/R2/MinIO
 - `ARKEON_HOME` — override the `~/.arkeon` state directory
 
 ## One package, one deps list
 
-All of arkeon's server, CLI, runtime, schema, and shared code lives in `packages/arkeon/` as a single published package. There is no splitting between them — adding a dep means one line in `packages/arkeon/package.json`, nothing else. The deps on `@arkeon-technologies/{api,runtime,schema,shared}` are gone; those subtrees are regular `src/` directories now.
+All of arkeon's server, CLI, schema, and shared code lives in `packages/arkeon/` as a single published package. There is no splitting between them — adding a dep means one line in `packages/arkeon/package.json`, nothing else. The deps on `@arkeon-technologies/{api,schema,shared}` are gone; those subtrees are regular `src/` directories now.
 
 If you ever find yourself tempted to split a subtree out as its own published package, check first:
 1. Does it have a genuinely external consumer (not just "we import it elsewhere in the monorepo")?
@@ -162,7 +159,7 @@ The migration runner itself lives at `packages/arkeon/src/schema/migrate.ts`. It
 
 ## Agent Experience (AX) Surfaces
 
-Arkeon has multiple self-documenting surfaces that agents and users rely on to discover and use the API. Every feature an agent might use **must be discoverable** via at least one of: `/llms.txt`, `arkeon docs`, the worker system prompt, or a skill body. If you ship a feature and no AX surface knows about it, it doesn't exist to agents.
+Arkeon has multiple self-documenting surfaces that agents and users rely on to discover and use the API. Every feature an agent might use **must be discoverable** via at least one of: `/llms.txt`, `arkeon docs`, or a skill body. If you ship a feature and no AX surface knows about it, it doesn't exist to agents.
 
 Full architecture and data flow: `docs/dev/CONTEXT_MANAGEMENT.md`.
 
@@ -170,10 +167,10 @@ Full architecture and data flow: `docs/dev/CONTEXT_MANAGEMENT.md`.
 
 | What changed | AX surfaces affected | Action needed |
 |---|---|---|
-| **Route added/modified/removed** | `/llms.txt`, `/help`, `/openapi.json`, CLI commands, worker prompt, `arkeon docs` | Update `createRoute()` + Zod schemas, then rebuild (see checklist below) |
-| **Concept changed** (core definitions, classification, best practices) | API guide, CLI guide, worker prompt | Edit `src/shared/concepts.ts` — propagates automatically |
-| **Skill changed** (ingest, connect, doctor protocols) | Claude Code skills | Edit `assets/skills/meta.yaml` or `body/*.md`, rebuild to regenerate `src/generated/assets.ts` |
-| **SDK examples or response patterns** | Worker prompt, `/llms.txt` | Edit `worker-prompt.ts` and/or `openapi-help.ts`, then rebuild |
+| **Route added/modified/removed** | `/llms.txt`, `/help`, `/openapi.json`, CLI commands, `arkeon docs` | Update `createRoute()` + Zod schemas, then rebuild (see checklist below) |
+| **Concept changed** (core definitions, classification, best practices) | API guide, CLI guide | Edit `src/shared/concepts.ts` — propagates automatically |
+| **Skill changed** (connect, doctor protocols) | Claude Code skills | Edit `assets/skills/meta.yaml` or `body/*.md`, rebuild to regenerate `src/generated/assets.ts` |
+| **SDK examples or response patterns** | `/llms.txt` | Edit `openapi-help.ts`, then rebuild |
 | **Guide content** (getting-started, admin) | `/help/guide`, `arkeon guide` | Edit `help.ts` (API) or `guide/index.ts` (CLI) |
 | **Explorer** | `/explore` browser SPA | Edit `packages/explorer/`, rebuild |
 
@@ -184,7 +181,6 @@ Full architecture and data flow: `docs/dev/CONTEXT_MANAGEMENT.md`.
 - `/llms.txt`
 - `/help/:method/:path`
 - `arkeon docs --format api`
-- Worker system prompt (CLI reference)
 - Auto-generated CLI commands
 
 Steps:

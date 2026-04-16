@@ -35,19 +35,12 @@ jobs:
         with:
           node-version: 22
 
-      # Worker sandbox tests need bubblewrap on the host. It's not in the
-      # default GitHub runner image, but apt has it. curl/jq/python3 are
-      # already present.
-      - name: Install worker toolchain
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap
-
       - name: Install dependencies
         run: npm ci
 
       # Build SDK BEFORE typecheck. packages/arkeon imports
-      # @arkeon-technologies/sdk from its built dist (via
-      # src/server/knowledge/lib/arke-client.ts), so typechecking the
-      # arkeon package requires packages/sdk-ts/dist to exist.
+      # @arkeon-technologies/sdk from its built dist, so typechecking
+      # the arkeon package requires packages/sdk-ts/dist to exist.
       - name: Build SDK
         run: npm run build -w packages/sdk-ts
 
@@ -68,19 +61,11 @@ jobs:
           key: arkeon-bin-${{ runner.os }}-${{ runner.arch }}-meili-1.41.0
 
       - name: Start Arkeon stack
-        # --knowledge enables the extraction pipeline so the Knowledge
-        # Poller e2e test (test/e2e/knowledge.test.ts) can observe an
-        # ingest job row being created on upload. Child LLM calls will
-        # fail silently because no provider is configured, but the
-        # test only checks that the poller-triggered ingest row
-        # appears, not that extraction succeeds.
         run: |
-          KNOWLEDGE_POLLER_INTERVAL_MS=2000 \
           nohup npx tsx packages/arkeon/src/index.ts start \
             --port 8000 \
             --pg-port 15433 \
             --meili-port 17700 \
-            --knowledge \
             > /tmp/arkeon.log 2>&1 &
           echo $! > /tmp/arkeon.pid
 
@@ -136,9 +121,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-
-      - name: Install worker toolchain
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends bubblewrap
 
       - name: Install dependencies
         run: npm ci

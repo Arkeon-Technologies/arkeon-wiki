@@ -65,20 +65,6 @@ const jobs: RetentionJob[] = [
       });
     },
   },
-  {
-    name: "prune-worker-invocations",
-    description: "worker_invocations older than 30 days",
-    run: async () => {
-      return withSystemActorContext(async (sql) => {
-        const rows = await sql`
-          DELETE FROM worker_invocations
-          WHERE ts < NOW() - INTERVAL '30 days'
-          RETURNING 1
-        `;
-        return rows.length;
-      });
-    },
-  },
 ];
 
 let timer: NodeJS.Timeout | null = null;

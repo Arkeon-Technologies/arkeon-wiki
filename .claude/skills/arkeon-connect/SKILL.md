@@ -8,7 +8,7 @@ allowed-tools: Bash(npx arkeon *, arkeon *, ls *), Read, Glob, Grep, Write
 
 # Arkeon Connect
 
-Discover and create relationships between entities across different spaces. While `/arkeon-ingest` builds knowledge within a single repo/space, `/arkeon-connect` weaves connections between spaces — linking the same person, concept, or work that appears in different corpora.
+Discover and create relationships between entities across different spaces — linking the same person, concept, or work that appears in different corpora.
 
 ## Prerequisites
 

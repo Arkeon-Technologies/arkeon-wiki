@@ -15,8 +15,6 @@ import {
 import { generateUlid } from "../lib/ids";
 import { createRouter } from "../lib/openapi";
 import { createApiKey, sha256Hex } from "../lib/auth";
-import { encrypt, keyHint } from "../lib/crypto";
-import { syncWorkerSchedule, isSchedulerAvailable } from "../lib/scheduler";
 import {
   ActorSchema,
   ClassificationLevel,
@@ -79,7 +77,7 @@ const createActorRoute = createRoute({
       required: true,
       content: jsonContent(
         z.object({
-          kind: z.enum(["agent", "worker"]).describe("Actor kind: user or agent"),
+          kind: z.enum(["agent"]).describe("Actor kind (only 'agent' is supported)"),
           properties: JsonObjectSchema.optional().describe("Actor properties"),
           max_read_level: ClassificationLevel.optional().describe("Max read level (0-4, default 1=INTERNAL)"),
           max_write_level: ClassificationLevel.optional().describe("Max write level (0-4, default 1=INTERNAL)"),
@@ -93,7 +91,7 @@ const createActorRoute = createRoute({
       content: jsonContent(
         z.object({
           actor: ActorSchema,
-          api_key: z.string().optional().describe("Plaintext API key (only shown once, only for kind=agent)"),
+          api_key: z.string().describe("Plaintext API key (only shown once)"),
         }),
       ),
     },
@@ -120,7 +118,7 @@ const listActorsRoute = createRoute({
       kind: queryParam(
         "kind",
         z.enum(["agent", "worker"]).optional(),
-        "Filter by kind",
+        "Filter by kind (legacy 'worker' actors are still listable but are no longer invokable)",
       ),
     }),
   },
@@ -275,8 +273,15 @@ actorsRouter.openapi(createActorRoute, async (c) => {
   const actor = requireActor(c);
   const body = await parseJsonBody<Record<string, unknown>>(c);
 
-  if (typeof body.kind !== "string" || !["agent", "worker"].includes(body.kind)) {
-    throw new ApiError(400, "missing_required_field", "Missing or invalid kind");
+  if (body.kind === "worker") {
+    throw new ApiError(
+      400,
+      "unsupported_kind",
+      "Worker actors are no longer supported. Create actors with kind='agent' instead — the worker runtime (sandboxed execution, scheduler, POST /workers/{id}/invoke) was removed.",
+    );
+  }
+  if (body.kind !== "agent") {
+    throw new ApiError(400, "missing_required_field", "Missing or invalid kind (expected 'agent')");
   }
 
   const maxReadLevel = typeof body.max_read_level === "number" ? body.max_read_level : 1;
@@ -297,86 +302,6 @@ actorsRouter.openapi(createActorRoute, async (c) => {
   const keyHash = await sha256Hex(key.value);
   const sql = createSql();
   const keyId = generateUlid();
-
-  // Worker-specific: validate extra fields, encrypt keys, store in properties
-  if (body.kind === "worker") {
-    const name = body.name;
-    const systemPrompt = body.system_prompt;
-    const llm = body.llm as { base_url?: string; api_key?: string; model?: string } | undefined;
-
-    if (!name || typeof name !== "string") {
-      throw new ApiError(400, "missing_required_field", "name is required for workers");
-    }
-    if (!systemPrompt || typeof systemPrompt !== "string") {
-      throw new ApiError(400, "missing_required_field", "system_prompt is required for workers");
-    }
-    if (!llm?.base_url || !llm?.api_key || !llm?.model) {
-      throw new ApiError(400, "missing_required_field", "llm (base_url, api_key, model) is required for workers");
-    }
-
-    const arkeKeyEncrypted = await encrypt(key.value);
-    const arkeKeyHintVal = keyHint(key.value);
-    const llmKeyEncrypted = await encrypt(llm.api_key);
-    const llmKeyHintVal = keyHint(llm.api_key);
-
-    // Validate schedule fields
-    const schedule = typeof body.schedule === "string" ? body.schedule : undefined;
-    const scheduledPrompt = typeof body.scheduled_prompt === "string" ? body.scheduled_prompt : undefined;
-    if (schedule && !scheduledPrompt) {
-      throw new ApiError(400, "missing_required_field", "scheduled_prompt is required when setting a schedule");
-    }
-    if (schedule && !isSchedulerAvailable()) {
-      throw new ApiError(503, "scheduler_unavailable", "Scheduling is not available — the scheduler has not started yet");
-    }
-
-    const workerProperties: Record<string, unknown> = {
-      ...properties,
-      name,
-      system_prompt: systemPrompt,
-      llm: {
-        base_url: llm.base_url,
-        model: llm.model,
-        api_key_encrypted: llmKeyEncrypted,
-        api_key_hint: llmKeyHintVal,
-      },
-      arke_key_encrypted: arkeKeyEncrypted,
-      arke_key_hint: arkeKeyHintVal,
-      max_iterations: typeof body.max_iterations === "number" ? body.max_iterations : 50,
-      resource_limits: body.resource_limits ?? {},
-    };
-
-    if (schedule) {
-      workerProperties.schedule = schedule;
-      workerProperties.scheduled_prompt = scheduledPrompt;
-    }
-
-    const results = await sql.transaction([
-      ...setActorContext(sql, actor),
-      sql.query(
-        `INSERT INTO actors (id, kind, max_read_level, max_write_level, is_admin, can_publish_public, owner_id, properties, status, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, false, $5, $6, $7::jsonb, 'active', $8::timestamptz, $8::timestamptz)
-         RETURNING *`,
-        [id, "worker", maxReadLevel, maxWriteLevel, false, actor.id, JSON.stringify(workerProperties), now],
-      ),
-      sql.query(
-        `INSERT INTO api_keys (id, actor_id, key_hash, key_prefix, created_at)
-         VALUES ($1, $2, $3, $4, $5::timestamptz)`,
-        [keyId, id, keyHash, key.keyPrefix, now],
-      ),
-    ]);
-
-    const created = (results.at(-2) as ActorRecord[])[0];
-    if (!created) {
-      throw new ApiError(500, "internal_error", "Failed to create worker");
-    }
-
-    // Sync schedule if set
-    if (schedule) {
-      await syncWorkerSchedule(id, schedule, scheduledPrompt ?? null);
-    }
-
-    return c.json({ actor: created }, 201);
-  }
 
   // Agent flow: create key and return it
   const results = await sql.transaction([

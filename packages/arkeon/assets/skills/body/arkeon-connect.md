@@ -1,6 +1,6 @@
 # Arkeon Connect
 
-Discover and create relationships between entities across different spaces. While `/arkeon-ingest` builds knowledge within a single repo/space, `/arkeon-connect` weaves connections between spaces — linking the same person, concept, or work that appears in different corpora.
+Discover and create relationships between entities across different spaces. `/arkeon-connect` weaves connections between spaces — linking the same person, concept, or work that appears in different corpora.
 
 **Philosophy: be comprehensive.** It's better to over-connect than under-connect. Create all plausible connections, not just the obvious ones. Thin connections can always be pruned later, but missing connections are invisible.
 

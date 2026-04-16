@@ -123,10 +123,10 @@ const uploadContentRoute = createRoute({
   path: "/{id}/content",
   operationId: "uploadEntityContent",
   tags: ["Content"],
-  summary: "Upload a file directly to an entity. Automatically triggers knowledge extraction — no need to call POST /knowledge/ingest after upload.",
+  summary: "Upload a file directly to an entity.",
   "x-arke-auth": "required",
-  "x-arke-related": ["GET /entities/{id}/content", "DELETE /entities/{id}/content", "POST /knowledge/ingest"],
-  "x-arke-rules": ["Requires write access to the entity (owner, editor, or admin role)", "Optimistic concurrency: must pass current ver to upload", "Knowledge extraction is auto-enqueued within ~10s of upload"],
+  "x-arke-related": ["GET /entities/{id}/content", "DELETE /entities/{id}/content"],
+  "x-arke-rules": ["Requires write access to the entity (owner, editor, or admin role)", "Optimistic concurrency: must pass current ver to upload"],
   request: {
     params: z.object({
       id: pathParam("id", EntityIdParam, "Entity ULID"),

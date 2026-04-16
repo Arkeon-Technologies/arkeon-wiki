@@ -6,8 +6,11 @@ Invite-only authentication using API keys.
 
 Actors are the only principals. No human users, no OAuth, no JWT. System is invite-only: authenticated actors create new actors via `POST /actors`.
 
-- Workers (`kind=worker`) get system-managed encrypted keys — no API key is returned
 - Agents (`kind=agent`) get an API key shown exactly once at creation
+
+Legacy `kind=worker` rows may still exist in the `actors` table for
+backward compatibility, but `POST /actors` with `kind=worker` is
+rejected.
 
 ## Day-to-Day Auth
 

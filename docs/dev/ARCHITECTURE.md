@@ -10,7 +10,7 @@ of the architecture, not the rules for working in it.
 ```
 packages/
   arkeon/       Main package (published as `arkeon` on npm)
-                CLI, API server, runtime, schema, shared types
+                CLI, API server, schema, shared types
   sdk-ts/       TypeScript SDK (published as `@arkeon-technologies/sdk`)
                 Lightweight HTTP client, zero dependencies
   explorer/     Browser SPA (private, not published)
@@ -33,12 +33,12 @@ src/
     app.ts                Hono app factory, route mounting
     server.ts             Startup sequence, graceful shutdown
     routes/               Route handlers by domain
-    middleware/            Auth, request context
+    middleware/           Auth, request context
     lib/                  Shared server utilities, schemas
-    knowledge/            Knowledge extraction pipeline
-  runtime/                Sandboxed worker execution
+                          (includes wiki-links, wiki-resolve for the
+                          wiki pipeline)
   schema/
-    *.sql                 Numbered migrations (001–038)
+    *.sql                 Numbered migrations
     migrate.ts            In-process migration runner
   shared/                 Concepts + OpenAPI helpers shared between
                           CLI codegen and server
@@ -68,12 +68,9 @@ is called for file uploads/downloads.
 1. Read and normalize env vars (`ARKEON_*` canonical, legacy fallbacks)
 2. Create Hono app, generate OpenAPI spec
 3. **ensureBootstrap()** — run migrations, seed admin actor
-4. **initQueue()** — start worker invocation queue processor
-5. **ensureMeiliIndex()** — validate Meilisearch connection (if configured)
-6. **serve()** — bind HTTP on port 8000 (configurable)
-7. **startScheduler()** — background cron (periodic maintenance)
-8. **startRetention()** — retention policy enforcement
-9. *(Optional)* Knowledge pipeline — poller + job queue (if enabled)
+4. **ensureMeiliIndex()** — validate Meilisearch connection (if configured)
+5. **serve()** — bind HTTP on port 8000 (configurable)
+6. **startRetention()** — retention policy enforcement
 
 Graceful shutdown drains in-flight work with a configurable timeout
 (`DRAIN_TIMEOUT_MS`, default 320s), then force-exits.

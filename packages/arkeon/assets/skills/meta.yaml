@@ -3,9 +3,6 @@
 # and provider-specific frontmatter fields that get composed at build time.
 
 skills:
-  arkeon-ingest:
-    description: "Initialize a repo as an Arkeon knowledge base and build a knowledge graph from its documents."
-    argument-hint: "[space-name]"
   arkeon-connect:
     description: "Find and create relationships between entities across different spaces in the graph."
     argument-hint: "[topic or entity name]"
@@ -22,8 +19,6 @@ providers:
       common:
         disable-model-invocation: true
       per-skill:
-        arkeon-ingest:
-          allowed-tools: "Bash(npx arkeon *, arkeon *, ls *), Read, Glob, Grep, Write, Agent"
         arkeon-connect:
           allowed-tools: "Bash(npx arkeon *, arkeon *, ls *), Read, Glob, Grep, Write, Agent"
         arkeon-doctor:

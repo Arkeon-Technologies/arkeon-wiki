@@ -5,8 +5,8 @@
  * Shared concept definitions for the Arkeon platform.
  *
  * These are the single source of truth for "what things are" across
- * the API guide, CLI guide, and worker system prompts. They contain
- * NO tool-specific examples (no HTTP requests, no CLI commands).
+ * the API guide and CLI guide. They contain NO tool-specific examples
+ * (no HTTP requests, no CLI commands).
  * Each consumer combines these with its own examples.
  */
 
@@ -38,8 +38,8 @@ Space
   spaces and grant actors roles within them.
 
 Actor
-  An authenticated identity. Actors can be agents (interactive) or workers
-  (scheduled/automated). Each actor has API keys and clearance levels.`;
+  An authenticated identity (kind='agent'). Each actor has API keys and
+  clearance levels (max_read_level, max_write_level).`;
 
 export const AUTHENTICATION = `\
 Pass your API key via header:

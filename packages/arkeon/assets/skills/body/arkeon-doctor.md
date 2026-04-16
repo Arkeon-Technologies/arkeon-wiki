@@ -46,14 +46,7 @@ From the `arkeon status` output, check:
 - `seed_loaded` — whether the Genesis reference data is loaded
 - If not loaded, suggest: `arkeon seed`
 
-## 5. LLM configuration
-
-From the `arkeon status` output, check:
-- `llm_configured` — whether a knowledge pipeline LLM provider is set up
-- `llm_provider` / `llm_model` — which provider and model are configured
-- If not configured and the user wants knowledge extraction, suggest: `arkeon config set-llm`
-
-## 6. State directory
+## 5. State directory
 
 Check the state directory exists and has the expected structure:
 
@@ -68,7 +61,7 @@ Verify:
 
 If `ARKEON_HOME` is set, check that directory instead.
 
-## 7. Repo binding (if applicable)
+## 6. Repo binding (if applicable)
 
 Check whether the current working directory is bound to an Arkeon instance:
 
@@ -78,7 +71,7 @@ cat .arkeon/state.json 2>/dev/null
 
 If the file exists, report the bound space name, API URL, and actors. If not, note that this directory is not initialized as an Arkeon knowledge base (not an error — just informational).
 
-## 8. Report
+## 7. Report
 
 Summarize all findings in a single diagnostic report:
 
@@ -90,7 +83,6 @@ Stack:      {running/not running}
 Health:     {ok/unhealthy/n/a}
 Database:   {ready/unreachable/n/a}
 Seed:       {loaded/not loaded/n/a}
-LLM:        {configured (provider/model)/not configured/n/a}
 State dir:  {path} {OK/MISSING}
 Repo:       {bound to space "X"/not initialized}
 ```

@@ -290,7 +290,7 @@ export function registerAuthCommands(program: Command): void {
     .command("add")
     .description("Create a new actor on the graph and register it as a local profile")
     .argument("<name>", "Profile name (e.g. ingestor, reviewer)")
-    .option("--kind <kind>", "Actor kind: agent or worker", "agent")
+    .option("--kind <kind>", "Actor kind (only 'agent' is supported)", "agent")
     .option("--max-read-level <level>", "Max read level (0-4, default 1)")
     .option("--max-write-level <level>", "Max write level (0-4, default 1)")
     .option("--properties <json>", "Properties JSON")

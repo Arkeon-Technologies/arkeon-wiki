@@ -2,8 +2,6 @@
 
 Minimal TypeScript package for programmatic access to any Arkeon network. Pre-authenticated HTTP client with automatic space ID injection and cursor-based pagination.
 
-**Status:** Implemented. The SDK is pre-installed in worker sandboxes alongside the Arkeon CLI.
-
 - `packages/sdk-ts` — published as `@arkeon-technologies/sdk` on npm
 
 ## Configuration
@@ -12,7 +10,7 @@ Environment variables (all optional):
 
 ```bash
 export ARKE_API_URL="http://localhost:8000"       # defaults to this if unset
-export ARKE_API_KEY="uk_..."                      # user key, klados key, or agent key
+export ARKE_API_KEY="ak_..."                      # agent API key
 export ARKE_SPACE_ID="01XYZ..."                   # auto-injected into requests
 ```
 

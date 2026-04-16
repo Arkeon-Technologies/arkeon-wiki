@@ -28,8 +28,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Build SDK (required by arkeon imports — src/server/knowledge/lib/arke-client.ts
-# imports the built SDK dist).
+# Build SDK (required by arkeon imports — the arkeon package imports
+# @arkeon-technologies/sdk from its built dist).
 step "Build: SDK"
 npm run build -w packages/sdk-ts || fail "SDK build"
 pass "SDK build"

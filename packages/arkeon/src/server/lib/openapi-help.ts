@@ -6,7 +6,6 @@ import {
   type GeneratedField,
   type GeneratedOperation,
   parseOperations,
-  toFlagName,
 } from "../../shared";
 
 import type { Actor } from "../types";
@@ -32,7 +31,7 @@ export function renderPreamble(actor: Actor | null): string {
   lines.push(`# New here? See GET /help/guide for a getting-started walkthrough.`);
 
   if (actor.isAdmin) {
-    lines.push(`# Admin? See GET /help/guide/admin for network setup, actors, workers, and classification.`);
+    lines.push(`# Admin? See GET /help/guide/admin for network setup, actors, and classification.`);
   }
 
   lines.push("");
@@ -92,8 +91,8 @@ const LLMS_PREAMBLE = [
   "  select      Entity ID to focus initially",
   "  mode        'graph' (default) or 'feed'",
   "",
-  "This URL is for human browsers. Workers cannot open browsers —",
-  "write the URL into the JSON result file, then run the `arke-done` shell command so the caller can open it.",
+  "This URL is for human browsers. LLM agents should surface the URL",
+  "to the caller rather than attempting to open it.",
   "",
 ];
 
@@ -404,105 +403,6 @@ export function renderRouteHelpFromSpec(spec: OpenAPISpec, method: string, path:
   }
 
   return lines.join("\n");
-}
-
-// ---------------------------------------------------------------------------
-// Full CLI reference for worker prompts
-// ---------------------------------------------------------------------------
-
-function renderFieldLine(field: GeneratedField, isBody: boolean): string {
-  const flag = `--${toFlagName(field.name)}`;
-  const req = field.required ? "*" : "";
-  const enumText = field.enumValues?.length ? ` (${field.enumValues.join("|")})` : "";
-  const jsonHint = isBody && (field.type === "object" || field.type === "array") ? " <json>" : " <value>";
-  const desc = field.description || field.name;
-  return `  ${flag}${req}${jsonHint}${" ".repeat(Math.max(1, 28 - flag.length - req.length - jsonHint.length))}${field.type.padEnd(10)} ${desc}${enumText}`;
-}
-
-function renderOperationBlock(op: GeneratedOperation): string {
-  const positionals = op.pathParams.map((p) => `<${p.name}>`).join(" ");
-  const signature = positionals ? `${op.action} ${positionals}` : op.action;
-  const lines: string[] = [
-    `### arkeon ${op.group} ${signature}`,
-    `${op.method} ${op.path} | Auth: ${op.auth}`,
-    op.summary,
-  ];
-
-  if (op.pathParams.length) {
-    lines.push("");
-    lines.push("Path:");
-    for (const p of op.pathParams) {
-      lines.push(`  <${p.name}> — ${p.description || p.name}`);
-    }
-  }
-
-  if (op.queryParams.length) {
-    lines.push("");
-    lines.push("Query:");
-    for (const f of op.queryParams) {
-      lines.push(renderFieldLine(f, false));
-    }
-  }
-
-  if (op.bodyFields.length) {
-    lines.push("");
-    lines.push("Body:");
-    for (const f of op.bodyFields) {
-      lines.push(renderFieldLine(f, true));
-    }
-    lines.push(`  --data <json|@file|@->    (alternative: pass entire request body as JSON)`);
-  }
-
-  if (op.responseFields.length) {
-    lines.push("");
-    lines.push("Response:");
-    for (const f of op.responseFields) {
-      const req = f.required ? "*" : "";
-      const desc = f.description || f.name;
-      lines.push(`  ${(f.name + req).padEnd(22)} ${f.type.padEnd(10)} ${desc}`);
-    }
-  }
-
-  if (op.rules.length) {
-    lines.push("");
-    lines.push("Rules:");
-    for (const rule of op.rules) {
-      lines.push(`  - ${rule}`);
-    }
-  }
-
-  return lines.join("\n");
-}
-
-/**
- * Renders a comprehensive CLI reference from the OpenAPI spec.
- * Every operation is shown with its exact CLI syntax, all parameters,
- * types, descriptions, and permission rules.
- *
- * Used in worker prompts so LLMs have complete tool knowledge from the start.
- */
-export function renderFullReferenceFromSpec(spec: SharedOpenAPISpec): string {
-  const operations = parseOperations(spec);
-  const grouped = new Map<string, GeneratedOperation[]>();
-
-  for (const op of operations) {
-    const list = grouped.get(op.group) ?? [];
-    list.push(op);
-    grouped.set(op.group, list);
-  }
-
-  const sections: string[] = [];
-
-  for (const [group, ops] of grouped) {
-    sections.push(`## ${group}`);
-    sections.push("");
-    for (const op of ops) {
-      sections.push(renderOperationBlock(op));
-      sections.push("");
-    }
-  }
-
-  return sections.join("\n");
 }
 
 // ---------------------------------------------------------------------------

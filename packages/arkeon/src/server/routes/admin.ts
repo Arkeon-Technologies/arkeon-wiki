@@ -5,7 +5,6 @@ import { createRoute, z } from "@hono/zod-openapi";
 
 import { ApiError } from "../lib/errors";
 import { requireAdmin, parseJsonBody } from "../lib/http";
-import { getQueueStats, resetQueue } from "../lib/invocation-queue";
 import { bulkIndexEntities, ensureMeiliIndex, isMeilisearchConfigured } from "../lib/meilisearch";
 import { createRouter } from "../lib/openapi";
 import {
@@ -130,59 +129,6 @@ const reindexRoute = createRoute({
   },
 });
 
-const queueStatsRoute = createRoute({
-  method: "get",
-  path: "/queue",
-  operationId: "getQueueStats",
-  tags: ["Admin"],
-  summary: "Get worker invocation queue statistics",
-  "x-arke-auth": "required",
-  "x-arke-rules": ["System admin only"],
-  responses: {
-    200: {
-      description: "Queue statistics",
-      content: jsonContent(
-        z.object({
-          running: z.number().int().describe("Currently executing invocations"),
-          queued: z.number().int().describe("Invocations waiting in memory"),
-          max_concurrent: z.number().int().describe("Max concurrent worker slots"),
-          max_queue_depth: z.number().int().describe("Max queue depth"),
-          free_memory_mb: z.number().int().describe("Free system memory in MB"),
-        }),
-      ),
-    },
-    ...errorResponses([401, 403]),
-  },
-});
-
-const queueResetRoute = createRoute({
-  method: "post",
-  path: "/queue/reset",
-  operationId: "resetQueue",
-  tags: ["Admin"],
-  summary: "Force-reset the invocation queue (aborts all running workers, cancels all pending)",
-  "x-arke-auth": "required",
-  "x-arke-rules": ["System admin only"],
-  responses: {
-    200: {
-      description: "Queue reset result",
-      content: jsonContent(
-        z.object({
-          before: z.object({
-            running: z.number().int(),
-            queued: z.number().int(),
-          }),
-          after: z.object({
-            running: z.number().int(),
-            queued: z.number().int(),
-          }),
-          cancelled: z.number().int().describe("Total invocations cancelled (running + pending)"),
-        }),
-      ),
-    },
-    ...errorResponses([401, 403]),
-  },
-});
 
 // --- Handlers ---
 
@@ -338,20 +284,3 @@ adminRouter.openapi(reindexRoute, async (c) => {
   return c.json({ indexed: total }, 200);
 });
 
-adminRouter.openapi(queueStatsRoute, async (c) => {
-  requireAdmin(c);
-  const stats = getQueueStats();
-  return c.json({
-    running: stats.running,
-    queued: stats.queued,
-    max_concurrent: stats.maxConcurrent,
-    max_queue_depth: stats.maxQueueDepth,
-    free_memory_mb: stats.freeMemoryMb,
-  }, 200);
-});
-
-adminRouter.openapi(queueResetRoute, async (c) => {
-  requireAdmin(c);
-  const result = await resetQueue();
-  return c.json(result, 200);
-});

@@ -87,5 +87,3 @@ still run on startup.
 - [API documentation](http://localhost:8000/llms.txt) — full API reference
   (also available at `/help` and `/openapi.json`)
 - [TypeScript SDK](../dev/SDK.md) — lightweight HTTP client for building on the API
-- [Advanced features](../ADVANCED.md) — knowledge extraction pipeline,
-  worker runtime, and other features under active development

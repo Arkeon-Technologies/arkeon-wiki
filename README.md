@@ -22,30 +22,29 @@ npm install -g arkeon
 
 Requires Node.js 18.17+.
 
-**2. Ingest a repo**
+**2. Start the stack**
 
-Open your AI coding assistant in any repository and run the ingest skill:
-
+```bash
+arkeon init
+arkeon up
 ```
-/arkeon-ingest
+
+The first run downloads embedded Postgres and Meilisearch — cached
+after that.
+
+**3. Bind a repo and register documents**
+
+```bash
+cd /path/to/my-repo
+arkeon init my-project       # bind this repo to a space
+arkeon add README.md docs/   # register files as document entities
 ```
 
-This starts Arkeon (if not already running), analyzes the codebase, and
-builds a knowledge graph for it in its own space. The first run downloads
-embedded Postgres and Meilisearch — cached after that.
+Each repo gets its own space. Repeat in other repos you want indexed.
 
-Arkeon ships skills for [Claude Code](https://claude.ai/download),
-[Cursor](https://cursor.com), and [Codex](https://openai.com/index/introducing-codex/).
-Skills are installed automatically on first run.
+**4. Connect across spaces**
 
-**3. Ingest more repos**
-
-Repeat step 2 in other repositories. Each repo gets its own space with
-its own knowledge graph.
-
-**4. Connect them**
-
-Once you've ingested a few repos, run:
+Once you have a few spaces, run:
 
 ```
 /arkeon-connect
@@ -58,7 +57,7 @@ common patterns, dependencies between projects.
 
 Open [http://localhost:8000/explore](http://localhost:8000/explore) to
 see the graph explorer. Browse entities, traverse relationships, and
-search across everything you've ingested.
+search across everything you've registered.
 
 ## What you get
 
@@ -73,7 +72,7 @@ search across everything you've ingested.
 
 ## Using the CLI directly
 
-The skills above (`/arkeon-ingest`, `/arkeon-connect`) are the recommended workflow, but you can also use the CLI directly:
+You can drive everything from the CLI:
 
 ```bash
 arkeon init                # Generate secrets and state directory
@@ -118,10 +117,6 @@ All state lives in `~/.arkeon/` by default (override with `ARKEON_HOME`).
 For external Postgres/Meilisearch and other configuration options, see
 the [quickstart](docs/user/QUICKSTART.md).
 
-## Advanced features
-
-The knowledge extraction pipeline (LLM-powered auto-extraction from documents) and the sandboxed worker runtime (autonomous AI agents operating on the graph) are functional but under active development. See [docs/ADVANCED.md](./docs/ADVANCED.md).
-
 ## Development
 
 ### From a git checkout
@@ -150,7 +145,6 @@ npm test -w packages/arkeon            # Unit tests
 | Document | Description |
 |----------|-------------|
 | [Quickstart](docs/user/QUICKSTART.md) | Detailed install, configuration, and lifecycle commands |
-| [Advanced features](docs/ADVANCED.md) | Knowledge pipeline, worker runtime, and other in-development features |
 
 ### For developers
 
@@ -169,8 +163,6 @@ npm test -w packages/arkeon            # Unit tests
 | [SDK](docs/dev/SDK.md) | TypeScript SDK usage |
 | [Activity](docs/dev/ACTIVITY.md) | Mutation tracking and notifications |
 | [Context management](docs/dev/CONTEXT_MANAGEMENT.md) | How the API self-documents for LLMs |
-| [Agent runtime](docs/dev/AGENT_RUNTIME.md) | Worker sandbox design |
-| [Runtime environment](docs/dev/RUNTIME_ENVIRONMENT.md) | Worker sandbox tools and packages |
 | [Testing](docs/dev/TESTING.md) | Test structure and commands |
 
 Design specs for planned features live in [docs/future/](docs/future/).

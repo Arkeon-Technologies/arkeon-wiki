@@ -32,8 +32,7 @@ import { entityRelationshipsRouter, relationshipDirectRouter } from "./routes/re
 import { graphRouter } from "./routes/traverse";
 import { searchRouter } from "./routes/search";
 import { spacesRouter } from "./routes/spaces";
-import { workersRouter } from "./routes/workers";
-import { knowledgeRouter } from "./knowledge/routes";
+import { wikiRouter } from "./routes/wiki";
 
 export const openApiConfig = {
   openapi: "3.1.0" as const,
@@ -158,8 +157,7 @@ export function createApp(options?: { adminKey?: string }) {
   app.route("/relationships", relationshipDirectRouter);
   app.route("/search", searchRouter);
   app.route("/spaces", spacesRouter);
-  app.route("/workers", workersRouter);
-  app.route("/knowledge", knowledgeRouter);
+  app.route("/wiki", wikiRouter);
 
   app.notFound((c) => {
     const requestId = c.get("requestId");

@@ -1,7 +1,7 @@
 {
   "name": "arkeon",
   "version": "0.3.10",
-  "description": "Self-contained knowledge-graph platform: Hono API server, embedded Postgres + Meilisearch, CLI, and sandboxed agent runtime. One package, one process, no Docker.",
+  "description": "Self-contained wiki + knowledge-graph platform: Hono API server, embedded Postgres + Meilisearch, CLI. One package, one process, no Docker.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Arkeon-Technologies/arkeon.git",
@@ -43,11 +43,8 @@
     "dotenv": "^17.3.1",
     "embedded-postgres": "18.3.0-beta.16",
     "hono": "^4.12.9",
-    "mammoth": "^1.12.0",
     "meilisearch": "^0.56.0",
-    "node-cron": "^4.2.1",
     "openai": "^4.80.0",
-    "pdfjs-dist": "^4.10.38",
     "postgres": "^3.4.8",
     "zod": "^4.3.6"
   },

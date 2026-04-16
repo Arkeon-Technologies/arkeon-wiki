@@ -146,7 +146,6 @@ git branch -d fix/issue-$ARGUMENTS
 - All work happens inside the worktree
 - Run migrations if any SQL files changed
 - Run e2e tests before opening the PR
-- If changing `packages/arkeon/src/runtime/sandbox.ts` or `packages/arkeon/src/server/lib/worker-invoke.ts`, run `./scripts/test-sandbox.sh`. On Linux this exercises real bubblewrap; on macOS it exercises the direct-execution fallback. The CI workflow installs bubblewrap on Ubuntu and runs the same script, so full-isolation tests still run in CI even if you develop on a Mac.
 - If tests fail, fix and re-test — don't open a broken PR
 - **Labeling is mandatory**: `in-progress` must be added before any work begins; transition to `in-review` when the PR is opened
 - If you abandon the issue (user says stop, or it's blocked), remove the `in-progress` label: `gh issue edit $ARGUMENTS --remove-label "in-progress"`

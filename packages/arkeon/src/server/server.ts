@@ -23,21 +23,7 @@ import type { AddressInfo } from "node:net";
 import { createApp, openApiConfig } from "./app.js";
 import { ensureBootstrap } from "./lib/bootstrap.js";
 import { ensureMeiliIndex, isMeilisearchConfigured } from "./lib/meilisearch.js";
-import { type OpenAPISpec } from "../shared/index.js";
-import { renderFullReferenceFromSpec } from "./lib/openapi-help.js";
-import { startScheduler, stopScheduler } from "./lib/scheduler.js";
 import { startRetention, stopRetention } from "./lib/retention.js";
-import { initQueue, drainQueue } from "./lib/invocation-queue.js";
-import { setWorkerCliReference } from "./lib/worker-prompt.js";
-import {
-  initKnowledgeQueue,
-  drainKnowledgeQueue,
-} from "./knowledge/queue.js";
-import {
-  startKnowledgePoller,
-  stopKnowledgePoller,
-} from "./knowledge/poller.js";
-import { bootstrapKnowledgeService } from "./knowledge/bootstrap.js";
 
 export interface ArkeonApiConfig {
   /** TCP port to bind. Default: process.env.PORT ?? 8000 */
@@ -46,8 +32,6 @@ export interface ArkeonApiConfig {
   databaseUrl?: string;
   /** Admin API key seeded on first boot. Default: process.env.ADMIN_BOOTSTRAP_KEY */
   adminBootstrapKey?: string;
-  /** Enable the knowledge extraction pipeline. Default: process.env.ENABLE_KNOWLEDGE_PIPELINE === "true" */
-  knowledgeEnabled?: boolean;
   /** Meilisearch URL. Default: process.env.MEILI_URL (unset = search disabled) */
   meiliUrl?: string;
   /** Meilisearch master key. Default: process.env.MEILI_MASTER_KEY */
@@ -89,7 +73,6 @@ export async function startApi(config: ArkeonApiConfig = {}): Promise<ArkeonApi>
     ["ARKEON_MEILI_MASTER_KEY", "MEILI_MASTER_KEY"],
     ["ARKEON_ADMIN_BOOTSTRAP_KEY", "ADMIN_BOOTSTRAP_KEY"],
     ["ARKEON_ENCRYPTION_KEY", "ENCRYPTION_KEY"],
-    ["ARKEON_ENABLE_KNOWLEDGE_PIPELINE", "ENABLE_KNOWLEDGE_PIPELINE"],
     ["ARKEON_OPENAI_API_KEY", "OPENAI_API_KEY"],
     ["ARKEON_STORAGE_BACKEND", "STORAGE_BACKEND"],
     ["ARKEON_STORAGE_DIR", "STORAGE_DIR"],
@@ -110,20 +93,12 @@ export async function startApi(config: ArkeonApiConfig = {}): Promise<ArkeonApi>
   if (config.meiliUrl) process.env.MEILI_URL = config.meiliUrl;
   if (config.meiliMasterKey) process.env.MEILI_MASTER_KEY = config.meiliMasterKey;
   if (config.explorerDist) process.env.ARKEON_EXPLORER_DIST = config.explorerDist;
-  if (typeof config.knowledgeEnabled === "boolean") {
-    process.env.ENABLE_KNOWLEDGE_PIPELINE = String(config.knowledgeEnabled);
-  }
 
   const app = createApp({
     adminKey: config.adminBootstrapKey || process.env.ADMIN_BOOTSTRAP_KEY,
   });
 
-  // Generate the full CLI reference once at startup for worker system prompts
-  const spec = app.getOpenAPI31Document(openApiConfig) as unknown as OpenAPISpec;
-  setWorkerCliReference(renderFullReferenceFromSpec(spec));
-
   await ensureBootstrap();
-  await initQueue();
 
   if (isMeilisearchConfigured()) {
     await ensureMeiliIndex();
@@ -137,31 +112,12 @@ export async function startApi(config: ArkeonApiConfig = {}): Promise<ArkeonApi>
     console.log(`arkeon-api listening on http://localhost:${info.port}`);
   });
 
-  await startScheduler();
   startRetention();
 
-  // Knowledge extraction service — opt-in via ENABLE_KNOWLEDGE_PIPELINE=true.
-  // The LLM provider is configured at runtime via /knowledge/config (see
-  // `arkeon init --llm-*` and `arkeon knowledge config update`) and stored
-  // in the knowledge_config table. There is no env-var fallback for the
-  // key. See docs/ADVANCED.md for cost/behavior notes.
-  const knowledgeEnabled = process.env.ENABLE_KNOWLEDGE_PIPELINE === "true";
-  if (knowledgeEnabled) {
-    // Ensure the knowledge SDK knows the actual API port — without this,
-    // bootstrapKnowledgeService falls back to PORT env (often unset) → 8000,
-    // which is wrong for named instances on non-default ports.
-    if (!process.env.ARKE_API_URL) {
-      process.env.ARKE_API_URL = `http://localhost:${port}`;
-    }
-    await bootstrapKnowledgeService();
-    initKnowledgeQueue();
-    await startKnowledgePoller();
-    console.log("[knowledge] pipeline enabled");
-  } else {
-    console.log(
-      "[knowledge] pipeline disabled (set ENABLE_KNOWLEDGE_PIPELINE=true to enable; see docs/ADVANCED.md)",
-    );
-  }
+  // TODO(phase-2): Start wiki background processors here:
+  //   - Draft worker: polls wiki_draft_queue, calls POST /wiki with depth+1
+  //   - Dedup poller: watches published wikis, finds overlapping primary_entities, dispatches edits
+  // Pattern: use setInterval like retention.ts, or a dedicated poller
 
   const address = server.address() as AddressInfo;
 
@@ -170,12 +126,6 @@ export async function startApi(config: ArkeonApiConfig = {}): Promise<ArkeonApi>
       opts.drainTimeoutMs ?? (Number(process.env.DRAIN_TIMEOUT_MS) || 320_000);
 
     const drainPromise = (async () => {
-      if (knowledgeEnabled) {
-        stopKnowledgePoller();
-        await drainKnowledgeQueue();
-      }
-      await drainQueue();
-      await stopScheduler();
       stopRetention();
       await new Promise<void>((resolve, reject) =>
         server.close((err) => (err ? reject(err) : resolve())),

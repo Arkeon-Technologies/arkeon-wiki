@@ -145,8 +145,6 @@ If "Jane Smith" (person) already exists in that space, her properties are shallo
 
 Upsert requires `space_id` for matching. Without a space, entities are always created fresh.
 
-The knowledge extraction pipeline uses upsert by default. See [KNOWLEDGE_PIPELINE.md](./KNOWLEDGE_PIPELINE.md) for details.
-
 ## Atomicity
 
 Every `/ops` request runs in a single Postgres transaction. All operations commit together or none do. If any op fails — invalid ref, permission violation, classification ceiling, missing target, RLS denial — the entire batch is rolled back and the caller gets a structured error with:

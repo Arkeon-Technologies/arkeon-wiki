@@ -24,10 +24,9 @@ npx arkeon status          # Show running state, URLs, and version
 
 ### Key workflows
 
-- **Ingest documents:** `npx arkeon init <space>`, then `npx arkeon add <files>`
+- **Register documents:** `npx arkeon init <space>`, then `npx arkeon add <files>`
 - **Search:** `npx arkeon search query --q "term" --space-id <id>`
 - **Explore the graph:** Open the explorer URL from `npx arkeon status`
-- **Extract knowledge:** Use the arkeon-ingest skill/command to build entity graphs from documents
 - **Cross-space linking:** Use the arkeon-connect skill/command to weave relationships across spaces
 
 ## Architecture

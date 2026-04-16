@@ -4,9 +4,8 @@
 /**
  * Shared OpenAPI → CLI operation parsing.
  *
- * Used by:
- * - CLI codegen script (generates Commander commands)
- * - API worker prompt (generates full CLI reference for LLM context)
+ * Used by the CLI codegen script (generates Commander commands) and
+ * the /llms.txt full API reference.
  *
  * This is the single source of truth for how operationIds map to
  * `arkeon <group> <action>` commands and how parameters are extracted.
@@ -189,18 +188,6 @@ export const CLI_OVERRIDES: Record<string, Override> = {
 
   // --- Search ---
   searchEntities: { group: "search", action: "query" },
-
-  // --- Workers ---
-  getWorker: { group: "workers", action: "get" },
-  updateWorker: { group: "workers", action: "update" },
-  invokeWorker: { group: "workers", action: "invoke" },
-  listWorkerInvocations: { group: "workers", action: "invocations" },
-  getLatestWorkerInvocation: { group: "workers", action: "latest" },
-  getWorkerInvocation: { group: "workers", action: "poll" },
-  getInvocationTree: { group: "workers", action: "tree" },
-  listWorkerPermissions: { group: "workers", action: "permissions" },
-  grantWorkerPermission: { group: "workers", action: "grant" },
-  revokeWorkerPermission: { group: "workers", action: "revoke" },
 
   // --- Activity ---
   listActivity: { group: "activity", action: "list" },

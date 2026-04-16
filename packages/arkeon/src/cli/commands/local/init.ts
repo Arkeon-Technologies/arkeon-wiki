@@ -57,9 +57,7 @@ export function registerInitCommand(program: Command): void {
     .addHelpText(
       "after",
       "\nLLM flags: pass all four of --llm-provider, --llm-base-url, --llm-api-key, --llm-model\n" +
-        "together to pre-configure the knowledge pipeline. `arkeon up` will apply them against\n" +
-        "the running stack the first time /health goes green. Omit them entirely to skip —\n" +
-        "you can configure later via `arkeon knowledge config update` against a running stack.",
+        "together to pre-configure LLM access for wiki link resolution. Omit them entirely to skip.",
     )
     .action(async (opts: InitOptions) => {
       try {
@@ -97,7 +95,7 @@ export function registerInitCommand(program: Command): void {
             : null,
           llm_hint: llm
             ? null
-            : "No LLM provider configured. Pass --llm-provider, --llm-base-url, --llm-api-key, --llm-model to stage one, or run `arkeon knowledge config update` later against the running stack.",
+            : "No LLM provider configured. Pass --llm-provider, --llm-base-url, --llm-api-key, --llm-model to stage one.",
           next: "arkeon up",
         });
       } catch (error) {

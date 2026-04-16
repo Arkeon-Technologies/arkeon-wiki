@@ -92,8 +92,7 @@ export function buildLlmConfigFromFlags(flags: InitLlmFlags): PendingLlmConfig |
   }
 
   // URL sanity check — catch typos before the value gets persisted to
-  // pending-llm.json and causes a confusing PUT /knowledge/config failure
-  // during `arkeon up`.
+  // pending-llm.json.
   try {
     // eslint-disable-next-line no-new
     new URL(llmBaseUrl!);

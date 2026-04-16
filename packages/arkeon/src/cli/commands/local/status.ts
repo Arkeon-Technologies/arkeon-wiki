@@ -4,8 +4,6 @@
 /**
  * `arkeon status` — report the local stack's running state, HTTP
  * health, readiness, whether the Genesis seed has been loaded, and
- * whether the knowledge pipeline has an LLM provider configured.
- *
  * Exit codes:
  *   0 — running + /health and /ready both OK
  *   1 — running but unhealthy or not ready
@@ -35,14 +33,10 @@ interface EntitiesListResponse {
   next_cursor?: string | null;
 }
 
-interface KnowledgeConfigResponse {
-  llm?: Array<{ id: string; provider: string; model: string; has_key: boolean }>;
-}
-
 export function registerStatusCommand(program: Command): void {
   program
     .command("status")
-    .description("Show the local Arkeon stack's process, health, seed, and LLM state")
+    .description("Show the local Arkeon stack's process, health, and seed state")
     .option(
       "--port <port>",
       "API port to probe (defaults to the configured local port)",
@@ -100,8 +94,8 @@ async function runStatus(opts: StatusOptions): Promise<void> {
   }
 
   // Running — probe the HTTP surface. We do /health and /ready
-  // unauthenticated (they bypass auth middleware) and the entity +
-  // knowledge probes authenticated.
+  // unauthenticated (they bypass auth middleware) and the entity
+  // probe authenticated.
   const health = await probeHealth(`${apiUrl}/health`);
   const ready = await probeHealth(`${apiUrl}/ready`);
 
@@ -143,10 +137,7 @@ async function runStatus(opts: StatusOptions): Promise<void> {
   }
   const adminKey = secrets.adminBootstrapKey;
 
-  const [seedState, llmState] = await Promise.all([
-    probeSeedLoaded(apiUrl, adminKey),
-    probeLlmConfigured(apiUrl, adminKey),
-  ]);
+  const seedState = await probeSeedLoaded(apiUrl, adminKey);
 
   // Collect all registered instances and their liveness
   const instances = listInstances().map((inst) => {
@@ -165,9 +156,6 @@ async function runStatus(opts: StatusOptions): Promise<void> {
     ready,
     seed_loaded: seedState.loaded,
     seed_book_id: seedState.bookId,
-    llm_configured: llmState.configured,
-    llm_provider: llmState.provider,
-    llm_model: llmState.model,
     state_dir: arkeonDir(),
     admin_key_prefix: `${adminKey.slice(0, 8)}...`,
     repo,
@@ -208,24 +196,4 @@ async function probeSeedLoaded(
   }
 }
 
-async function probeLlmConfigured(
-  apiUrl: string,
-  adminKey: string,
-): Promise<{ configured: boolean; provider: string | null; model: string | null }> {
-  try {
-    const res = await fetch(`${apiUrl}/knowledge/config`, {
-      headers: { authorization: `ApiKey ${adminKey}` },
-    });
-    if (!res.ok) return { configured: false, provider: null, model: null };
-    const body = (await res.json()) as KnowledgeConfigResponse;
-    const def = body.llm?.find((c) => c.id === "default" && c.has_key);
-    return {
-      configured: Boolean(def),
-      provider: def?.provider ?? null,
-      model: def?.model ?? null,
-    };
-  } catch {
-    return { configured: false, provider: null, model: null };
-  }
-}
 

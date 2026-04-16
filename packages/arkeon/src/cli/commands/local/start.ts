@@ -8,8 +8,7 @@
  *   1. Refuse to start if an instance is already running (pidfile check).
  *   2. Create ~/.arkeon/, load or generate secrets.
  *   3. Ensure the Meilisearch binary is downloaded and executable.
- *   4. Warn (don't block) if the worker toolchain is missing.
- *   5. Start embedded Postgres.
+ *   4. Start embedded Postgres.
  *   6. Run migrations.
  *   7. Start Meilisearch.
  *   8. Call startApi() in-process, wired to those services.
@@ -35,7 +34,6 @@ import {
   DEFAULT_MEILI_PORT,
   DEFAULT_PG_PORT,
   filesDataDir,
-  checkWorkerToolchain,
   ensureArkeonDir,
   ensureMeiliBinary,
   isProcessAlive,
@@ -56,7 +54,6 @@ interface StartOptions {
   port?: string;
   pgPort?: string;
   meiliPort?: string;
-  knowledge?: boolean;
 }
 
 export function registerStartCommand(program: Command): void {
@@ -66,7 +63,6 @@ export function registerStartCommand(program: Command): void {
     .option("--port <port>", "API port", String(DEFAULT_API_PORT))
     .option("--pg-port <port>", "Embedded Postgres port", String(DEFAULT_PG_PORT))
     .option("--meili-port <port>", "Meilisearch port", String(DEFAULT_MEILI_PORT))
-    .option("--knowledge", "Enable the LLM knowledge extraction pipeline (requires OPENAI_API_KEY)")
     .action(async (options: StartOptions) => {
       await runStart(options);
     });
@@ -110,8 +106,6 @@ async function runStart(options: StartOptions): Promise<void> {
 
   console.log("[arkeon] Starting local stack");
   console.log(`         state dir: ${arkeonDir()}`);
-
-  checkWorkerToolchain();
 
   // --- Shutdown handler ---
   // Registered early so that a SIGTERM/SIGINT received while services are
@@ -285,7 +279,6 @@ async function runStart(options: StartOptions): Promise<void> {
     adminBootstrapKey,
     meiliUrl: meiliUrlForApi,
     meiliMasterKey: meiliKeyForApi,
-    knowledgeEnabled: options.knowledge === true,
     explorerDist: explorerDist ?? undefined,
   });
 

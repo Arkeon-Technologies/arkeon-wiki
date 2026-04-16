@@ -19,7 +19,7 @@
  * tie into startApi(). The `arkeon start` command orchestrates the two.
  */
 
-import { spawn, type ChildProcess, spawnSync } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import {
   chmodSync,
   createWriteStream,
@@ -403,40 +403,6 @@ export async function startEmbeddedPostgres(opts: {
       }
     },
   };
-}
-
-// =====================================================================
-// Worker toolchain check — warn but don't block
-// =====================================================================
-
-export function checkWorkerToolchain(): void {
-  // On Windows, execDirect() uses PowerShell — bash isn't needed.
-  const tools = platform() === "win32"
-    ? ["curl", "jq", "python3"]
-    : ["bash", "curl", "jq", "python3"];
-  const missing: string[] = [];
-  for (const tool of tools) {
-    const r = spawnSync(tool, ["--version"], { stdio: "ignore" });
-    if (r.status !== 0) missing.push(tool);
-  }
-  if (missing.length === 0) return;
-
-  console.warn(
-    `[arkeon] Worker toolchain incomplete — missing: ${missing.join(", ")}`,
-  );
-  console.warn(
-    `         Workers can still be created, but their shell commands may fail.`,
-  );
-  console.warn(
-    `         Install with:`,
-  );
-  if (platform() === "darwin") {
-    console.warn(`           brew install ${missing.join(" ")}`);
-  } else if (platform() === "linux") {
-    console.warn(`           sudo apt-get install ${missing.join(" ")}`);
-  } else if (platform() === "win32") {
-    console.warn(`           Windows: use WSL2 (https://aka.ms/wsl) or install via scoop/choco`);
-  }
 }
 
 // =====================================================================

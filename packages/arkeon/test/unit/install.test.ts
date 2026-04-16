@@ -23,22 +23,22 @@ describe("install / uninstall", () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  test("SKILLS asset has claude provider with arkeon-ingest", () => {
+  test("SKILLS asset has claude provider with arkeon-connect", () => {
     expect(SKILLS).toBeDefined();
     expect(SKILLS["claude"]).toBeDefined();
-    expect(SKILLS["claude"]!["arkeon-ingest"]).toBeDefined();
-    expect(SKILLS["claude"]!["arkeon-ingest"]).toContain("name: arkeon-ingest");
+    expect(SKILLS["claude"]!["arkeon-connect"]).toBeDefined();
+    expect(SKILLS["claude"]!["arkeon-connect"]).toContain("name: arkeon-connect");
   });
 
   test("SKILLS asset has all providers", () => {
     for (const provider of ["claude", "codex", "cursor", "gemini"]) {
       expect(SKILLS[provider]).toBeDefined();
-      expect(Object.keys(SKILLS[provider]!).length).toBeGreaterThanOrEqual(3);
+      expect(Object.keys(SKILLS[provider]!).length).toBeGreaterThanOrEqual(1);
     }
   });
 
   test("skill content contains valid YAML frontmatter", () => {
-    const content = SKILLS["claude"]!["arkeon-ingest"]!;
+    const content = SKILLS["claude"]!["arkeon-connect"]!;
     expect(content.startsWith("---\n")).toBe(true);
     expect(content).toContain("description:");
     expect(content).toContain("allowed-tools:");
@@ -46,16 +46,16 @@ describe("install / uninstall", () => {
   });
 
   test("codex skills do not have claude-specific frontmatter", () => {
-    const content = SKILLS["codex"]!["arkeon-ingest"]!;
+    const content = SKILLS["codex"]!["arkeon-connect"]!;
     expect(content.startsWith("---\n")).toBe(true);
-    expect(content).toContain("name: arkeon-ingest");
+    expect(content).toContain("name: arkeon-connect");
     expect(content).not.toContain("disable-model-invocation");
     expect(content).not.toContain("allowed-tools:");
   });
 
   test("all providers share the same body content", () => {
-    const claudeBody = SKILLS["claude"]!["arkeon-ingest"]!.split("---").slice(2).join("---");
-    const codexBody = SKILLS["codex"]!["arkeon-ingest"]!.split("---").slice(2).join("---");
+    const claudeBody = SKILLS["claude"]!["arkeon-connect"]!.split("---").slice(2).join("---");
+    const codexBody = SKILLS["codex"]!["arkeon-connect"]!.split("---").slice(2).join("---");
     expect(claudeBody).toBe(codexBody);
   });
 
@@ -67,31 +67,31 @@ describe("install / uninstall", () => {
       writeFileSync(join(skillDir, "SKILL.md"), content);
     }
 
-    const skillPath = join(testDir, "arkeon-ingest", "SKILL.md");
+    const skillPath = join(testDir, "arkeon-connect", "SKILL.md");
     expect(existsSync(skillPath)).toBe(true);
     const written = readFileSync(skillPath, "utf-8");
-    expect(written).toContain("name: arkeon-ingest");
-    expect(written).toContain("# Arkeon Ingest");
+    expect(written).toContain("name: arkeon-connect");
+    expect(written).toContain("# Arkeon Connect");
   });
 
   test("install is idempotent — overwrites cleanly", () => {
-    const skillDir = join(testDir, "arkeon-ingest");
+    const skillDir = join(testDir, "arkeon-connect");
     mkdirSync(skillDir, { recursive: true });
 
     // Write once
     writeFileSync(join(skillDir, "SKILL.md"), "old content");
 
     // Overwrite with real content
-    const content = SKILLS["claude"]!["arkeon-ingest"]!;
+    const content = SKILLS["claude"]!["arkeon-connect"]!;
     writeFileSync(join(skillDir, "SKILL.md"), content);
 
     const result = readFileSync(join(skillDir, "SKILL.md"), "utf-8");
-    expect(result).toContain("name: arkeon-ingest");
+    expect(result).toContain("name: arkeon-connect");
     expect(result).not.toContain("old content");
   });
 
   test("uninstall removes skill directories", () => {
-    const skillDir = join(testDir, "arkeon-ingest");
+    const skillDir = join(testDir, "arkeon-connect");
     mkdirSync(skillDir, { recursive: true });
     writeFileSync(join(skillDir, "SKILL.md"), "content");
     expect(existsSync(skillDir)).toBe(true);
@@ -101,7 +101,7 @@ describe("install / uninstall", () => {
   });
 
   test("uninstall is idempotent — no error on missing directory", () => {
-    const skillDir = join(testDir, "arkeon-ingest");
+    const skillDir = join(testDir, "arkeon-connect");
     expect(existsSync(skillDir)).toBe(false);
     // Should not throw
     if (existsSync(skillDir)) {
@@ -111,7 +111,7 @@ describe("install / uninstall", () => {
 
   test("skill name validation rejects bad names", () => {
     const VALID_NAME = /^[a-z0-9][a-z0-9-]*$/;
-    expect(VALID_NAME.test("arkeon-ingest")).toBe(true);
+    expect(VALID_NAME.test("arkeon-connect")).toBe(true);
     expect(VALID_NAME.test("claude")).toBe(true);
     expect(VALID_NAME.test("__proto__")).toBe(false);
     expect(VALID_NAME.test("../../.bashrc")).toBe(false);

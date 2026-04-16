@@ -2,7 +2,7 @@
 name: local-dev
 description: Start the local development environment (embedded Postgres + Meilisearch + API) and run e2e tests.
 disable-model-invocation: true
-argument-hint: [start|test|test:sandbox|reset|stop|status]
+argument-hint: [start|test|reset|stop|status]
 allowed-tools: Bash(npm *, npx *, curl *, pkill *, sleep *, kill *, lsof *, ls *, cat *, mkdir *, rm *), Read, TaskOutput
 ---
 
@@ -141,18 +141,9 @@ ADMIN_BOOTSTRAP_KEY="$ADMIN_KEY" \
 npm run test:e2e -w packages/arkeon
 ```
 
-### `test:sandbox`
-
-Worker sandbox tests. Requires bubblewrap on Linux; macOS uses the fallback path.
-
-```bash
-./scripts/test-sandbox.sh
-```
-
 ## Notes
 
 - First run downloads the Meilisearch binary (~100MB) into `~/.arkeon/bin/`. Cached after that.
 - Secrets are generated on first run and stored in `$ARKEON_HOME/secrets.json`. `reset` preserves them; `reset --hard` wipes them.
 - After schema SQL changes, `reset` and restart — migrations are idempotent but a fresh cluster is the reliable way to exercise the full chain.
-- Worker sandbox tests require bubblewrap on Linux. On macOS the fallback path runs.
 - The instance registry at `~/.arkeon/instances/` is cleaned up on `arkeon down`. Stale entries from crashed processes are pruned by `arkeon status`.
