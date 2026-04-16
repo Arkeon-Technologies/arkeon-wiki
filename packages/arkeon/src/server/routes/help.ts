@@ -130,6 +130,7 @@ authentication, pagination, and error handling automatically.
 
 GET /help                         Full route index with auth & summary
 GET /help/GET/entities/{id}       Detailed docs for any specific route
+GET /help/guide/wiki              Authoring wikis with typed links
 GET /help/guide/explorer          Explorer graph + screenshot server docs
 GET /llms.txt                     Machine-readable route index
 `;
@@ -219,6 +220,142 @@ Encourage connected graphs.
 
 See GET /help for the full route index.
 See GET /help/<METHOD>/<path> for detailed docs on any route.
+`;
+
+const WIKI_GUIDE = `# Arkeon — Authoring Wikis
+
+## What is a wiki?
+
+A wiki in Arkeon is a long-form markdown entity (type="wiki") about one or
+more primary entities. It's the canonical place to write *what you know* about
+a subject. Typed links inside the markdown body get parsed and materialized as
+real relationships in the graph, so the wiki itself becomes a connective tissue
+node — the more wikis you author, the richer the graph gets automatically.
+
+Wikis are submitted via POST /wiki and published synchronously. The body is
+validated, links are resolved, placeholders are minted for unresolved refs,
+relationships are created, and the wiki is promoted from 'draft' to 'published'
+all in one request.
+
+## The four link types
+
+All links use the \`[[ ... ]]\` form. Four types are supported:
+
+  [[entity:ULID]]
+      Hard reference to an existing visible entity. The unquoted ULID must
+      resolve to an entity the actor can read; 404 otherwise. Redirects
+      (entity_redirects table) are followed — the published content is
+      rewritten to the canonical ID.
+
+  [[resolve:"Label"|"Description"]]
+      Ask the server to find a matching entity via Meilisearch candidate
+      search + LLM-judged disambiguation. If a match is found, the link
+      becomes an [[entity:ID]] reference. If not, a placeholder is minted
+      (like [[draft:]]). Requires an LLM provider configured on the server;
+      returns 503 \`llm_not_configured\` otherwise. The description is
+      optional but sharply improves disambiguation quality.
+
+  [[draft:"Label"|"Description"]]
+      Mint a placeholder the author intends to flesh out later. The
+      placeholder is queued in \`wiki_draft_queue\` for background drafting
+      (a worker will eventually expand it into a real wiki). Use this when
+      you're *promising* to cover something.
+
+  [[gap:"Label"|"Description"]]
+      Flag a named thing that *should* exist but doesn't, without committing
+      to drafting it. The placeholder is visible in the graph as a gap node,
+      so later authors can fill it in. Use this for "someone ought to write
+      this" pointers.
+
+Labels must be double-quoted. Description is optional but strongly recommended
+for resolve/draft/gap — it gives the resolver (or a future drafter) context
+beyond the bare label. Entity IDs are unquoted ULIDs.
+
+## A worked example
+
+POST /wiki
+{
+  "label": "Photosynthesis",
+  "keywords": ["photosynthesis", "light reaction", "calvin cycle"],
+  "short_description": "The process by which plants convert light energy into chemical energy.",
+  "primary_entities": ["01HXYZ..."],        // the entity this wiki is about
+  "content": "...see below..."
+}
+
+Body content:
+
+  # Photosynthesis
+
+  Photosynthesis converts light energy into chemical energy, primarily in
+  the chloroplasts of [[entity:01ABC...]]. It has two stages: the light
+  reactions (in the [[resolve:"Thylakoid Membrane"|"Site of the light reactions"]])
+  and the [[resolve:"Calvin Cycle"|"The light-independent carbon fixation stage"]].
+
+  ## Related concepts
+
+  - [[draft:"Chlorophyll"|"The pigment that absorbs light in chloroplasts"]]
+  - [[draft:"ATP Synthase"|"Enzyme that couples proton flow to ATP production"]]
+  - [[gap:"Z-Scheme"|"The two-photosystem energy diagram used in most textbooks"]]
+
+What happens:
+  - The [[entity:01ABC...]] link resolves to a real chloroplast entity.
+  - "Thylakoid Membrane" and "Calvin Cycle" go through resolve: candidate
+    match + LLM judge. If the graph already has them, they link to the real
+    entities. If not, placeholders are minted.
+  - "Chlorophyll" and "ATP Synthase" become queued draft placeholders.
+  - "Z-Scheme" becomes a gap placeholder (visible but not queued).
+  - Every link becomes a \`references\` relationship from this wiki.
+  - The primary_entity becomes an \`about\` relationship.
+
+## How to choose between resolve, draft, and gap
+
+  resolve  You know the thing exists or probably exists, and you want the
+           server to connect it — even if the author doesn't know the ID.
+
+  draft    You know the thing doesn't yet have a wiki, and you're promising
+           to author one (or expecting a background worker to). Use when
+           it's core to the topic.
+
+  gap      You know the thing doesn't exist as a wiki, and you don't intend
+           to write one. Use when it's worth flagging but out of scope.
+
+## space_id
+
+\`space_id\` is optional. If omitted, the server picks the single space the
+actor can contribute to. If the actor has zero or multiple contributable
+spaces, the server returns 400 — pass space_id explicitly in that case.
+
+## Writing about link syntax inside a wiki
+
+The parser scans every \`[[...]]\` pair in the content, including inside code
+fences. To discuss link syntax in prose — like this very guide does — use
+alternative delimiters (\`<<entity:id>>\`, or just describe the shape in
+words). Do NOT write literal bracket pairs in prose; they will be parsed and
+likely rejected as malformed.
+
+## Errors
+
+400 malformed_wiki_links     One or more links are syntactically wrong. The
+                             error \`details\` array lists each offending link
+                             with a reason and the correct syntax.
+404 not_found                An [[entity:id]] link pointed at a non-existent
+                             or invisible entity, or a primary_entity does.
+409 wiki_exists              A wiki with overlapping primary_entities already
+                             exists in the target space. Response includes
+                             \`existing_wiki_id\` — update it, don't duplicate.
+503 llm_not_configured       [[resolve:"..."]] links require an LLM provider.
+                             Configure one with \`arkeon init --llm-*\` or set
+                             OPENAI_API_KEY.
+400 no_default_space         space_id omitted and the actor has no
+                             contributable spaces. Create one first.
+400 ambiguous_default_space  space_id omitted and the actor has more than one
+                             contributable space. Pass space_id explicitly.
+
+## See also
+
+POST /resolve                    Standalone subject → candidate-matches primitive
+GET  /entities/{id}              Read the published wiki as an entity
+GET  /entities/{id}/relationships  See the materialized \`about\` and \`references\` edges
 `;
 
 const EXPLORER_GUIDE = `# Arkeon — Explorer & Visual Inspection
@@ -322,6 +459,10 @@ export function createHelpRouter(getSpec: () => { paths?: Record<string, unknown
 
   helpRouter.get("/guide/explorer", (c) => {
     return c.text(EXPLORER_GUIDE, 200, TEXT_HEADERS);
+  });
+
+  helpRouter.get("/guide/wiki", (c) => {
+    return c.text(WIKI_GUIDE, 200, TEXT_HEADERS);
   });
 
   helpRouter.get("/guide", (c) => {

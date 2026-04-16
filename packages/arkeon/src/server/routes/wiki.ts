@@ -14,7 +14,7 @@
 import { createRoute, z } from "@hono/zod-openapi";
 
 import { requireActor, parseJsonBody } from "../lib/http";
-import { requireSpaceRole } from "../lib/spaces";
+import { requireSpaceRole, resolveDefaultSpace } from "../lib/spaces";
 import { ApiError } from "../lib/errors";
 import { generateUlid } from "../lib/ids";
 import { createRouter } from "../lib/openapi";
@@ -35,6 +35,23 @@ import {
 const MAX_DEPTH = 2;
 const REL_PREDICATE_REFERENCES = "references";
 
+const WIKI_CONTENT_DESCRIPTION = [
+  "Markdown body. Typed [[links]] in the content are parsed and turned into relationships when the wiki is published.",
+  "",
+  "Four link forms — all wrapped in double square brackets:",
+  "  [[entity:ULID]]                     Hard reference to an existing visible entity.",
+  "  [[resolve:\"Label\"|\"Description\"]]   Let the server find a matching entity via Meilisearch + LLM judge. Requires an LLM provider configured.",
+  "  [[draft:\"Label\"|\"Description\"]]     Mint a placeholder entity the author intends to flesh out later. Queued for background drafting.",
+  "  [[gap:\"Label\"|\"Description\"]]       Flag a named thing that should exist but doesn't. No draft commitment.",
+  "",
+  "Labels must be double-quoted. Description is optional for resolve/draft/gap but recommended — it gives the resolver and future drafters context.",
+  "Entity IDs are unquoted ULIDs.",
+  "",
+  "Every parsed link materializes as a `references` relationship from the published wiki to the target (or to a newly-minted placeholder). `primary_entities` materialize as `about` relationships.",
+  "",
+  "Caveat: the parser scans every `[[...]]` pair in the content, including ones inside fenced code blocks. To discuss link syntax in prose, use alternative delimiters (e.g. `<<entity:id>>`). See GET /help/guide/wiki for a worked example.",
+].join("\n");
+
 const createWikiRoute = createRoute({
   method: "post",
   path: "/",
@@ -42,16 +59,19 @@ const createWikiRoute = createRoute({
   tags: ["Wiki"],
   summary: "Submit a wiki with typed links for resolution into the knowledge graph",
   "x-arke-auth": "required",
+  "x-arke-related": ["POST /resolve", "GET /help/guide/wiki"],
   "x-arke-rules": [
     "Requires contributor role or above on the target space",
-    "All [[entity:id]] links must reference existing visible entities",
+    "All [[entity:ULID]] links must reference existing visible entities — 404 otherwise",
+    "[[resolve:\"...\"]] links require an LLM provider configured on the server — 503 otherwise",
     "Returns 409 if a wiki with overlapping primary_entities already exists in the space",
+    "If space_id is omitted, falls back to the only space the actor can contribute to; 400 if ambiguous or none",
   ],
   request: {
     body: {
       content: jsonContent(
         z.object({
-          content: z.string().min(1).describe("Markdown body with typed [[links]]"),
+          content: z.string().min(1).describe(WIKI_CONTENT_DESCRIPTION),
           label: z
             .string()
             .min(1)
@@ -70,8 +90,10 @@ const createWikiRoute = createRoute({
           primary_entities: z
             .array(EntityIdParam)
             .min(1)
-            .describe("Entity IDs this wiki is about"),
-          space_id: EntityIdParam.describe("Space to create the wiki in"),
+            .describe("Entity IDs this wiki is about. A wiki with overlapping primary_entities in the same space returns 409."),
+          space_id: EntityIdParam
+            .optional()
+            .describe("Space to create the wiki in. Optional — defaults to the only space the actor can contribute to. 400 if ambiguous (multiple candidates) or none."),
           read_level: ClassificationLevel.optional().default(1),
           write_level: ClassificationLevel.optional().default(1),
           depth: z
@@ -102,7 +124,7 @@ const createWikiRoute = createRoute({
         }),
       ),
     },
-    ...errorResponses([400, 401, 403, 404, 409]),
+    ...errorResponses([400, 401, 403, 404, 409, 503]),
   },
 });
 
@@ -119,7 +141,7 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   const keywordsRaw = body.keywords;
   const short_description = body.short_description as string;
   const primary_entities = body.primary_entities as string[];
-  const space_id = body.space_id as string;
+  const space_id_input = body.space_id;
   const read_level = typeof body.read_level === "number" ? body.read_level : 1;
   const write_level = typeof body.write_level === "number" ? body.write_level : 1;
   const depth = typeof body.depth === "number" ? body.depth : 0;
@@ -140,9 +162,12 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   if (!Array.isArray(primary_entities) || primary_entities.length === 0) {
     throw new ApiError(400, "invalid_request", "primary_entities must be a non-empty array of entity IDs");
   }
-  if (!space_id || typeof space_id !== "string") {
-    throw new ApiError(400, "invalid_request", "space_id is required");
-  }
+
+  // space_id is optional — fall back to the actor's single contributable space.
+  const space_id =
+    typeof space_id_input === "string" && space_id_input.trim().length > 0
+      ? space_id_input
+      : await resolveDefaultSpace(actor);
 
   // --- Auth: require contributor on the target space ---
   await requireSpaceRole(sql, actor, space_id, "contributor");
@@ -196,6 +221,22 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   const draftLinks = links.filter((l) => l.type === "draft");
   const gapLinks = links.filter((l) => l.type === "gap");
   const resolveLinksArr = links.filter((l) => l.type === "resolve");
+
+  // Resolve before Stage 1 writes anything. If candidate disambiguation
+  // needs an unconfigured LLM, the request fails without leaving a draft.
+  let resolved: Awaited<ReturnType<typeof resolveLinks>>;
+  try {
+    resolved = await resolveLinks(resolveLinksArr, actor, space_id);
+  } catch (err) {
+    if ((err as Error).message.includes("LLM configuration missing")) {
+      throw new ApiError(
+        503,
+        "llm_not_configured",
+        "No LLM provider is configured. Run `arkeon init --llm-*` or set OPENAI_API_KEY.",
+      );
+    }
+    throw err;
+  }
 
   const placeholders: Array<{ id: string; label: string; status: "draft" | "gap" }> = [];
   const placeholderLinks: Array<{ id: string; link: ParsedLink }> = [];
@@ -332,9 +373,6 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   });
 
   // --- Stage 2: Resolve links and create relationships ---
-
-  // Resolve [[resolve:...]] links
-  const resolved = await resolveLinks(resolveLinksArr, actor, space_id);
 
   // Collect all links that need relationships:
   //   - entity: links → direct reference

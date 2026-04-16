@@ -37,7 +37,7 @@ describe("wiki link parsing", () => {
       expect(details).toHaveLength(3);
       expect(details[0]!.raw).toBe("[[Some Page]]");
       expect(details[0]!.offset).toBe(content.indexOf("[[Some Page]]"));
-      expect(details.map((d) => d.reason).join(" ")).toContain("typed link syntax");
+      expect(details.map((d) => d.reason).join(" ")).toContain("typed link");
       expect(details.map((d) => d.reason).join(" ")).toContain("quoted syntax");
       expect(details.map((d) => d.reason).join(" ")).toContain("Unknown wiki link type");
     }
@@ -54,7 +54,7 @@ describe("wiki link parsing", () => {
       const details = (err as WikiLinkParseError).details;
       expect(details).toHaveLength(1);
       expect(details[0]!.offset).toBe(content.indexOf("[["));
-      expect(details[0]!.reason).toBe("Unclosed wiki link");
+      expect(details[0]!.reason).toContain("Unclosed wiki link");
     }
   });
 });

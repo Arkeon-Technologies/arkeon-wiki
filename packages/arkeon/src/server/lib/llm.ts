@@ -30,7 +30,7 @@
  */
 
 import OpenAI from "openai";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -91,24 +91,42 @@ function configPath(): string {
   return process.env.WIKI_LLM_CONFIG_PATH ?? join(arkeonHome(), "llm.json");
 }
 
-let _fileCache: { value: LlmConfigFile | null; path: string } | null = null;
+let _fileCache: {
+  value: LlmConfigFile | null;
+  path: string;
+  mtimeMs: number | null;
+  size: number | null;
+} | null = null;
 
 function loadConfigFile(): LlmConfigFile | null {
   const path = configPath();
-  if (_fileCache && _fileCache.path === path) return _fileCache.value;
 
   if (!existsSync(path)) {
-    _fileCache = { value: null, path };
+    if (_fileCache && _fileCache.path === path && _fileCache.mtimeMs === null) {
+      return _fileCache.value;
+    }
+    _fileCache = { value: null, path, mtimeMs: null, size: null };
     return null;
   }
+
+  const stat = statSync(path);
+  if (
+    _fileCache &&
+    _fileCache.path === path &&
+    _fileCache.mtimeMs === stat.mtimeMs &&
+    _fileCache.size === stat.size
+  ) {
+    return _fileCache.value;
+  }
+
   try {
     const raw = readFileSync(path, "utf-8");
     const parsed = JSON.parse(raw) as LlmConfigFile;
-    _fileCache = { value: parsed, path };
+    _fileCache = { value: parsed, path, mtimeMs: stat.mtimeMs, size: stat.size };
     return parsed;
   } catch (err) {
     console.warn(`[llm] failed to parse ${path}:`, (err as Error).message);
-    _fileCache = { value: null, path };
+    _fileCache = { value: null, path, mtimeMs: stat.mtimeMs, size: stat.size };
     return null;
   }
 }

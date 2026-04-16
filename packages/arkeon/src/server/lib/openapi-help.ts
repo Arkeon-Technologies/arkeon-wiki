@@ -45,6 +45,7 @@ const LLMS_PREAMBLE = [
   "# Auth: X-API-Key: <key> (preferred) or Authorization: ApiKey <key> — prefixes uk_ (user) or kk_ (klados)",
   "# Detail: GET /help/<METHOD>/<path> for full docs on any route",
   "# Example: GET /help/GET/entities/{id}",
+  "# Guides: GET /help/guide (basics), /help/guide/wiki (authoring), /help/guide/explorer (visual)",
   "#",
   "",
   "## SDKs",

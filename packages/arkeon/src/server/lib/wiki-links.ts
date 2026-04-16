@@ -85,14 +85,23 @@ export function parseWikiLinks(
     const colon = inner.indexOf(":");
 
     if (colon <= 0) {
-      errors.push({ raw, offset, reason: "Expected typed link syntax like [[entity:id]] or [[resolve:\"Label\"]]" });
+      errors.push({
+        raw,
+        offset,
+        reason:
+          'Expected typed link like [[entity:ULID]], [[resolve:"Label"|"Description"]], [[draft:"Label"|"Description"]], or [[gap:"Label"|"Description"]]. See GET /help/guide/wiki.',
+      });
       continue;
     }
 
     const typeText = inner.slice(0, colon);
     const body = inner.slice(colon + 1).trim();
     if (!isLinkType(typeText)) {
-      errors.push({ raw, offset, reason: `Unknown wiki link type "${typeText}"` });
+      errors.push({
+        raw,
+        offset,
+        reason: `Unknown wiki link type "${typeText}". Valid types are: entity, resolve, draft, gap. See GET /help/guide/wiki.`,
+      });
       continue;
     }
     if (!body) {
@@ -143,7 +152,7 @@ export function parseWikiLinks(
       errors.push({
         raw: content.slice(openOffset, Math.min(content.length, openOffset + 80)),
         offset: openOffset,
-        reason: "Unclosed wiki link",
+        reason: "Unclosed wiki link — every [[ must be closed with ]]. If you meant this literally, use alternative delimiters (e.g. <<...>>).",
       });
     }
     openOffset = content.indexOf("[[", openOffset + 2);

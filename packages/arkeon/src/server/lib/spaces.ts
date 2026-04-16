@@ -114,3 +114,59 @@ export async function requireSpaceRole(
     return s;
   });
 }
+
+/**
+ * Resolve the "default" space for an actor when a route accepts space_id as
+ * optional. Returns the single space the actor can contribute to (owned,
+ * admin-on-instance with exactly one space, or exactly one contributor-plus
+ * permission). Throws 400 with a helpful message if none or ambiguous.
+ *
+ * Used by POST /wiki (and anywhere else that wants "pick my space for me"
+ * ergonomics for single-space instances).
+ */
+export async function resolveDefaultSpace(actor: Actor): Promise<string> {
+  return withTransaction(async (tx) => {
+    for (const q of setActorContext(tx, actor)) {
+      await q;
+    }
+
+    // Pull up to two candidate spaces. We only care whether there's exactly
+    // one; more than one is ambiguous regardless of order.
+    const rows = actor.isAdmin
+      ? await tx`
+          SELECT id FROM spaces
+          WHERE status = 'active'
+          ORDER BY created_at ASC
+          LIMIT 2
+        `
+      : await tx`
+          SELECT DISTINCT s.id
+          FROM spaces s
+          LEFT JOIN space_permissions sp
+            ON sp.space_id = s.id AND sp.grantee_id = ${actor.id}
+          WHERE s.status = 'active'
+            AND (
+              s.owner_id = ${actor.id}
+              OR sp.role IN ('contributor', 'editor', 'admin')
+            )
+          ORDER BY s.id ASC
+          LIMIT 2
+        `;
+
+    if (rows.length === 0) {
+      throw new ApiError(
+        400,
+        "no_default_space",
+        "No space to default to. Create one with POST /spaces, or pass space_id explicitly.",
+      );
+    }
+    if (rows.length > 1) {
+      throw new ApiError(
+        400,
+        "ambiguous_default_space",
+        "Multiple spaces are contributable. Pass space_id explicitly; list candidates with GET /spaces.",
+      );
+    }
+    return String(rows[0]!.id);
+  });
+}

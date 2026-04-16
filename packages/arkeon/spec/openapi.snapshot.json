@@ -10469,7 +10469,7 @@
               "schema": {
                 "properties": {
                   "content": {
-                    "description": "Markdown body with typed [[links]]",
+                    "description": "Markdown body. Typed [[links]] in the content are parsed and turned into relationships when the wiki is published.\n\nFour link forms — all wrapped in double square brackets:\n  [[entity:ULID]]                     Hard reference to an existing visible entity.\n  [[resolve:\"Label\"|\"Description\"]]   Let the server find a matching entity via Meilisearch + LLM judge. Requires an LLM provider configured.\n  [[draft:\"Label\"|\"Description\"]]     Mint a placeholder entity the author intends to flesh out later. Queued for background drafting.\n  [[gap:\"Label\"|\"Description\"]]       Flag a named thing that should exist but doesn't. No draft commitment.\n\nLabels must be double-quoted. Description is optional for resolve/draft/gap but recommended — it gives the resolver and future drafters context.\nEntity IDs are unquoted ULIDs.\n\nEvery parsed link materializes as a `references` relationship from the published wiki to the target (or to a newly-minted placeholder). `primary_entities` materialize as `about` relationships.\n\nCaveat: the parser scans every `[[...]]` pair in the content, including ones inside fenced code blocks. To discuss link syntax in prose, use alternative delimiters (e.g. `<<entity:id>>`). See GET /help/guide/wiki for a worked example.",
                     "minLength": 1,
                     "type": "string"
                   },
@@ -10497,7 +10497,7 @@
                     "type": "string"
                   },
                   "primary_entities": {
-                    "description": "Entity IDs this wiki is about",
+                    "description": "Entity IDs this wiki is about. A wiki with overlapping primary_entities in the same space returns 409.",
                     "items": {
                       "description": "ULID string",
                       "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
@@ -10521,7 +10521,7 @@
                     "type": "string"
                   },
                   "space_id": {
-                    "description": "Space to create the wiki in",
+                    "description": "Space to create the wiki in. Optional — defaults to the only space the actor can contribute to. 400 if ambiguous (multiple candidates) or none.",
                     "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
                     "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
                     "type": "string"
@@ -10539,8 +10539,7 @@
                   "label",
                   "keywords",
                   "short_description",
-                  "primary_entities",
-                  "space_id"
+                  "primary_entities"
                 ],
                 "type": "object"
               }
@@ -10649,6 +10648,16 @@
               }
             },
             "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable"
           }
         },
         "summary": "Submit a wiki with typed links for resolution into the knowledge graph",
@@ -10656,10 +10665,16 @@
           "Wiki"
         ],
         "x-arke-auth": "required",
+        "x-arke-related": [
+          "POST /resolve",
+          "GET /help/guide/wiki"
+        ],
         "x-arke-rules": [
           "Requires contributor role or above on the target space",
-          "All [[entity:id]] links must reference existing visible entities",
-          "Returns 409 if a wiki with overlapping primary_entities already exists in the space"
+          "All [[entity:ULID]] links must reference existing visible entities — 404 otherwise",
+          "[[resolve:\"...\"]] links require an LLM provider configured on the server — 503 otherwise",
+          "Returns 409 if a wiki with overlapping primary_entities already exists in the space",
+          "If space_id is omitted, falls back to the only space the actor can contribute to; 400 if ambiguous or none"
         ]
       }
     }

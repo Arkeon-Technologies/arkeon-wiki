@@ -103,6 +103,39 @@ describe("llm config resolution", () => {
     expect(resolve.client).toBeDefined();
   });
 
+  test("notices llm.json when it appears after an initial missing-file check", () => {
+    expect(isLlmConfigured()).toBe(false);
+
+    writeFileSync(
+      join(scratch, "llm.json"),
+      JSON.stringify({ default: { api_key: "sk-created-later", model: "gpt-4o-mini" } }),
+    );
+
+    expect(isLlmConfigured()).toBe(true);
+    expect(getLlmClient("resolve").model).toBe("gpt-4o-mini");
+  });
+
+  test("reloads llm.json when the file changes", () => {
+    const path = join(scratch, "llm.json");
+    writeFileSync(
+      path,
+      JSON.stringify({ default: { api_key: "sk-file", model: "gpt-4o-mini" } }),
+    );
+    expect(getLlmClient("resolve").model).toBe("gpt-4o-mini");
+
+    writeFileSync(
+      path,
+      JSON.stringify({
+        default: { api_key: "sk-file", model: "gpt-4o" },
+        resolve: { model: "gpt-5.4-nano", max_tokens: 384 },
+      }),
+    );
+
+    const resolve = getLlmClient("resolve");
+    expect(resolve.model).toBe("gpt-5.4-nano");
+    expect(resolve.maxTokens).toBe(384);
+  });
+
   test("step-specific api_key in file overrides default api_key", () => {
     writeFileSync(
       join(scratch, "llm.json"),
