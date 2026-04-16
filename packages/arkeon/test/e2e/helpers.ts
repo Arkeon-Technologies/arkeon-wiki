@@ -113,35 +113,66 @@ export async function createActor(
 
 // --- Entity helpers ---
 
+/**
+ * Create a wiki entity via POST /wiki. This is the only public write
+ * path for entities — the old POST /entities was removed in the
+ * wiki-first rewrite.
+ */
+export async function createWiki(
+  apiKey: string,
+  label: string,
+  content: string,
+  extra: Record<string, unknown> = {},
+) {
+  const { response, body } = await jsonRequest("/wiki", {
+    method: "POST",
+    apiKey,
+    json: {
+      label,
+      keywords: [label],
+      short_description: label,
+      content,
+      ...extra,
+    },
+  });
+  expect(response.status).toBe(201);
+  return (body as { entity: Record<string, any> }).entity;
+}
+
+/**
+ * Stub — relationships can no longer be created via a public endpoint.
+ * They are a side effect of publishing a wiki with [[links]].
+ * Tests that need relationships should create a wiki with a
+ * [[entity:TARGET_ID]] link.
+ */
+export async function createRelationship(
+  _apiKey: string,
+  _entityId: string,
+  _predicate: string,
+  _targetId: string,
+  _properties: Record<string, unknown> = {},
+): Promise<Record<string, any>> {
+  throw new Error(
+    "createRelationship is no longer available — relationships are created " +
+    "via the wiki pipeline. Use createWiki() with [[entity:TARGET_ID]] links.",
+  );
+}
+
+/**
+ * Legacy helper for tests that need a plain entity. Calls POST /wiki
+ * with a minimal body. Prefer createWiki() for new tests.
+ */
 export async function createEntity(
   apiKey: string,
   type: string,
   properties: Record<string, unknown>,
   extra: Record<string, unknown> = {},
 ) {
-  const { response, body } = await jsonRequest("/entities", {
-    method: "POST",
-    apiKey,
-    json: { type, properties, ...extra },
+  const label = (properties.label as string) ?? type;
+  return createWiki(apiKey, label, `Test wiki for ${label}`, {
+    type,
+    ...extra,
   });
-  expect(response.status).toBe(201);
-  return (body as { entity: Record<string, any> }).entity;
-}
-
-export async function createRelationship(
-  apiKey: string,
-  entityId: string,
-  predicate: string,
-  targetId: string,
-  properties: Record<string, unknown> = {},
-) {
-  const { response, body } = await jsonRequest(`/entities/${entityId}/relationships`, {
-    method: "POST",
-    apiKey,
-    json: { predicate, target_id: targetId, properties },
-  });
-  expect(response.status).toBe(201);
-  return body as Record<string, any>;
 }
 
 // --- Space helpers ---
@@ -179,7 +210,7 @@ export async function grantEntityPermission(
   granteeId: string,
   role: string,
 ) {
-  const { response, body } = await jsonRequest(`/entities/${entityId}/permissions`, {
+  const { response, body } = await jsonRequest(`/wiki/${entityId}/permissions`, {
     method: "POST",
     apiKey,
     json: { grantee_type: granteeType, grantee_id: granteeId, role },
@@ -223,7 +254,7 @@ export async function grantSpaceEntityAccess(
 // --- Comment helpers ---
 
 export async function createComment(apiKey: string, entityId: string, body: string, parentId?: string) {
-  const { response, body: responseBody } = await jsonRequest(`/entities/${entityId}/comments`, {
+  const { response, body: responseBody } = await jsonRequest(`/wiki/${entityId}/comments`, {
     method: "POST",
     apiKey,
     json: { body, ...(parentId ? { parent_id: parentId } : {}) },
@@ -236,7 +267,7 @@ export async function createComment(apiKey: string, entityId: string, body: stri
 
 export async function uploadDirectContent(apiKey: string, entityId: string, key: string, ver: number, content: string, filename?: string) {
   const { response, body } = await apiRequest(
-    `/entities/${entityId}/content?key=${encodeURIComponent(key)}&ver=${ver}${filename ? `&filename=${encodeURIComponent(filename)}` : ""}`,
+    `/wiki/${entityId}/content?key=${encodeURIComponent(key)}&ver=${ver}${filename ? `&filename=${encodeURIComponent(filename)}` : ""}`,
     {
       method: "POST",
       apiKey,

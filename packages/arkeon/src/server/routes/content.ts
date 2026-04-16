@@ -9,7 +9,6 @@ import type { EntityRecord } from "../lib/entities";
 import { ApiError } from "../lib/errors";
 import { requireActor, parseJsonBody } from "../lib/http";
 import { indexEntity } from "../lib/meilisearch";
-import { fanOutNotifications } from "../lib/notifications";
 import { createRouter } from "../lib/openapi";
 import { setActorContext } from "../lib/actor-context";
 import {
@@ -47,8 +46,8 @@ async function updateContentMetadata(options: {
   entity: EntityRecord;
   expectedVer: number;
   properties: Record<string, unknown>;
-  action: string;
-  detail: Record<string, unknown>;
+  action?: string;
+  detail?: Record<string, unknown>;
   note?: string | null;
 }) {
   const sql = createSql();
@@ -98,19 +97,6 @@ async function updateContentMetadata(options: {
       `,
       [options.entity.id, now],
     ),
-    sql.query(
-      `
-        INSERT INTO entity_activity (entity_id, actor_id, action, detail, ts)
-        VALUES ($1, $2, $3, $4::jsonb, $5::timestamptz)
-      `,
-      [
-        options.entity.id,
-        options.actor.id,
-        options.action,
-        JSON.stringify({ ...options.detail, ver: nextVer }),
-        now,
-      ],
-    ),
   ]);
 
   backgroundTask(indexEntity(updated));
@@ -125,7 +111,7 @@ const uploadContentRoute = createRoute({
   tags: ["Content"],
   summary: "Upload a file directly to an entity.",
   "x-arke-auth": "required",
-  "x-arke-related": ["GET /entities/{id}/content", "DELETE /entities/{id}/content"],
+  "x-arke-related": ["GET /wiki/{id}/content", "DELETE /wiki/{id}/content"],
   "x-arke-rules": ["Requires write access to the entity (owner, editor, or admin role)", "Optimistic concurrency: must pass current ver to upload"],
   request: {
     params: z.object({
@@ -164,7 +150,7 @@ const getContentRoute = createRoute({
   tags: ["Content"],
   summary: "Download a file from an entity",
   "x-arke-auth": "optional",
-  "x-arke-related": ["POST /entities/{id}/content", "DELETE /entities/{id}/content"],
+  "x-arke-related": ["POST /wiki/{id}/content", "DELETE /wiki/{id}/content"],
   "x-arke-rules": ["Requires read_level clearance >= entity's read_level"],
   request: {
     params: z.object({
@@ -195,7 +181,7 @@ const deleteContentRoute = createRoute({
   tags: ["Content"],
   summary: "Delete a file from an entity",
   "x-arke-auth": "required",
-  "x-arke-related": ["GET /entities/{id}/content"],
+  "x-arke-related": ["GET /wiki/{id}/content"],
   "x-arke-rules": ["Requires write access to the entity (owner, editor, or admin role)"],
   request: {
     params: z.object({
@@ -319,7 +305,7 @@ contentRouter.openapi(uploadContentRoute, async (c) => {
   };
   properties.content = contentMap;
 
-  const { nextVer, ts } = await updateContentMetadata({
+  const { nextVer } = await updateContentMetadata({
     actor,
     entity,
     expectedVer,
@@ -333,17 +319,6 @@ contentRouter.openapi(uploadContentRoute, async (c) => {
       ...(filename ? { filename } : {}),
     },
   });
-
-  backgroundTask(
-    fanOutNotifications({
-      entity_id: entityId,
-      space_id: null,
-      actor_id: actor.id,
-      action: "content_uploaded",
-      detail: { key, cid, size: bytes.byteLength, content_type: contentType, ...(filename ? { filename } : {}) },
-      ts,
-    }),
-  );
 
   return c.json({
     cid,
@@ -462,7 +437,7 @@ contentRouter.openapi(deleteContentRoute, async (c) => {
   }
 
   properties.content = contentMap;
-  const { nextVer, ts } = await updateContentMetadata({
+  await updateContentMetadata({
     actor,
     entity,
     expectedVer,
@@ -470,17 +445,6 @@ contentRouter.openapi(deleteContentRoute, async (c) => {
     action: "content_deleted",
     detail: { key: removedKey, cid: removedCid },
   });
-
-  backgroundTask(
-    fanOutNotifications({
-      entity_id: entityId,
-      space_id: null,
-      actor_id: actor.id,
-      action: "content_deleted",
-      detail: { key: removedKey, cid: removedCid, ver: nextVer },
-      ts,
-    }),
-  );
 
   return new Response(null, { status: 204 });
 });
@@ -526,7 +490,7 @@ contentRouter.openapi(renameContentRoute, async (c) => {
   delete contentMap[body.from];
   properties.content = contentMap;
 
-  const { updated, ts } = await updateContentMetadata({
+  const { updated } = await updateContentMetadata({
     actor,
     entity,
     expectedVer: body.ver,
@@ -534,17 +498,6 @@ contentRouter.openapi(renameContentRoute, async (c) => {
     action: "content_renamed",
     detail: { from: body.from, to: body.to, cid: contentMap[body.to]?.cid },
   });
-
-  backgroundTask(
-    fanOutNotifications({
-      entity_id: entityId,
-      space_id: null,
-      actor_id: actor.id,
-      action: "content_renamed",
-      detail: { from: body.from, to: body.to, cid: contentMap[body.to]?.cid, ver: updated.ver },
-      ts,
-    }),
-  );
 
   return c.json({ ok: true, ver: updated.ver }, 200);
 });

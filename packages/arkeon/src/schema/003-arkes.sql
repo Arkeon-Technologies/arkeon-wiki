@@ -1,9 +1,0 @@
--- =============================================================================
--- 003-arkes.sql — REMOVED
--- =============================================================================
---
--- The "arke" (network/multi-tenancy) concept was removed. This file is kept
--- to avoid renumbering subsequent migrations. It previously created the
--- arkes table and granted permissions on it.
---
--- =============================================================================

@@ -88,11 +88,11 @@ const ListEntitiesQuery = filterQuerySchema(["updated_at", "created_at"], "updat
 const listEntitiesRoute = createRoute({
   method: "get",
   path: "/",
-  operationId: "listEntities",
-  tags: ["Entities"],
+  operationId: "listWikis",
+  tags: ["Wiki"],
   summary: "List entities with filtering, sorting, and cursor pagination",
   "x-arke-auth": "optional",
-  "x-arke-related": ["GET /search", "GET /entities/{id}"],
+  "x-arke-related": ["GET /search", "GET /wiki/{id}"],
   "x-arke-rules": [
     "Results filtered by your classification clearance",
     "If space_id is provided, only entities belonging to that space are returned",
@@ -109,64 +109,20 @@ const listEntitiesRoute = createRoute({
   },
 });
 
-const createEntityRoute = createRoute({
-  method: "post",
-  path: "/",
-  operationId: "createEntity",
-  tags: ["Entities"],
-  summary: "Create a new entity, optionally adding it to a space and granting permissions. With upsert=true, matches on (label, type) within the space and updates instead of duplicating.",
-  "x-arke-auth": "required",
-  "x-arke-related": ["GET /entities/{id}", "PUT /entities/{id}", "POST /spaces/{id}/entities", "POST /entities/{id}/permissions"],
-  "x-arke-rules": [
-    "Requires write_level clearance >= entity's write_level",
-    "Requires read_level clearance >= entity's read_level",
-    "If space_id is provided, requires contributor role or above on that space",
-    "All operations (create, space add, permission grants) are atomic",
-    "upsert=true requires both space_id and a label property; without either, creates normally",
-  ],
-  request: {
-    body: {
-      required: true,
-      content: jsonContent(
-        z.object({
-          type: z.string().describe("Entity type"),
-          properties: z.record(z.string(), z.any()).describe("Arbitrary properties"),
-          read_level: ClassificationLevel.optional(),
-          write_level: ClassificationLevel.optional(),
-          space_id: EntityIdParam.optional().describe("Space ULID — if provided, the entity is added to this space atomically"),
-          permissions: z.array(InlinePermissionGrant).optional().describe("Permission grants to apply to the new entity atomically"),
-          upsert: z.boolean().optional().describe("When true, match existing entity by (label, type) within the space and update instead of creating a duplicate. Requires space_id and a label in properties."),
-        }),
-      ),
-    },
-  },
-  responses: {
-    200: {
-      description: "Entity updated via upsert",
-      content: jsonContent(EntityResponse),
-    },
-    201: {
-      description: "Entity created",
-      content: jsonContent(EntityResponse),
-    },
-    ...errorResponses([400, 401, 403, 409]),
-  },
-});
-
 const getEntityRoute = createRoute({
   method: "get",
   path: "/{id}",
-  operationId: "getEntity",
-  tags: ["Entities"],
+  operationId: "getWiki",
+  tags: ["Wiki"],
   summary: "Fetch a single entity by ID",
   description:
     "Use view=expanded to include the entity's relationships with counterpart summaries. " +
     "Control the number of relationships with rel_limit (default 20, max 100). " +
-    "Check _relationships_truncated to know if more exist; use GET /entities/{id}/relationships for the full paginated set.",
+    "Check _relationships_truncated to know if more exist; use GET /wiki/{id}/relationships for the full paginated set.",
   "x-arke-auth": "optional",
   "x-arke-related": [
-    "PUT /entities/{id}",
-    "GET /entities/{id}/versions",
+    "PUT /wiki/{id}",
+    "GET /wiki/{id}/versions",
   ],
   "x-arke-rules": ["Requires read_level clearance >= entity's read_level", "Returns 404 if entity is not visible to you"],
   request: {
@@ -201,11 +157,11 @@ const getEntityRoute = createRoute({
 const updateEntityRoute = createRoute({
   method: "put",
   path: "/{id}",
-  operationId: "updateEntity",
-  tags: ["Entities"],
+  operationId: "updateWiki",
+  tags: ["Wiki"],
   summary: "Update entity properties",
   "x-arke-auth": "required",
-  "x-arke-related": ["GET /entities/{id}", "GET /entities/{id}/versions"],
+  "x-arke-related": ["GET /wiki/{id}", "GET /wiki/{id}/versions"],
   "x-arke-rules": ["Only the owner, an entity editor, or an entity admin may update", "Requires write_level clearance >= entity's write_level", "Optimistic concurrency: must pass current ver to update", "Properties are shallow-merged: only provided keys are updated, omitted keys are preserved", "remove_properties deletes keys by name after the merge, so removals take precedence over additions"],
   request: {
     params: entityIdParams(),
@@ -233,8 +189,8 @@ const updateEntityRoute = createRoute({
 const deleteEntityRoute = createRoute({
   method: "delete",
   path: "/{id}",
-  operationId: "deleteEntity",
-  tags: ["Entities"],
+  operationId: "deleteWiki",
+  tags: ["Wiki"],
   summary: "Delete an entity",
   "x-arke-auth": "required",
   "x-arke-rules": ["Only the owner, an entity admin, or a system admin may delete", "Requires write_level clearance >= entity's write_level"],
@@ -255,11 +211,11 @@ const BulkDeleteQuery = z.object({
 const bulkDeleteEntitiesRoute = createRoute({
   method: "delete",
   path: "/",
-  operationId: "bulkDeleteEntities",
-  tags: ["Entities"],
+  operationId: "bulkDeleteWikis",
+  tags: ["Wiki"],
   summary: "Bulk delete entities matching filter and/or space",
   "x-arke-auth": "required",
-  "x-arke-related": ["GET /entities", "DELETE /entities/{id}"],
+  "x-arke-related": ["GET /wiki", "DELETE /wiki/{id}"],
   "x-arke-rules": [
     "Requires at least one of filter or space_id",
     "Capped at 1000 entities per call — returns 400 if more match",
@@ -282,8 +238,8 @@ const bulkDeleteEntitiesRoute = createRoute({
 const changeLevelRoute = createRoute({
   method: "put",
   path: "/{id}/level",
-  operationId: "changeEntityLevel",
-  tags: ["Entities"],
+  operationId: "changeWikiLevel",
+  tags: ["Wiki"],
   summary: "Change entity classification levels",
   "x-arke-auth": "required",
   "x-arke-rules": ["Only the owner, an entity editor, or an entity admin may change levels", "Cannot set read_level above your own max_read_level", "Cannot set write_level above your own max_write_level", "Setting read_level to PUBLIC (0) requires can_publish_public flag"],
@@ -311,8 +267,8 @@ const changeLevelRoute = createRoute({
 const getPermissionsRoute = createRoute({
   method: "get",
   path: "/{id}/permissions",
-  operationId: "getEntityPermissions",
-  tags: ["Entities"],
+  operationId: "getWikiPermissions",
+  tags: ["Wiki"],
   summary: "List permission grants on an entity",
   "x-arke-auth": "required",
   "x-arke-rules": ["Requires read_level clearance >= entity's read_level"],
@@ -334,8 +290,8 @@ const getPermissionsRoute = createRoute({
 const grantPermissionRoute = createRoute({
   method: "post",
   path: "/{id}/permissions",
-  operationId: "grantEntityPermission",
-  tags: ["Entities"],
+  operationId: "grantWikiPermission",
+  tags: ["Wiki"],
   summary: "Grant a role on an entity (owner/admin only, enforced by RLS)",
   "x-arke-auth": "required",
   "x-arke-rules": ["Only the entity owner, an entity admin, or a system admin may grant permissions"],
@@ -364,8 +320,8 @@ const grantPermissionRoute = createRoute({
 const revokePermissionRoute = createRoute({
   method: "delete",
   path: "/{id}/permissions/{granteeId}",
-  operationId: "revokeEntityPermission",
-  tags: ["Entities"],
+  operationId: "revokeWikiPermission",
+  tags: ["Wiki"],
   summary: "Revoke a role from a user or group",
   "x-arke-auth": "required",
   "x-arke-rules": ["Only the entity owner, an entity admin, or a system admin may revoke permissions"],
@@ -384,8 +340,8 @@ const revokePermissionRoute = createRoute({
 const transferOwnerRoute = createRoute({
   method: "put",
   path: "/{id}/owner",
-  operationId: "transferEntityOwner",
-  tags: ["Entities"],
+  operationId: "transferWikiOwner",
+  tags: ["Wiki"],
   summary: "Transfer entity ownership",
   "x-arke-auth": "required",
   "x-arke-rules": ["Only the current owner or a system admin may transfer ownership", "Previous owner loses all access unless they have a separate permission grant"],
@@ -412,8 +368,8 @@ const transferOwnerRoute = createRoute({
 const listVersionsRoute = createRoute({
   method: "get",
   path: "/{id}/versions",
-  operationId: "listEntityVersions",
-  tags: ["Entities"],
+  operationId: "listWikiVersions",
+  tags: ["Wiki"],
   summary: "List version history",
   "x-arke-auth": "optional",
   "x-arke-rules": ["Requires read_level clearance >= entity's read_level"],
@@ -433,11 +389,11 @@ const listVersionsRoute = createRoute({
 const mergeEntityRoute = createRoute({
   method: "post",
   path: "/{id}/merge",
-  operationId: "mergeEntity",
-  tags: ["Entities"],
+  operationId: "mergeWiki",
+  tags: ["Wiki"],
   summary: "Merge a source entity into this entity",
   "x-arke-auth": "required",
-  "x-arke-related": ["GET /entities/{id}", "DELETE /entities/{id}"],
+  "x-arke-related": ["GET /wiki/{id}", "DELETE /wiki/{id}"],
   "x-arke-rules": [
     "Requires admin access on both source and target entities",
     "Both entities must have the same kind (entity or relationship)",
@@ -471,8 +427,8 @@ const mergeEntityRoute = createRoute({
 const getVersionRoute = createRoute({
   method: "get",
   path: "/{id}/versions/{ver}",
-  operationId: "getEntityVersion",
-  tags: ["Entities"],
+  operationId: "getWikiVersion",
+  tags: ["Wiki"],
   summary: "Get a specific version snapshot",
   "x-arke-auth": "optional",
   "x-arke-rules": ["Requires read_level clearance >= entity's read_level"],
@@ -494,15 +450,15 @@ const getVersionRoute = createRoute({
 const mergeBatchRoute = createRoute({
   method: "post",
   path: "/merge-batch",
-  operationId: "mergeBatchEntities",
-  tags: ["Entities"],
+  operationId: "mergeBatchWikis",
+  tags: ["Wiki"],
   summary: "Merge multiple groups of duplicate entities in a single request",
   description:
     "Each group contains entity IDs that should be merged into one. " +
     "The entity with the richest properties is auto-selected as the merge target. " +
     "Groups are processed concurrently; partial success is possible.",
   "x-arke-auth": "required",
-  "x-arke-related": ["POST /entities/{id}/merge", "POST /entities/bulk"],
+  "x-arke-related": ["POST /wiki/{id}/merge", "POST /wiki/bulk"],
   "x-arke-rules": [
     "Requires admin access on all entities in every group",
     "All entities in a group must have the same kind (entity or relationship)",
@@ -552,15 +508,15 @@ const mergeBatchRoute = createRoute({
 const bulkGetEntitiesRoute = createRoute({
   method: "post",
   path: "/bulk",
-  operationId: "bulkGetEntities",
-  tags: ["Entities"],
+  operationId: "bulkGetWikis",
+  tags: ["Wiki"],
   summary: "Fetch multiple entities by ID in one request",
   description:
     "Accepts up to 100 entity IDs and returns them in the requested order. " +
     "Entities hidden by RLS are silently omitted. " +
     "Use view=expanded to include relationships with counterpart summaries.",
   "x-arke-auth": "optional",
-  "x-arke-related": ["GET /entities/{id}", "GET /search"],
+  "x-arke-related": ["GET /wiki/{id}", "GET /search"],
   "x-arke-rules": ["Results filtered by your classification clearance"],
   request: {
     body: {
@@ -600,9 +556,9 @@ const bulkGetEntitiesRoute = createRoute({
 
 // --- Handlers ---
 
-export const entitiesRouter = createRouter();
+export const wikisRouter = createRouter();
 
-entitiesRouter.openapi(listEntitiesRoute, async (c) => {
+wikisRouter.openapi(listEntitiesRoute, async (c) => {
   const sql = createSql();
   const actorCtx = c.get("actor");
   const limit = parseLimit(c, { defaultValue: 50, maxValue: 200 });
@@ -633,159 +589,7 @@ entitiesRouter.openapi(listEntitiesRoute, async (c) => {
   }, 200);
 });
 
-entitiesRouter.openapi(createEntityRoute, async (c) => {
-  const actor = requireActor(c);
-  const body = await parseJsonBody<Record<string, unknown>>(c);
-
-  if (typeof body.type !== "string") {
-    throw new ApiError(400, "missing_required_field", "Missing type");
-  }
-
-  const properties = assertBodyObject(body.properties, "properties");
-  const now = new Date().toISOString();
-  const readLevel = typeof body.read_level === "number" ? body.read_level : 1;
-  const writeLevel = typeof body.write_level === "number" ? body.write_level : 1;
-  const spaceId = typeof body.space_id === "string" ? body.space_id : null;
-  const wantUpsert = body.upsert === true;
-  const permissionGrants = Array.isArray(body.permissions)
-    ? (body.permissions as Array<Record<string, unknown>>).map((g, i) => validatePermissionGrant(g, i))
-    : [];
-  const sql = createSql();
-
-  // Pre-validate space access before the transaction
-  if (spaceId) {
-    await requireSpaceRole(sql, actor, spaceId, "contributor");
-  }
-
-  // Upsert path: match existing entity by (type, lower(label)) within the space
-  const label = typeof properties.label === "string" ? properties.label : null;
-  if (wantUpsert && spaceId && label) {
-    const lookupResults = await sql.transaction([
-      ...setActorContext(sql, actor),
-      sql.query(
-        `SELECT e.id, e.ver
-         FROM entities e
-         JOIN space_entities se ON se.entity_id = e.id
-         WHERE se.space_id = $1
-           AND e.kind = 'entity'
-           AND e.type = $2
-           AND lower(e.properties->>'label') = $3
-         ORDER BY e.created_at ASC
-         LIMIT 1`,
-        [spaceId, body.type, label.toLowerCase()],
-      ),
-    ]);
-    const existing = (lookupResults.at(-1) as Array<{ id: string; ver: number }>)?.[0];
-
-    if (existing) {
-      // Shallow-merge update (same as PATCH /entities/{id})
-      const updateResults = await sql.transaction([
-        ...setActorContext(sql, actor),
-        sql.query(
-          `UPDATE entities
-           SET properties = properties || $1::jsonb,
-               ver = ver + 1,
-               edited_by = $2,
-               updated_at = $3::timestamptz
-           WHERE id = $4 AND ver = $5
-           RETURNING *`,
-          [JSON.stringify(properties), actor.id, now, existing.id, existing.ver],
-        ),
-      ]);
-
-      const updated = (updateResults.at(-1) as EntityRecord[])?.[0];
-      if (!updated) {
-        throw new ApiError(409, "cas_conflict", "Entity was modified between lookup and update — retry the request", {
-          entity_id: existing.id,
-          expected_ver: existing.ver,
-        });
-      }
-
-      // Version snapshot + activity (background, like PATCH)
-      backgroundTask(
-        sql.transaction([
-          ...setActorContext(sql, actor),
-          sql.query(
-            `INSERT INTO entity_versions (entity_id, ver, properties, edited_by, note, created_at)
-             VALUES ($1, $2, $3::jsonb, $4, NULL, $5::timestamptz)`,
-            [existing.id, updated.ver, JSON.stringify(updated.properties), actor.id, now],
-          ),
-          sql.query(
-            `INSERT INTO entity_activity (entity_id, actor_id, action, detail, ts)
-             VALUES ($1, $2, 'content_updated', $3::jsonb, $4::timestamptz)`,
-            [existing.id, actor.id, JSON.stringify({ kind: "entity", type: body.type, via: "upsert" }), now],
-          ),
-        ]).then(() => undefined).catch(console.error),
-      );
-      backgroundTask(indexEntity(updated));
-
-      // Space add + permission grants still run (idempotent)
-      if (spaceId) {
-        backgroundTask(sql.transaction([
-          ...setActorContext(sql, actor),
-          addEntityToSpaceQuery(sql, spaceId, existing.id, actor.id, now),
-        ]).then(() => undefined).catch(console.error));
-      }
-      for (const grant of permissionGrants) {
-        backgroundTask(sql.transaction([
-          ...setActorContext(sql, actor),
-          grantEntityPermissionQuery(sql, existing.id, grant.grantee_type, grant.grantee_id, grant.role, actor.id),
-        ]).then(() => undefined).catch(console.error));
-      }
-
-      return c.json({ entity: updated }, 200);
-    }
-    // No match — fall through to normal INSERT
-  }
-
-  // Normal INSERT path
-  const id = generateUlid();
-
-  const queries = [
-    ...setActorContext(sql, actor),
-    sql.query(
-      `INSERT INTO entities (
-        id, kind, type, ver, properties, owner_id,
-        read_level, write_level, edited_by, note, created_at, updated_at
-      ) VALUES (
-        $1, 'entity', $2, 1, $3::jsonb, $4,
-        $5, $6, $4, NULL, $7::timestamptz, $7::timestamptz
-      ) RETURNING *`,
-      [id, body.type, JSON.stringify(properties), actor.id, readLevel, writeLevel, now],
-    ),
-    sql.query(
-      `INSERT INTO entity_versions (entity_id, ver, properties, edited_by, note, created_at)
-       VALUES ($1, 1, $2::jsonb, $3, NULL, $4::timestamptz)`,
-      [id, JSON.stringify(properties), actor.id, now],
-    ),
-    sql.query(
-      `INSERT INTO entity_activity (entity_id, actor_id, action, detail, ts)
-       VALUES ($1, $2, 'entity_created', $3::jsonb, $4::timestamptz)`,
-      [id, actor.id, JSON.stringify({ kind: "entity", type: body.type }), now],
-    ),
-  ];
-
-  if (spaceId) {
-    queries.push(addEntityToSpaceQuery(sql, spaceId, id, actor.id, now));
-  }
-  for (const grant of permissionGrants) {
-    queries.push(grantEntityPermissionQuery(sql, id, grant.grantee_type, grant.grantee_id, grant.role, actor.id));
-  }
-
-  // RLS enforces: actor.max_write_level >= write_level AND actor.max_read_level >= read_level
-  const results = await sql.transaction(queries);
-
-  const inserted = (results[1] as EntityRecord[])[0]; // 1 context query + INSERT
-  if (!inserted) {
-    throw new ApiError(403, "forbidden", "Insufficient classification level");
-  }
-
-  backgroundTask(indexEntity(inserted));
-
-  return c.json({ entity: inserted }, 201);
-});
-
-entitiesRouter.openapi(getEntityRoute, async (c) => {
+wikisRouter.openapi(getEntityRoute, async (c) => {
   const actor = c.get("actor");
   const projection = parseProjection(c.req.query("view"), c.req.query("fields"));
   const entityId = c.req.param("id");
@@ -839,7 +643,7 @@ entitiesRouter.openapi(getEntityRoute, async (c) => {
   return c.json({ entity: projectEntity(entity, projection) }, 200);
 });
 
-entitiesRouter.openapi(updateEntityRoute, async (c) => {
+wikisRouter.openapi(updateEntityRoute, async (c) => {
   const actor = requireActor(c);
   const entityId = c.req.param("id");
   const body = await parseJsonBody<Record<string, unknown>>(c);
@@ -939,7 +743,7 @@ entitiesRouter.openapi(updateEntityRoute, async (c) => {
     throw new ApiError(404, "not_found", "Entity not found");
   }
 
-  // Version snapshot + activity
+  // Version snapshot
   backgroundTask(
     sql.transaction([
       ...setActorContext(sql, actor),
@@ -948,11 +752,6 @@ entitiesRouter.openapi(updateEntityRoute, async (c) => {
          VALUES ($1, $2, $3::jsonb, $4, $5, $6::timestamptz)`,
         [entityId, updated.ver, JSON.stringify(updated.properties), actor.id, note, now],
       ),
-      sql.query(
-        `INSERT INTO entity_activity (entity_id, actor_id, action, detail, ts)
-         VALUES ($1, $2, 'content_updated', $3::jsonb, $4::timestamptz)`,
-        [entityId, actor.id, JSON.stringify({ ver: updated.ver, note }), now],
-      ),
     ]).then(() => undefined).catch(console.error),
   );
   backgroundTask(indexEntity(updated));
@@ -960,7 +759,7 @@ entitiesRouter.openapi(updateEntityRoute, async (c) => {
   return c.json({ entity: updated }, 200);
 });
 
-entitiesRouter.openapi(deleteEntityRoute, async (c) => {
+wikisRouter.openapi(deleteEntityRoute, async (c) => {
   const actor = requireActor(c);
   const entityId = c.req.param("id");
   const sql = createSql();
@@ -987,7 +786,7 @@ entitiesRouter.openapi(deleteEntityRoute, async (c) => {
   return new Response(null, { status: 204 });
 });
 
-entitiesRouter.openapi(bulkDeleteEntitiesRoute, async (c) => {
+wikisRouter.openapi(bulkDeleteEntitiesRoute, async (c) => {
   const actor = requireActor(c);
   const sql = createSql();
 
@@ -1030,12 +829,11 @@ entitiesRouter.openapi(bulkDeleteEntitiesRoute, async (c) => {
   return c.json({ deleted: ids.length, ids }, 200);
 });
 
-entitiesRouter.openapi(changeLevelRoute, async (c) => {
+wikisRouter.openapi(changeLevelRoute, async (c) => {
   const actor = requireActor(c);
   const entityId = c.req.param("id");
   const body = await parseJsonBody<Record<string, unknown>>(c);
   const sql = createSql();
-  const now = new Date().toISOString();
 
   // Validate levels
   if (typeof body.read_level === "number" && body.read_level > actor.maxReadLevel) {
@@ -1070,22 +868,12 @@ entitiesRouter.openapi(changeLevelRoute, async (c) => {
     throw new ApiError(404, "not_found", "Entity not found or access denied");
   }
 
-  backgroundTask(
-    sql.transaction([
-      ...setActorContext(sql, actor),
-      sql.query(
-        `INSERT INTO entity_activity (entity_id, actor_id, action, detail, ts)
-         VALUES ($1, $2, 'classification_changed', $3::jsonb, $4::timestamptz)`,
-        [entityId, actor.id, JSON.stringify({ read_level: updated.read_level, write_level: updated.write_level }), now],
-      ),
-    ]).then(() => undefined).catch(console.error),
-  );
   backgroundTask(indexEntity(updated));
 
   return c.json({ entity: updated }, 200);
 });
 
-entitiesRouter.openapi(getPermissionsRoute, async (c) => {
+wikisRouter.openapi(getPermissionsRoute, async (c) => {
   const actor = requireActor(c);
   const entityId = c.req.param("id");
   const sql = createSql();
@@ -1107,7 +895,7 @@ entitiesRouter.openapi(getPermissionsRoute, async (c) => {
   }, 200);
 });
 
-entitiesRouter.openapi(grantPermissionRoute, async (c) => {
+wikisRouter.openapi(grantPermissionRoute, async (c) => {
   const actor = requireActor(c);
   const entityId = c.req.param("id");
   const body = await parseJsonBody<Record<string, unknown>>(c);
@@ -1129,7 +917,7 @@ entitiesRouter.openapi(grantPermissionRoute, async (c) => {
   return c.json({ permission: perm }, 201);
 });
 
-entitiesRouter.openapi(revokePermissionRoute, async (c) => {
+wikisRouter.openapi(revokePermissionRoute, async (c) => {
   const actor = requireActor(c);
   const entityId = c.req.param("id");
   const granteeId = c.req.param("granteeId");
@@ -1148,7 +936,7 @@ entitiesRouter.openapi(revokePermissionRoute, async (c) => {
   return new Response(null, { status: 204 });
 });
 
-entitiesRouter.openapi(transferOwnerRoute, async (c) => {
+wikisRouter.openapi(transferOwnerRoute, async (c) => {
   const actor = requireActor(c);
   const entityId = c.req.param("id");
   const body = await parseJsonBody<Record<string, unknown>>(c);
@@ -1157,7 +945,6 @@ entitiesRouter.openapi(transferOwnerRoute, async (c) => {
   }
 
   const sql = createSql();
-  const now = new Date().toISOString();
 
   // First verify current ownership (only owner can transfer)
   const results = await sql.transaction([
@@ -1176,18 +963,13 @@ entitiesRouter.openapi(transferOwnerRoute, async (c) => {
   const updateResults = await sql.transaction([
     ...setActorContext(sql, actor),
     sql`UPDATE entities SET owner_id = ${body.owner_id} WHERE id = ${entityId} RETURNING *`,
-    sql.query(
-      `INSERT INTO entity_activity (entity_id, actor_id, action, detail, ts)
-       VALUES ($1, $2, 'ownership_transferred', $3::jsonb, $4::timestamptz)`,
-      [entityId, actor.id, JSON.stringify({ from: actor.id, to: body.owner_id }), now],
-    ),
   ]);
 
-  const updated = (updateResults[updateResults.length - 2] as EntityRecord[])[0];
+  const updated = (updateResults[updateResults.length - 1] as EntityRecord[])[0];
   return c.json({ entity: updated }, 200);
 });
 
-entitiesRouter.openapi(listVersionsRoute, async (c) => {
+wikisRouter.openapi(listVersionsRoute, async (c) => {
   const actor = c.get("actor");
   const entityId = c.req.param("id");
   const limit = parseLimit(c, { defaultValue: 50, maxValue: 200 });
@@ -1217,7 +999,7 @@ entitiesRouter.openapi(listVersionsRoute, async (c) => {
   }, 200);
 });
 
-entitiesRouter.openapi(getVersionRoute, async (c) => {
+wikisRouter.openapi(getVersionRoute, async (c) => {
   const actor = c.get("actor");
   const entityId = c.req.param("id");
   const ver = Number.parseInt(c.req.param("ver"), 10);
@@ -1244,7 +1026,7 @@ entitiesRouter.openapi(getVersionRoute, async (c) => {
   return c.json(version, 200);
 });
 
-entitiesRouter.openapi(mergeEntityRoute, async (c) => {
+wikisRouter.openapi(mergeEntityRoute, async (c) => {
   const actor = requireActor(c);
   const targetId = c.req.param("id");
   const body = await parseJsonBody<Record<string, unknown>>(c);
@@ -1317,17 +1099,13 @@ entitiesRouter.openapi(mergeEntityRoute, async (c) => {
       ...setActorContext(sql, actor),
       ...(!isTargetAdmin ? [sql.query(
         `SELECT 1 FROM entity_permissions WHERE entity_id = $1 AND role = 'admin'
-         AND ((grantee_type = 'actor' AND grantee_id = $2)
-           OR (grantee_type = 'group' AND EXISTS (
-             SELECT 1 FROM group_memberships WHERE group_id = grantee_id AND actor_id = $2)))
+         AND grantee_type = 'actor' AND grantee_id = $2
          LIMIT 1`,
         [targetId, actor.id],
       )] : []),
       ...(!isSourceAdmin ? [sql.query(
         `SELECT 1 FROM entity_permissions WHERE entity_id = $1 AND role = 'admin'
-         AND ((grantee_type = 'actor' AND grantee_id = $2)
-           OR (grantee_type = 'group' AND EXISTS (
-             SELECT 1 FROM group_memberships WHERE group_id = grantee_id AND actor_id = $2)))
+         AND grantee_type = 'actor' AND grantee_id = $2
          LIMIT 1`,
         [sourceId, actor.id],
       )] : []),
@@ -1440,7 +1218,7 @@ function accumulateProperties(
   return result;
 }
 
-entitiesRouter.openapi(mergeBatchRoute, async (c) => {
+wikisRouter.openapi(mergeBatchRoute, async (c) => {
   const actor = requireActor(c);
   const body = await parseJsonBody<{
     groups: Array<{ entity_ids: string[] }>;
@@ -1520,9 +1298,7 @@ entitiesRouter.openapi(mergeBatchRoute, async (c) => {
       sql.query(
         `SELECT entity_id FROM entity_permissions
          WHERE entity_id = ANY($1::text[]) AND role = 'admin'
-         AND ((grantee_type = 'actor' AND grantee_id = $2)
-           OR (grantee_type = 'group' AND EXISTS (
-             SELECT 1 FROM group_memberships WHERE group_id = grantee_id AND actor_id = $2)))`,
+         AND grantee_type = 'actor' AND grantee_id = $2`,
         [nonOwnedIds, actor.id],
       ),
     ]);
@@ -1740,7 +1516,7 @@ entitiesRouter.openapi(mergeBatchRoute, async (c) => {
   }, 200);
 });
 
-entitiesRouter.openapi(bulkGetEntitiesRoute, async (c) => {
+wikisRouter.openapi(bulkGetEntitiesRoute, async (c) => {
   const actor = c.get("actor");
   const body = await parseJsonBody<{ ids: string[] }>(c);
 

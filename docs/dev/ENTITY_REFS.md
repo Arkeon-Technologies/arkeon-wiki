@@ -98,7 +98,7 @@ These are separate concepts:
 | **Versioning** | Versioned with the containing entity | Independently versioned |
 | **Metadata** | None beyond type/label hints | Full properties (source_text, context, weight, etc.) |
 | **Use case** | "This report was written by Alice" | "This paper formally cites that paper" |
-| **Creation** | Set a property value | POST /entities/:id/relationships |
+| **Creation** | Set a property value | `POST /wiki` (relationships are created as part of the wiki pipeline) |
 
 **Rule of thumb:** If the connection is part of the entity's own data (author, source, parent document), use a ref. If the connection is an assertion that deserves its own identity, permissions, or metadata, use a relationship.
 

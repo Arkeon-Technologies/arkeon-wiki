@@ -8,9 +8,9 @@
 --      (bypasses RLS since the app layer verifies admin access before calling)
 --
 -- The merge function is the ONLY writer to entity_redirects, and the ONLY
--- code path that repoints edges, transfers space memberships, or moves
--- comments across entities. No additional RLS policies are needed because
--- SECURITY DEFINER bypasses RLS entirely.
+-- code path that repoints edges or transfers space memberships across
+-- entities. No additional RLS policies are needed because SECURITY
+-- DEFINER bypasses RLS entirely.
 --
 -- =============================================================================
 
@@ -45,7 +45,6 @@ USING (true);
 -- This bypasses RLS because merge needs to:
 --   - Delete/repoint relationship entities owned by third parties
 --   - Transfer space memberships for spaces the actor may not have roles in
---   - Transfer comments by other authors
 --   - Write to entity_redirects (no INSERT grant to arke_app)
 --
 -- Returns the updated target entity row, or empty set if the CAS check failed.
@@ -118,10 +117,7 @@ BEGIN
   FROM space_entities WHERE entity_id = p_source_id
   ON CONFLICT (space_id, entity_id) DO NOTHING;
 
-  -- 8. Transfer comments
-  UPDATE comments SET entity_id = p_target_id WHERE entity_id = p_source_id;
-
-  -- 9. Update target entity with merged properties (CAS guard)
+  -- 8. Update target entity with merged properties (CAS guard)
   UPDATE entities
   SET properties = p_merged_properties,
       ver = p_new_ver,
@@ -136,22 +132,18 @@ BEGIN
     RETURN;
   END IF;
 
-  -- 10. Insert version snapshot
+  -- 9. Insert version snapshot
   INSERT INTO entity_versions (entity_id, ver, properties, edited_by, note, created_at)
   VALUES (p_target_id, p_new_ver, p_merged_properties, p_actor_id, p_note, p_now);
 
-  -- 11. Log merge activity
-  INSERT INTO entity_activity (entity_id, actor_id, action, detail, ts)
-  VALUES (p_target_id, p_actor_id, 'entity_merged', p_merge_detail, p_now);
-
-  -- 12. Repoint existing redirects that point to source (chain resolution)
+  -- 10. Repoint existing redirects that point to source (chain resolution)
   UPDATE entity_redirects SET new_id = p_target_id WHERE new_id = p_source_id;
 
-  -- 13. Insert redirect for the source
+  -- 11. Insert redirect for the source
   INSERT INTO entity_redirects (old_id, new_id, merged_at, merged_by)
   VALUES (p_source_id, p_target_id, p_now, p_actor_id);
 
-  -- 14. Delete source entity (CASCADE handles remaining refs)
+  -- 12. Delete source entity (CASCADE handles remaining refs)
   DELETE FROM entities WHERE id = p_source_id;
 
   -- Return the updated target

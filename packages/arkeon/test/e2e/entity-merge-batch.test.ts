@@ -41,7 +41,7 @@ describe("Entity Merge Batch", () => {
       ),
     );
 
-    const { response, body } = await jsonRequest("/entities/merge-batch", {
+    const { response, body } = await jsonRequest("/wiki/merge-batch", {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -60,7 +60,7 @@ describe("Entity Merge Batch", () => {
 
     // Target should have the longest description (accumulate keeps longest)
     const { body: targetBody } = await getJson(
-      `/entities/${result.groups[0].target_id}`,
+      `/wiki/${result.groups[0].target_id}`,
       actor.apiKey,
     );
     const target = (targetBody as any).entity;
@@ -69,7 +69,7 @@ describe("Entity Merge Batch", () => {
     // All non-target entities should return 410
     const nonTargets = entities.filter((e) => e.id !== result.groups[0].target_id);
     for (const e of nonTargets) {
-      const { response: r } = await apiRequest(`/entities/${e.id}`, {
+      const { response: r } = await apiRequest(`/wiki/${e.id}`, {
         apiKey: actor.apiKey,
       });
       expect(r.status).toBe(410);
@@ -88,7 +88,7 @@ describe("Entity Merge Batch", () => {
       ),
     );
 
-    const { response, body } = await jsonRequest("/entities/merge-batch", {
+    const { response, body } = await jsonRequest("/wiki/merge-batch", {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -122,7 +122,7 @@ describe("Entity Merge Batch", () => {
       meta: { key2: "v2" },
     });
 
-    const { response, body } = await jsonRequest("/entities/merge-batch", {
+    const { response, body } = await jsonRequest("/wiki/merge-batch", {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -134,7 +134,7 @@ describe("Entity Merge Batch", () => {
     expect(response.status).toBe(200);
     const target = (body as any).groups[0];
     const { body: entityBody } = await getJson(
-      `/entities/${target.target_id}`,
+      `/wiki/${target.target_id}`,
       actor.apiKey,
     );
     const props = (entityBody as any).entity.properties;
@@ -157,7 +157,7 @@ describe("Entity Merge Batch", () => {
     await createRelationship(actor.apiKey, e2.id, "authored", other.id);
     await createRelationship(actor.apiKey, e3.id, "cites", other.id);
 
-    const { response, body } = await jsonRequest("/entities/merge-batch", {
+    const { response, body } = await jsonRequest("/wiki/merge-batch", {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -169,7 +169,7 @@ describe("Entity Merge Batch", () => {
     const targetId = (body as any).groups[0].target_id;
 
     const { body: relBody } = await getJson(
-      `/entities/${targetId}/relationships?direction=out`,
+      `/wiki/${targetId}/relationships?direction=out`,
       actor.apiKey,
     );
     const predicates = ((relBody as any).relationships ?? [])
@@ -185,7 +185,7 @@ describe("Entity Merge Batch", () => {
     const e2 = await createEntity(actor.apiKey, "note", { label: "y" });
     const e3 = await createEntity(actor.apiKey, "note", { label: "z" });
 
-    const { response, body } = await jsonRequest("/entities/merge-batch", {
+    const { response, body } = await jsonRequest("/wiki/merge-batch", {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -202,7 +202,7 @@ describe("Entity Merge Batch", () => {
   test("400 when group has fewer than 2 entities", async () => {
     const e1 = await createEntity(actor.apiKey, "note", { label: "solo" });
 
-    const { response } = await jsonRequest("/entities/merge-batch", {
+    const { response } = await jsonRequest("/wiki/merge-batch", {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -215,7 +215,7 @@ describe("Entity Merge Batch", () => {
   test("404 when an entity does not exist", async () => {
     const e1 = await createEntity(actor.apiKey, "note", { label: "real" });
 
-    const { response, body } = await jsonRequest("/entities/merge-batch", {
+    const { response, body } = await jsonRequest("/wiki/merge-batch", {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -233,7 +233,7 @@ describe("Entity Merge Batch", () => {
     // Grant editor (not admin) so actor can see it
     await grantEntityPermission(actorB.apiKey, foreign.id, "actor", actor.id, "editor");
 
-    const { response } = await jsonRequest("/entities/merge-batch", {
+    const { response } = await jsonRequest("/wiki/merge-batch", {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -252,7 +252,7 @@ describe("Entity Merge Batch", () => {
       ),
     );
 
-    const { body } = await jsonRequest("/entities/merge-batch", {
+    const { body } = await jsonRequest("/wiki/merge-batch", {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -264,7 +264,7 @@ describe("Entity Merge Batch", () => {
     const sources = entities.filter((e) => e.id !== targetId);
 
     for (const source of sources) {
-      const { response, body: rBody } = await apiRequest(`/entities/${source.id}`, {
+      const { response, body: rBody } = await apiRequest(`/wiki/${source.id}`, {
         apiKey: actor.apiKey,
       });
       expect(response.status).toBe(410);
@@ -286,7 +286,7 @@ describe("Entity Merge Batch", () => {
     await addEntityToSpace(actor.apiKey, space.id, e2.id);
     await grantEntityPermission(actor.apiKey, e3.id, "actor", actorB.id, "editor");
 
-    const { body } = await jsonRequest("/entities/merge-batch", {
+    const { body } = await jsonRequest("/wiki/merge-batch", {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -301,7 +301,7 @@ describe("Entity Merge Batch", () => {
     expect((spaceBody as any).entities.some((e: any) => e.id === targetId)).toBe(true);
 
     // Target should have actorB's permission
-    const { body: permBody } = await getJson(`/entities/${targetId}/permissions`, actor.apiKey);
+    const { body: permBody } = await getJson(`/wiki/${targetId}/permissions`, actor.apiKey);
     expect((permBody as any).permissions.some(
       (p: any) => p.grantee_id === actorB.id && p.role === "editor",
     )).toBe(true);
@@ -323,7 +323,7 @@ describe("Entity Merge Batch", () => {
       unique_to_3: true,
     });
 
-    const { body } = await jsonRequest("/entities/merge-batch", {
+    const { body } = await jsonRequest("/wiki/merge-batch", {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -333,7 +333,7 @@ describe("Entity Merge Batch", () => {
     });
 
     const targetId = (body as any).groups[0].target_id;
-    const { body: entityBody } = await getJson(`/entities/${targetId}`, actor.apiKey);
+    const { body: entityBody } = await getJson(`/wiki/${targetId}`, actor.apiKey);
     const props = (entityBody as any).entity.properties;
 
     // All unique keys should be present
@@ -354,7 +354,7 @@ describe("Entity Merge Batch", () => {
       metadata: { level1: { c: 3 }, level2: "new" },
     });
 
-    const { body } = await jsonRequest("/entities/merge-batch", {
+    const { body } = await jsonRequest("/wiki/merge-batch", {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -364,7 +364,7 @@ describe("Entity Merge Batch", () => {
     });
 
     const targetId = (body as any).groups[0].target_id;
-    const { body: entityBody } = await getJson(`/entities/${targetId}`, actor.apiKey);
+    const { body: entityBody } = await getJson(`/wiki/${targetId}`, actor.apiKey);
     const meta = (entityBody as any).entity.properties.metadata;
 
     // Nested object keys from both entities should be preserved
@@ -380,7 +380,7 @@ describe("Entity Merge Batch", () => {
     const e1 = await createEntity(actor.apiKey, "note", { label: uniqueName("d1") });
     const e2 = await createEntity(actor.apiKey, "note", { label: uniqueName("d2") });
 
-    const { response, body } = await jsonRequest("/entities/merge-batch", {
+    const { response, body } = await jsonRequest("/wiki/merge-batch", {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -396,7 +396,7 @@ describe("Entity Merge Batch", () => {
   test("400 when intra-group dedup leaves fewer than 2 unique IDs", async () => {
     const e1 = await createEntity(actor.apiKey, "note", { label: uniqueName("solo") });
 
-    const { response } = await jsonRequest("/entities/merge-batch", {
+    const { response } = await jsonRequest("/wiki/merge-batch", {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -417,7 +417,7 @@ describe("Entity Merge Batch", () => {
     const rel1 = await createRelationship(actor.apiKey, a.id, "cites", b.id);
     const rel2 = await createRelationship(actor.apiKey, a.id, "cites", c.id); // different target
 
-    const { response, body } = await jsonRequest("/entities/merge-batch", {
+    const { response, body } = await jsonRequest("/wiki/merge-batch", {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -438,7 +438,7 @@ describe("Entity Merge Batch", () => {
     const rel1 = await createRelationship(actor.apiKey, a.id, "cites", b.id, { weight: 1 });
     const rel2 = await createRelationship(actor.apiKey, a.id, "references", b.id, { weight: 5 });
 
-    const { response, body } = await jsonRequest("/entities/merge-batch", {
+    const { response, body } = await jsonRequest("/wiki/merge-batch", {
       method: "POST",
       apiKey: actor.apiKey,
       json: {

@@ -20,7 +20,7 @@
 
 CREATE TABLE actors (
   id                 TEXT PRIMARY KEY,                      -- ULID
-  kind               TEXT NOT NULL,                         -- 'agent' | 'worker'
+  kind               TEXT NOT NULL DEFAULT 'agent',         -- 'agent' (reserved for future kinds)
   max_read_level     INT NOT NULL DEFAULT 1,               -- 0=PUBLIC .. 4=RESTRICTED
   max_write_level    INT NOT NULL DEFAULT 1,               -- ceiling for writes
   is_admin           BOOLEAN NOT NULL DEFAULT false,       -- system-wide override
@@ -31,7 +31,7 @@ CREATE TABLE actors (
   created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-  CONSTRAINT valid_actor_kind CHECK (kind IN ('agent', 'worker')),
+  CONSTRAINT valid_actor_kind CHECK (kind = 'agent'),
   CONSTRAINT valid_actor_status CHECK (status IN ('active', 'suspended', 'deactivated'))
 );
 

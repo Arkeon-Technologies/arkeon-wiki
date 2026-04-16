@@ -39,7 +39,7 @@ describe("Classification model", () => {
         { label: uniqueName(`read-l${level}`) },
         { read_level: level, write_level: level },
       );
-      const { response } = await getJson(`/entities/${entity.id}`, level2Actor.apiKey);
+      const { response } = await getJson(`/wiki/${entity.id}`, level2Actor.apiKey);
       expect(response.status).toBe(200);
     }
   });
@@ -52,7 +52,7 @@ describe("Classification model", () => {
         { label: uniqueName(`hidden-l${level}`) },
         { read_level: level, write_level: level },
       );
-      const { response } = await getJson(`/entities/${entity.id}`, level2Actor.apiKey);
+      const { response } = await getJson(`/wiki/${entity.id}`, level2Actor.apiKey);
       expect(response.status).toBe(404);
     }
   });
@@ -70,7 +70,7 @@ describe("Classification model", () => {
   });
 
   test("Actor at level 2 cannot create entities at level 3", async () => {
-    const { response } = await jsonRequest("/entities", {
+    const { response } = await jsonRequest("/wiki", {
       method: "POST",
       apiKey: level2Actor.apiKey,
       json: {
@@ -91,7 +91,7 @@ describe("Classification model", () => {
       { read_level: 0, write_level: 0 },
     );
     // No apiKey -- unauthenticated
-    const { response, body } = await getJson(`/entities/${entity.id}`);
+    const { response, body } = await getJson(`/wiki/${entity.id}`);
     expect(response.status).toBe(200);
     expect((body as any).entity.id).toBe(entity.id);
   });
@@ -103,7 +103,7 @@ describe("Classification model", () => {
       { label: uniqueName("internal") },
       { read_level: 1, write_level: 1 },
     );
-    const { response } = await getJson(`/entities/${entity.id}`);
+    const { response } = await getJson(`/wiki/${entity.id}`);
     expect(response.status).toBe(404);
   });
 
@@ -114,7 +114,7 @@ describe("Classification model", () => {
       { label: "before" },
       { read_level: 1, write_level: 1 },
     );
-    const { response, body } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response, body } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: level2Actor.apiKey,
       json: { ver: entity.ver, properties: { label: "after" } },
@@ -138,7 +138,7 @@ describe("Classification model", () => {
       { label: "owned" },
       { read_level: 1, write_level: 1 },
     );
-    const { response } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: other.apiKey,
       json: { ver: entity.ver, properties: { label: "hacked" } },
@@ -163,7 +163,7 @@ describe("Classification model", () => {
     );
     await grantEntityPermission(owner.apiKey, entity.id, "actor", editor.id, "editor");
 
-    const { response, body } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response, body } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: editor.apiKey,
       json: { ver: entity.ver, properties: { label: "edited" } },
@@ -180,7 +180,7 @@ describe("Classification model", () => {
       { read_level: 1, write_level: 1 },
     );
     // Use the admin key directly
-    const { response, body } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response, body } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: adminApiKey,
       json: { ver: entity.ver, properties: { label: "admin-edited" } },
@@ -199,7 +199,7 @@ describe("Classification model", () => {
     );
     // level2 actor tries to update -- should fail even with editor grant
     // (because RLS checks write_level ceiling)
-    const { response } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: level2Actor.apiKey,
       json: { ver: entity.ver, properties: { label: "nope" } },
@@ -228,7 +228,7 @@ describe("Classification model", () => {
     const tgt = await createEntity(level4Actor.apiKey, "note",
       { label: uniqueName("rel-tgt-l2") }, { read_level: 2, write_level: 2 });
 
-    const { response, body } = await jsonRequest(`/entities/${src.id}/relationships`, {
+    const { response, body } = await jsonRequest(`/wiki/${src.id}/relationships`, {
       method: "POST",
       apiKey: level4Actor.apiKey,
       json: { predicate: "references", target_id: tgt.id },
@@ -245,7 +245,7 @@ describe("Classification model", () => {
     const tgt = await createEntity(level4Actor.apiKey, "note",
       { label: uniqueName("rel-tgt-up") }, { read_level: 1, write_level: 1 });
 
-    const { response, body } = await jsonRequest(`/entities/${src.id}/relationships`, {
+    const { response, body } = await jsonRequest(`/wiki/${src.id}/relationships`, {
       method: "POST",
       apiKey: level4Actor.apiKey,
       json: { predicate: "references", target_id: tgt.id, read_level: 3, write_level: 3 },
@@ -262,7 +262,7 @@ describe("Classification model", () => {
     const tgt = await createEntity(level4Actor.apiKey, "note",
       { label: uniqueName("rel-tgt-lo") }, { read_level: 3, write_level: 1 });
 
-    const { response, body } = await jsonRequest(`/entities/${src.id}/relationships`, {
+    const { response, body } = await jsonRequest(`/wiki/${src.id}/relationships`, {
       method: "POST",
       apiKey: level4Actor.apiKey,
       json: { predicate: "references", target_id: tgt.id, read_level: 1 },
@@ -277,7 +277,7 @@ describe("Classification model", () => {
     const tgt = await createEntity(level4Actor.apiKey, "note",
       { label: uniqueName("rel-tgt-wlo") }, { read_level: 1, write_level: 1 });
 
-    const { response, body } = await jsonRequest(`/entities/${src.id}/relationships`, {
+    const { response, body } = await jsonRequest(`/wiki/${src.id}/relationships`, {
       method: "POST",
       apiKey: level4Actor.apiKey,
       json: { predicate: "references", target_id: tgt.id, write_level: 1 },

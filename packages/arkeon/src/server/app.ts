@@ -17,18 +17,13 @@ import { authMiddleware } from "./middleware/auth";
 import { ApiError, errorBody } from "./lib/errors";
 import { mapPostgresError } from "./lib/pg-errors";
 import { createSql } from "./lib/sql";
-import { activityRouter, entityActivityRouter } from "./routes/activity";
 import { actorsRouter } from "./routes/actors";
 import { adminRouter } from "./routes/admin";
 import { authRouter } from "./routes/auth";
-import { commentsRouter } from "./routes/comments";
 import { contentRouter } from "./routes/content";
-import { entitiesRouter } from "./routes/entities";
-import { groupsRouter } from "./routes/groups";
+import { wikisRouter } from "./routes/entities";
 import { createHelpRouter } from "./routes/help";
-import { inboxRouter } from "./routes/inbox";
-import { opsRouter } from "./routes/ops";
-import { entityRelationshipsRouter, relationshipDirectRouter } from "./routes/relationships";
+import { wikiRelationshipsRouter, relationshipDirectRouter } from "./routes/relationships";
 import { resolveRouter } from "./routes/resolve";
 import { graphRouter } from "./routes/traverse";
 import { searchRouter } from "./routes/search";
@@ -142,23 +137,19 @@ export function createApp(options?: { adminKey?: string }) {
     });
   });
 
-  app.route("/activity", activityRouter);
   app.route("/actors", actorsRouter);
   app.route("/admin", adminRouter);
   app.route("/auth", authRouter);
-  app.route("/auth", inboxRouter);
-  app.route("/entities", commentsRouter);
-  app.route("/entities", contentRouter);
-  app.route("/entities", entitiesRouter);
-  app.route("/entities", entityActivityRouter);
-  app.route("/entities", entityRelationshipsRouter);
   app.route("/graph", graphRouter);
-  app.route("/groups", groupsRouter);
-  app.route("/ops", opsRouter);
   app.route("/relationships", relationshipDirectRouter);
   app.route("/resolve", resolveRouter);
   app.route("/search", searchRouter);
   app.route("/spaces", spacesRouter);
+  // Wiki endpoints — all reads + permission/metadata writes. Content
+  // creation/update happens via POST /wiki (see wikiRouter below).
+  app.route("/wiki", contentRouter);
+  app.route("/wiki", wikisRouter);
+  app.route("/wiki", wikiRelationshipsRouter);
   app.route("/wiki", wikiRouter);
 
   app.notFound((c) => {

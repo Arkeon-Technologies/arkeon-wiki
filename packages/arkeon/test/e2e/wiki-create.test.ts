@@ -77,7 +77,7 @@ describe("Wiki create", () => {
     expect(wiki.properties.content).not.toContain("[[gap:");
 
     const { response: relResponse, body: relBody } = await getJson(
-      `/entities/${wiki.id}/relationships?direction=out&limit=20`,
+      `/wiki/${wiki.id}/relationships?direction=out&limit=20`,
       actor.apiKey,
     );
     expect(relResponse.status).toBe(200);
@@ -153,7 +153,7 @@ describe("Wiki create", () => {
 
     for (const placeholder of created.placeholders) {
       const { response: phResponse, body: phBody } = await getJson(
-        `/entities/${placeholder.id}`,
+        `/wiki/${placeholder.id}`,
         actor.apiKey,
       );
       expect(phResponse.status).toBe(200);
@@ -174,7 +174,7 @@ describe("Wiki create", () => {
       label: uniqueName("wiki-redirect-source"),
     }, { space_id: space.id });
 
-    const { response: mergeResponse } = await jsonRequest(`/entities/${target.id}/merge`, {
+    const { response: mergeResponse } = await jsonRequest(`/wiki/${target.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -204,7 +204,7 @@ describe("Wiki create", () => {
     expect(wiki.properties.content).not.toContain(source.id);
 
     const { body: relBody } = await getJson(
-      `/entities/${wiki.id}/relationships?direction=out&target_id=${target.id}`,
+      `/wiki/${wiki.id}/relationships?direction=out&target_id=${target.id}`,
       actor.apiKey,
     );
     expect((relBody as any).relationships.some((r: any) => r.target_id === target.id)).toBe(true);

@@ -69,7 +69,7 @@ export const EntityResponse = z
 export const ActorSchema = z
   .object({
     id: UlidSchema,
-    kind: z.enum(["agent", "worker"]),
+    kind: z.enum(["agent"]),
     max_read_level: ClassificationLevel,
     max_write_level: ClassificationLevel,
     is_admin: z.boolean(),

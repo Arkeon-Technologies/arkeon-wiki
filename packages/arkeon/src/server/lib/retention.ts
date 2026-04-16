@@ -23,8 +23,6 @@
  *     deletes > 0 rows or errors.
  */
 
-import { withSystemActorContext } from "./actor-context";
-
 const ONE_HOUR_MS = 60 * 60 * 1000;
 
 type RetentionJob = {
@@ -35,37 +33,7 @@ type RetentionJob = {
   run: () => Promise<number>;
 };
 
-const jobs: RetentionJob[] = [
-  {
-    name: "prune-activity",
-    description: "entity_activity older than 15 days (except entity_created/ownership_transferred)",
-    run: async () => {
-      return withSystemActorContext(async (sql) => {
-        const rows = await sql`
-          DELETE FROM entity_activity
-          WHERE ts < NOW() - INTERVAL '15 days'
-            AND action NOT IN ('entity_created', 'ownership_transferred')
-          RETURNING 1
-        `;
-        return rows.length;
-      });
-    },
-  },
-  {
-    name: "prune-notifications",
-    description: "notifications older than 15 days",
-    run: async () => {
-      return withSystemActorContext(async (sql) => {
-        const rows = await sql`
-          DELETE FROM notifications
-          WHERE ts < NOW() - INTERVAL '15 days'
-          RETURNING 1
-        `;
-        return rows.length;
-      });
-    },
-  },
-];
+const jobs: RetentionJob[] = [];
 
 let timer: NodeJS.Timeout | null = null;
 let running = false;
@@ -91,6 +59,7 @@ async function runAllJobs(): Promise<void> {
 
 export function startRetention(): void {
   if (timer) return;
+  if (jobs.length === 0) return;
   console.log(`[retention] started — ${jobs.length} job(s), hourly sweep`);
   // Kick off an immediate sweep so operators can confirm it's wired up,
   // then settle into the hourly cadence.

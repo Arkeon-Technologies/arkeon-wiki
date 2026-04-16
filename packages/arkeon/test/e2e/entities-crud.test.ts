@@ -42,7 +42,7 @@ describe("Entities CRUD", () => {
     const entity = await createEntity(actor.apiKey, "note", {
       label: uniqueName("crud-get"),
     });
-    const { response, body } = await getJson(`/entities/${entity.id}`, actor.apiKey);
+    const { response, body } = await getJson(`/wiki/${entity.id}`, actor.apiKey);
     expect(response.status).toBe(200);
     expect((body as any).entity.id).toBe(entity.id);
     expect((body as any).entity.properties.label).toBe(entity.properties.label);
@@ -54,7 +54,7 @@ describe("Entities CRUD", () => {
     });
     expect(entity.ver).toBe(1);
 
-    const { response, body } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response, body } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: actor.apiKey,
       json: { ver: 1, properties: { label: "version-2" } },
@@ -70,14 +70,14 @@ describe("Entities CRUD", () => {
     });
 
     // First update succeeds
-    await jsonRequest(`/entities/${entity.id}`, {
+    await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: actor.apiKey,
       json: { ver: 1, properties: { label: "cas-updated" } },
     });
 
     // Second update with stale ver=1 should fail with 409
-    const { response, body } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response, body } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: actor.apiKey,
       json: { ver: 1, properties: { label: "cas-stale" } },
@@ -91,14 +91,14 @@ describe("Entities CRUD", () => {
       label: uniqueName("crud-delete"),
     });
 
-    const { response } = await apiRequest(`/entities/${entity.id}`, {
+    const { response } = await apiRequest(`/wiki/${entity.id}`, {
       method: "DELETE",
       apiKey: actor.apiKey,
     });
     expect(response.status).toBe(204);
 
     // Verify deleted
-    const { response: getRes } = await getJson(`/entities/${entity.id}`, actor.apiKey);
+    const { response: getRes } = await getJson(`/wiki/${entity.id}`, actor.apiKey);
     expect(getRes.status).toBe(404);
   });
 
@@ -108,7 +108,7 @@ describe("Entities CRUD", () => {
     });
 
     // Update to create v2
-    await jsonRequest(`/entities/${entity.id}`, {
+    await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: actor.apiKey,
       json: { ver: 1, properties: { label: "v2-label" }, note: "second edit" },
@@ -119,7 +119,7 @@ describe("Entities CRUD", () => {
 
     // List versions
     const { response: listRes, body: listBody } = await getJson(
-      `/entities/${entity.id}/versions`,
+      `/wiki/${entity.id}/versions`,
       actor.apiKey,
     );
     expect(listRes.status).toBe(200);
@@ -127,7 +127,7 @@ describe("Entities CRUD", () => {
 
     // Get specific version 1
     const { response: v1Res, body: v1Body } = await getJson(
-      `/entities/${entity.id}/versions/1`,
+      `/wiki/${entity.id}/versions/1`,
       actor.apiKey,
     );
     expect(v1Res.status).toBe(200);
@@ -141,7 +141,7 @@ describe("Entities CRUD", () => {
     });
 
     // Update to generate activity
-    await jsonRequest(`/entities/${entity.id}`, {
+    await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: actor.apiKey,
       json: { ver: 1, properties: { label: "activity-updated" } },
@@ -151,7 +151,7 @@ describe("Entities CRUD", () => {
     await new Promise((r) => setTimeout(r, 500));
 
     const { response, body } = await getJson(
-      `/entities/${entity.id}/activity`,
+      `/wiki/${entity.id}/activity`,
       actor.apiKey,
     );
     expect(response.status).toBe(200);
@@ -182,7 +182,7 @@ describe("Entities CRUD", () => {
 
     // List relationships
     const { response: listRes, body: listBody } = await getJson(
-      `/entities/${source.id}/relationships`,
+      `/wiki/${source.id}/relationships`,
       actor.apiKey,
     );
     expect(listRes.status).toBe(200);
@@ -222,7 +222,7 @@ describe("Entities CRUD", () => {
     });
 
     const { response, body } = await jsonRequest(
-      `/entities/${source.id}/relationships`,
+      `/wiki/${source.id}/relationships`,
       {
         method: "POST",
         apiKey: actorB.apiKey,
@@ -249,7 +249,7 @@ describe("Entities CRUD", () => {
 
     // Grant editor role to actor B on the source entity
     const { response: grantRes } = await jsonRequest(
-      `/entities/${source.id}/permissions`,
+      `/wiki/${source.id}/permissions`,
       {
         method: "POST",
         apiKey: actor.apiKey,
@@ -260,7 +260,7 @@ describe("Entities CRUD", () => {
 
     // Actor B should now be able to create a relationship from source
     const { response: relRes } = await jsonRequest(
-      `/entities/${source.id}/relationships`,
+      `/wiki/${source.id}/relationships`,
       {
         method: "POST",
         apiKey: actorB.apiKey,
@@ -276,7 +276,7 @@ describe("Entities CRUD", () => {
     });
 
     const { response, body } = await jsonRequest(
-      `/entities/01AAAAAAAAAAAAAAAAAAAAAAAA/relationships`,
+      `/wiki/01AAAAAAAAAAAAAAAAAAAAAAAA/relationships`,
       {
         method: "POST",
         apiKey: actor.apiKey,
@@ -460,7 +460,7 @@ describe("Entities CRUD", () => {
 
     // List comments -- should have threading
     const { response: listRes, body: listBody } = await getJson(
-      `/entities/${entity.id}/comments`,
+      `/wiki/${entity.id}/comments`,
       actor.apiKey,
     );
     expect(listRes.status).toBe(200);
@@ -474,7 +474,7 @@ describe("Entities CRUD", () => {
 
     // Delete comment
     const { response: deleteRes } = await apiRequest(
-      `/entities/${entity.id}/comments/${comment1.id}`,
+      `/wiki/${entity.id}/comments/${comment1.id}`,
       { method: "DELETE", apiKey: actor.apiKey },
     );
     expect(deleteRes.status).toBe(204);

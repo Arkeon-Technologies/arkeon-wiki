@@ -47,13 +47,13 @@ self-escalation attempts even for direct SQL.
 
 ## Changing an entity's level
 
-Use `PUT /entities/{id}/level` with a partial body:
+Use `PUT /wiki/{id}/level` with a partial body:
 
 ```json
 { "read_level": 2, "write_level": 2 }
 ```
 
-Rules, enforced in `packages/arkeon/src/server/routes/entities.ts`:
+Rules, enforced in `packages/arkeon/src/server/routes/wiki.ts`:
 
 - The caller must be the owner, an editor, or an entity admin.
 - New `read_level` cannot exceed the caller's `max_read_level`.
@@ -61,8 +61,7 @@ Rules, enforced in `packages/arkeon/src/server/routes/entities.ts`:
 - Setting `read_level = 0` (PUBLIC) additionally requires
   `can_publish_public = true` on the actor — normal users cannot
   unilaterally publish.
-- Every change writes a `classification_changed` row to
-  `entity_activity` so level shifts are auditable.
+- Every change writes a `classification_changed` audit record.
 
 ## Relationships inherit their endpoints' classification
 

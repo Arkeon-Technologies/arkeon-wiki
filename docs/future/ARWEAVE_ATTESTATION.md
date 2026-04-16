@@ -9,14 +9,14 @@ Archiving is an explicit action, not automatic. A user (or agent) calls the arch
 1. Queries the full entity state at that moment
 2. Computes a CID from the snapshot
 3. Uploads the snapshot to Arweave
-4. Logs an `entity_archived` activity entry with the CID and Arweave TX ID
+4. Logs an `entity_archived` audit record with the CID and Arweave TX ID
 
 No queue, no background workers. Volume is low enough to handle synchronously.
 
 ## Endpoints
 
 ```
-POST /entities/:id/archive
+POST /wiki/:id/archive
 POST /spaces/:id/archive
 ```
 
@@ -79,4 +79,4 @@ Anyone can verify an archived entity:
 
 - Encrypted archiving for private entities
 - Batch archiving for spaces (all entities in a space)
-- `entity_archived` activity action for tracking archive history
+- `entity_archived` audit record for tracking archive history

@@ -108,7 +108,7 @@ describe("Spaces", () => {
     );
     await addEntityToSpace(actor.apiKey, space.id, entity.id);
 
-    const { response } = await apiRequest(`/spaces/${space.id}/entities/${entity.id}`, {
+    const { response } = await apiRequest(`/spaces/${space.id}/wiki/${entity.id}`, {
       method: "DELETE",
       apiKey: actor.apiKey,
     });
@@ -227,7 +227,7 @@ describe("Spaces", () => {
     await addEntityToSpace(actor.apiKey, space.id, entity.id);
 
     // Before grant: user cannot edit
-    const { response: failRes } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response: failRes } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: user.apiKey,
       json: { ver: entity.ver, properties: { label: "hacked" } },
@@ -238,7 +238,7 @@ describe("Spaces", () => {
     await grantSpaceEntityAccess(actor.apiKey, space.id, "actor", user.id, "editor");
 
     // After grant: user can edit
-    const { response: okRes, body } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response: okRes, body } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: user.apiKey,
       json: { ver: entity.ver, properties: { label: "modified-via-space" } },
@@ -257,7 +257,7 @@ describe("Spaces", () => {
     await grantSpaceEntityAccess(actor.apiKey, space.id, "actor", user.id, "editor");
 
     // Can edit inside entity
-    const { response: okRes } = await jsonRequest(`/entities/${insideEntity.id}`, {
+    const { response: okRes } = await jsonRequest(`/wiki/${insideEntity.id}`, {
       method: "PUT",
       apiKey: user.apiKey,
       json: { ver: insideEntity.ver, properties: { label: "ok" } },
@@ -265,7 +265,7 @@ describe("Spaces", () => {
     expect(okRes.status).toBe(200);
 
     // Cannot edit outside entity
-    const { response: failRes } = await jsonRequest(`/entities/${outsideEntity.id}`, {
+    const { response: failRes } = await jsonRequest(`/wiki/${outsideEntity.id}`, {
       method: "PUT",
       apiKey: user.apiKey,
       json: { ver: outsideEntity.ver, properties: { label: "no" } },
@@ -281,7 +281,7 @@ describe("Spaces", () => {
     await grantSpaceEntityAccess(actor.apiKey, space.id, "actor", user.id, "editor");
 
     // Edit works
-    const { response: okRes } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response: okRes } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: user.apiKey,
       json: { ver: entity.ver, properties: { label: "edited" } },
@@ -296,7 +296,7 @@ describe("Spaces", () => {
     expect(revokeRes.status).toBe(204);
 
     // Edit now fails
-    const { response: failRes } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response: failRes } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: user.apiKey,
       json: { ver: 2, properties: { label: "should-fail" } },
@@ -341,7 +341,7 @@ describe("Spaces", () => {
     await addEntityToSpace(actor.apiKey, space.id, entity.id);
 
     // Before grant: member cannot edit
-    const { response: failRes } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response: failRes } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: member.apiKey,
       json: { ver: entity.ver, properties: { label: "no" } },
@@ -352,7 +352,7 @@ describe("Spaces", () => {
     await grantSpaceEntityAccess(actor.apiKey, space.id, "group", group.id, "editor");
 
     // After grant: member can edit
-    const { response: okRes, body } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response: okRes, body } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: member.apiKey,
       json: { ver: entity.ver, properties: { label: "edited-via-group" } },
@@ -369,7 +369,7 @@ describe("Spaces", () => {
     await grantSpaceEntityAccess(actor.apiKey, space.id, "actor", user.id, "editor");
 
     // Can edit while entity is in space
-    const { response: okRes } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response: okRes } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: user.apiKey,
       json: { ver: entity.ver, properties: { label: "ok" } },
@@ -377,14 +377,14 @@ describe("Spaces", () => {
     expect(okRes.status).toBe(200);
 
     // Remove entity from space
-    const { response: removeRes } = await apiRequest(`/spaces/${space.id}/entities/${entity.id}`, {
+    const { response: removeRes } = await apiRequest(`/spaces/${space.id}/wiki/${entity.id}`, {
       method: "DELETE",
       apiKey: actor.apiKey,
     });
     expect(removeRes.status).toBe(204);
 
     // Cannot edit after entity removed from space
-    const { response: failRes } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response: failRes } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: user.apiKey,
       json: { ver: 2, properties: { label: "should-fail" } },
@@ -403,7 +403,7 @@ describe("Spaces", () => {
     await addEntityToSpace(actor.apiKey, space.id, entity.id);
 
     // Update entity to generate activity
-    await jsonRequest(`/entities/${entity.id}`, {
+    await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: actor.apiKey,
       json: { ver: entity.ver, properties: { label: "updated-for-feed" } },

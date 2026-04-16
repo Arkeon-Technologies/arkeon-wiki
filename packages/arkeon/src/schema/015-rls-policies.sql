@@ -1,10 +1,10 @@
 -- =============================================================================
--- Row-Level Security Policies (v2)
+-- Row-Level Security Policies
 -- =============================================================================
 --
 -- RLS enforces BOTH classification AND ACL.
 --   - Reads: classification check (integer comparison)
---   - Writes: classification ceiling + ACL (owner/editor/admin/group membership)
+--   - Writes: classification ceiling + ACL (owner/editor/admin)
 --
 -- The app layer can still do pre-checks for better error messages (403 vs 404),
 -- but the database is the final authority. A route that forgets to check
@@ -21,68 +21,47 @@
 
 -- =============================================================================
 -- DROP existing policies so this file is fully re-runnable.
--- Critical: on instances upgrading from the old arke-scoped schema, the
--- existing policies reference current_actor_arke_id(). If we don't drop
--- them first, CREATE POLICY fails with "already exists" and migrate.js
--- silently skips it, leaving the stale arke-scoped policies in place.
 -- =============================================================================
 
-DROP POLICY IF EXISTS entities_select ON entities;
-DROP POLICY IF EXISTS entities_insert ON entities;
-DROP POLICY IF EXISTS entities_update ON entities;
-DROP POLICY IF EXISTS entities_delete ON entities;
-DROP POLICY IF EXISTS entity_perms_select ON entity_permissions;
-DROP POLICY IF EXISTS entity_perms_insert ON entity_permissions;
-DROP POLICY IF EXISTS entity_perms_delete ON entity_permissions;
-DROP POLICY IF EXISTS edges_select ON relationship_edges;
-DROP POLICY IF EXISTS edges_insert ON relationship_edges;
-DROP POLICY IF EXISTS edges_delete ON relationship_edges;
-DROP POLICY IF EXISTS versions_select ON entity_versions;
-DROP POLICY IF EXISTS versions_insert ON entity_versions;
-DROP POLICY IF EXISTS activity_select ON entity_activity;
-DROP POLICY IF EXISTS activity_insert ON entity_activity;
-DROP POLICY IF EXISTS activity_delete ON entity_activity;
-DROP POLICY IF EXISTS actors_select ON actors;
-DROP POLICY IF EXISTS actors_insert ON actors;
-DROP POLICY IF EXISTS actors_update ON actors;
-DROP POLICY IF EXISTS actors_delete ON actors;
-DROP POLICY IF EXISTS groups_select ON groups;
-DROP POLICY IF EXISTS groups_insert ON groups;
-DROP POLICY IF EXISTS groups_update ON groups;
-DROP POLICY IF EXISTS groups_delete ON groups;
-DROP POLICY IF EXISTS memberships_select ON group_memberships;
-DROP POLICY IF EXISTS memberships_insert ON group_memberships;
-DROP POLICY IF EXISTS memberships_update ON group_memberships;
-DROP POLICY IF EXISTS memberships_delete ON group_memberships;
-DROP POLICY IF EXISTS spaces_select ON spaces;
-DROP POLICY IF EXISTS spaces_insert ON spaces;
-DROP POLICY IF EXISTS spaces_update ON spaces;
-DROP POLICY IF EXISTS spaces_delete ON spaces;
-DROP POLICY IF EXISTS space_perms_select ON space_permissions;
-DROP POLICY IF EXISTS space_perms_insert ON space_permissions;
-DROP POLICY IF EXISTS space_perms_update ON space_permissions;
-DROP POLICY IF EXISTS space_perms_delete ON space_permissions;
-DROP POLICY IF EXISTS space_entities_select ON space_entities;
-DROP POLICY IF EXISTS space_entities_insert ON space_entities;
-DROP POLICY IF EXISTS space_entities_delete ON space_entities;
-DROP POLICY IF EXISTS comments_select ON comments;
-DROP POLICY IF EXISTS comments_insert ON comments;
-DROP POLICY IF EXISTS comments_delete ON comments;
-DROP POLICY IF EXISTS notifications_select ON notifications;
-DROP POLICY IF EXISTS notifications_insert ON notifications;
-DROP POLICY IF EXISTS notifications_delete ON notifications;
-DROP POLICY IF EXISTS api_keys_select ON api_keys;
-DROP POLICY IF EXISTS api_keys_insert ON api_keys;
-DROP POLICY IF EXISTS api_keys_update ON api_keys;
-DROP POLICY IF EXISTS agent_keys_select ON agent_keys;
-DROP POLICY IF EXISTS agent_keys_insert ON agent_keys;
+DROP POLICY IF EXISTS entities_select        ON entities;
+DROP POLICY IF EXISTS entities_insert        ON entities;
+DROP POLICY IF EXISTS entities_update        ON entities;
+DROP POLICY IF EXISTS entities_delete        ON entities;
+DROP POLICY IF EXISTS entity_perms_select    ON entity_permissions;
+DROP POLICY IF EXISTS entity_perms_insert    ON entity_permissions;
+DROP POLICY IF EXISTS entity_perms_delete    ON entity_permissions;
+DROP POLICY IF EXISTS edges_select           ON relationship_edges;
+DROP POLICY IF EXISTS edges_insert           ON relationship_edges;
+DROP POLICY IF EXISTS edges_delete           ON relationship_edges;
+DROP POLICY IF EXISTS versions_select        ON entity_versions;
+DROP POLICY IF EXISTS versions_insert        ON entity_versions;
+DROP POLICY IF EXISTS actors_select          ON actors;
+DROP POLICY IF EXISTS actors_insert          ON actors;
+DROP POLICY IF EXISTS actors_update          ON actors;
+DROP POLICY IF EXISTS actors_delete          ON actors;
+DROP POLICY IF EXISTS spaces_select          ON spaces;
+DROP POLICY IF EXISTS spaces_insert          ON spaces;
+DROP POLICY IF EXISTS spaces_update          ON spaces;
+DROP POLICY IF EXISTS spaces_delete          ON spaces;
+DROP POLICY IF EXISTS space_perms_select     ON space_permissions;
+DROP POLICY IF EXISTS space_perms_insert     ON space_permissions;
+DROP POLICY IF EXISTS space_perms_update     ON space_permissions;
+DROP POLICY IF EXISTS space_perms_delete     ON space_permissions;
+DROP POLICY IF EXISTS space_entities_select  ON space_entities;
+DROP POLICY IF EXISTS space_entities_insert  ON space_entities;
+DROP POLICY IF EXISTS space_entities_delete  ON space_entities;
+DROP POLICY IF EXISTS api_keys_select        ON api_keys;
+DROP POLICY IF EXISTS api_keys_insert        ON api_keys;
+DROP POLICY IF EXISTS api_keys_update        ON api_keys;
+DROP POLICY IF EXISTS agent_keys_select      ON agent_keys;
+DROP POLICY IF EXISTS agent_keys_insert      ON agent_keys;
 
 
 -- =============================================================================
 -- HELPER: check if current actor has a given role (or higher) on an entity
 -- =============================================================================
 --
--- Checks: owner, direct actor grant, or group grant.
+-- Checks: direct actor grant only. Group grants were removed in 043.
 -- role_check should be an array of acceptable roles.
 --
 -- =============================================================================
@@ -94,15 +73,9 @@ CREATE OR REPLACE FUNCTION actor_has_entity_role(
   SELECT EXISTS (
     SELECT 1 FROM entity_permissions ep
     WHERE ep.entity_id = p_entity_id
-    AND ep.role = ANY(p_roles)
-    AND (
-      (ep.grantee_type = 'actor' AND ep.grantee_id = current_actor_id())
-      OR (ep.grantee_type = 'group' AND EXISTS (
-        SELECT 1 FROM group_memberships gm
-        WHERE gm.group_id = ep.grantee_id::text
-        AND gm.actor_id = current_actor_id()
-      ))
-    )
+      AND ep.role = ANY(p_roles)
+      AND ep.grantee_type = 'actor'
+      AND ep.grantee_id = current_actor_id()
   );
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
@@ -114,30 +87,10 @@ CREATE OR REPLACE FUNCTION actor_has_space_role(
   SELECT EXISTS (
     SELECT 1 FROM space_permissions sp
     WHERE sp.space_id = p_space_id
-    AND sp.role = ANY(p_roles)
-    AND (
-      (sp.grantee_type = 'actor' AND sp.grantee_id = current_actor_id())
-      OR (sp.grantee_type = 'group' AND EXISTS (
-        SELECT 1 FROM group_memberships gm
-        WHERE gm.group_id = sp.grantee_id::text
-        AND gm.actor_id = current_actor_id()
-      ))
-    )
+      AND sp.role = ANY(p_roles)
+      AND sp.grantee_type = 'actor'
+      AND sp.grantee_id = current_actor_id()
   );
-$$ LANGUAGE sql STABLE SECURITY DEFINER;
-
-
--- =============================================================================
--- HELPER: get a group's read_level without going through RLS
--- =============================================================================
---
--- Used by group_memberships SELECT policy to avoid infinite recursion
--- (memberships → groups → memberships cycle via UPDATE/DELETE policies).
---
--- =============================================================================
-
-CREATE OR REPLACE FUNCTION group_read_level(p_group_id TEXT) RETURNS INT AS $$
-  SELECT read_level FROM groups WHERE id = p_group_id;
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
 
@@ -335,49 +288,6 @@ WITH CHECK (
 
 
 -- =============================================================================
--- ENTITY ACTIVITY
--- =============================================================================
-
-ALTER TABLE entity_activity ENABLE ROW LEVEL SECURITY;
-
--- SELECT: visible if the related entity is visible
-CREATE POLICY activity_select ON entity_activity
-FOR SELECT TO arke_app
-USING (
-  EXISTS (
-    SELECT 1 FROM entities
-    WHERE entities.id = entity_activity.entity_id
-    AND (entities.read_level = 0 OR current_actor_read_level() >= entities.read_level)
-  )
-);
-
--- INSERT: must have edit access on the parent entity, OR be the actor
--- performing the logged action (needed for ownership transfers where
--- owner_id changes before the activity row is inserted)
-CREATE POLICY activity_insert ON entity_activity
-FOR INSERT TO arke_app
-WITH CHECK (
-  actor_id = current_actor_id()
-  OR EXISTS (
-    SELECT 1 FROM entities e
-    WHERE e.id = entity_id
-    AND (
-      e.owner_id = current_actor_id()
-      OR current_actor_is_admin()
-      OR actor_has_entity_role(e.id, ARRAY['editor', 'admin'])
-    )
-  )
-);
-
--- DELETE: admin-context only. The in-process retention job
--- (packages/api/src/lib/retention.ts) runs with admin context and is
--- the only caller — no route exposes DELETE to user-authenticated actors.
-CREATE POLICY activity_delete ON entity_activity
-FOR DELETE TO arke_app
-USING (current_actor_is_admin());
-
-
--- =============================================================================
 -- ACTORS
 -- =============================================================================
 
@@ -420,105 +330,6 @@ CREATE POLICY actors_delete ON actors
 FOR DELETE TO arke_app
 USING (
   current_actor_is_admin()
-);
-
-
--- =============================================================================
--- GROUPS & GROUP MEMBERSHIPS
--- =============================================================================
-
-ALTER TABLE groups ENABLE ROW LEVEL SECURITY;
-ALTER TABLE group_memberships ENABLE ROW LEVEL SECURITY;
-
--- SELECT: classification-gated (same pattern as entities/spaces)
-CREATE POLICY groups_select ON groups
-FOR SELECT TO arke_app
-USING (
-  read_level = 0
-  OR current_actor_read_level() >= read_level
-);
-
--- Create: system admin only + classification ceiling
-CREATE POLICY groups_insert ON groups
-FOR INSERT TO arke_app
-WITH CHECK (
-  current_actor_is_admin()
-  AND current_actor_read_level() >= read_level
-);
-
--- Update: system admin or group admin
-CREATE POLICY groups_update ON groups
-FOR UPDATE TO arke_app
-USING (
-  current_actor_is_admin()
-  OR EXISTS (
-    SELECT 1 FROM group_memberships gm
-    WHERE gm.group_id = groups.id
-    AND gm.actor_id = current_actor_id()
-    AND gm.role_in_group = 'admin'
-  )
-)
-WITH CHECK (true);
-
--- Delete: system admin or group admin
-CREATE POLICY groups_delete ON groups
-FOR DELETE TO arke_app
-USING (
-  current_actor_is_admin()
-  OR EXISTS (
-    SELECT 1 FROM group_memberships gm
-    WHERE gm.group_id = groups.id
-    AND gm.actor_id = current_actor_id()
-    AND gm.role_in_group = 'admin'
-  )
-);
-
--- Memberships: visible if the parent group is visible (classification-gated)
--- Uses group_read_level() helper to avoid infinite recursion with groups policies
-CREATE POLICY memberships_select ON group_memberships
-FOR SELECT TO arke_app
-USING (
-  group_read_level(group_id) = 0
-  OR current_actor_read_level() >= group_read_level(group_id)
-);
-
--- Insert membership: system admin or group admin
-CREATE POLICY memberships_insert ON group_memberships
-FOR INSERT TO arke_app
-WITH CHECK (
-  current_actor_is_admin()
-  OR EXISTS (
-    SELECT 1 FROM group_memberships gm
-    WHERE gm.group_id = group_memberships.group_id
-    AND gm.actor_id = current_actor_id()
-    AND gm.role_in_group = 'admin'
-  )
-);
-
--- Update membership: system admin or group admin (needed for ON CONFLICT DO UPDATE)
-CREATE POLICY memberships_update ON group_memberships
-FOR UPDATE TO arke_app
-USING (
-  current_actor_is_admin()
-  OR EXISTS (
-    SELECT 1 FROM group_memberships gm
-    WHERE gm.group_id = group_memberships.group_id
-    AND gm.actor_id = current_actor_id()
-    AND gm.role_in_group = 'admin'
-  )
-);
-
--- Delete membership: system admin or group admin
-CREATE POLICY memberships_delete ON group_memberships
-FOR DELETE TO arke_app
-USING (
-  current_actor_is_admin()
-  OR EXISTS (
-    SELECT 1 FROM group_memberships gm2
-    WHERE gm2.group_id = group_memberships.group_id
-    AND gm2.actor_id = current_actor_id()
-    AND gm2.role_in_group = 'admin'
-  )
 );
 
 
@@ -674,73 +485,6 @@ USING (
   )
   OR actor_has_space_role(space_id, ARRAY['editor', 'admin'])
 );
-
-
--- =============================================================================
--- COMMENTS
--- =============================================================================
-
-ALTER TABLE comments ENABLE ROW LEVEL SECURITY;
-
--- SELECT: visible if the parent entity is visible
-CREATE POLICY comments_select ON comments
-FOR SELECT TO arke_app
-USING (
-  EXISTS (
-    SELECT 1 FROM entities
-    WHERE entities.id = comments.entity_id
-    AND (entities.read_level = 0 OR current_actor_read_level() >= entities.read_level)
-  )
-);
-
--- INSERT: must be authenticated and able to read the entity
-CREATE POLICY comments_insert ON comments
-FOR INSERT TO arke_app
-WITH CHECK (
-  author_id = current_actor_id()
-  AND EXISTS (
-    SELECT 1 FROM entities
-    WHERE entities.id = entity_id
-    AND (entities.read_level = 0 OR current_actor_read_level() >= entities.read_level)
-  )
-);
-
--- DELETE: author, entity owner, entity admin, or system admin
-CREATE POLICY comments_delete ON comments
-FOR DELETE TO arke_app
-USING (
-  author_id = current_actor_id()
-  OR current_actor_is_admin()
-  OR EXISTS (
-    SELECT 1 FROM entities e
-    WHERE e.id = comments.entity_id
-    AND e.owner_id = current_actor_id()
-  )
-  OR actor_has_entity_role(entity_id, ARRAY['admin'])
-);
-
-
--- =============================================================================
--- NOTIFICATIONS
--- =============================================================================
-
-ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
-
--- SELECT: only your own
-CREATE POLICY notifications_select ON notifications
-FOR SELECT TO arke_app
-USING (recipient_id = current_actor_id());
-
--- INSERT: actor can only insert notifications for actions they performed
-CREATE POLICY notifications_insert ON notifications
-FOR INSERT TO arke_app
-WITH CHECK (actor_id = current_actor_id());
-
--- DELETE: only your own, OR admin (for the in-process retention job —
--- see packages/api/src/lib/retention.ts)
-CREATE POLICY notifications_delete ON notifications
-FOR DELETE TO arke_app
-USING (recipient_id = current_actor_id() OR current_actor_is_admin());
 
 
 -- =============================================================================
@@ -924,75 +668,3 @@ CREATE TRIGGER relationship_classification_guard
   BEFORE INSERT ON relationship_edges
   FOR EACH ROW
   EXECUTE FUNCTION relationship_classification_guard();
-
-
--- =============================================================================
--- LAST GROUP ADMIN GUARD (BEFORE DELETE trigger)
--- =============================================================================
---
--- Prevents removing the last admin from a group. Without this, a group admin
--- could self-remove, leaving the group unmanageable by anyone except system
--- admins.
---
--- =============================================================================
-
-CREATE OR REPLACE FUNCTION last_group_admin_guard()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-BEGIN
-  -- Only guard admin removals
-  IF OLD.role_in_group <> 'admin' THEN
-    RETURN OLD;
-  END IF;
-
-  -- Count remaining admins (excluding the one being removed)
-  IF NOT EXISTS (
-    SELECT 1 FROM group_memberships
-    WHERE group_id = OLD.group_id
-    AND role_in_group = 'admin'
-    AND actor_id <> OLD.actor_id
-  ) THEN
-    RAISE EXCEPTION 'cannot remove the last admin from group %', OLD.group_id;
-  END IF;
-
-  RETURN OLD;
-END;
-$$;
-
-DROP TRIGGER IF EXISTS last_group_admin_guard_delete ON group_memberships;
-CREATE TRIGGER last_group_admin_guard_delete
-  BEFORE DELETE ON group_memberships
-  FOR EACH ROW
-  EXECUTE FUNCTION last_group_admin_guard();
-
--- Also guard UPDATE (demoting last admin from 'admin' to 'member')
-CREATE OR REPLACE FUNCTION last_group_admin_demote_guard()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-BEGIN
-  -- Only guard demotions from admin
-  IF OLD.role_in_group <> 'admin' OR NEW.role_in_group = 'admin' THEN
-    RETURN NEW;
-  END IF;
-
-  -- Count remaining admins (excluding the one being demoted)
-  IF NOT EXISTS (
-    SELECT 1 FROM group_memberships
-    WHERE group_id = OLD.group_id
-    AND role_in_group = 'admin'
-    AND actor_id <> OLD.actor_id
-  ) THEN
-    RAISE EXCEPTION 'cannot demote the last admin of group %', OLD.group_id;
-  END IF;
-
-  RETURN NEW;
-END;
-$$;
-
-DROP TRIGGER IF EXISTS last_group_admin_demote_guard ON group_memberships;
-CREATE TRIGGER last_group_admin_demote_guard
-  BEFORE UPDATE ON group_memberships
-  FOR EACH ROW
-  EXECUTE FUNCTION last_group_admin_demote_guard();

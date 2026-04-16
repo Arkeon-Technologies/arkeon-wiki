@@ -18,14 +18,14 @@
 
 CREATE TABLE space_entity_access (
   space_id     TEXT        NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
-  grantee_type TEXT        NOT NULL,
+  grantee_type TEXT        NOT NULL DEFAULT 'actor',
   grantee_id   TEXT        NOT NULL,
   role         TEXT        NOT NULL,            -- 'editor' | 'admin'
   granted_by   TEXT        NOT NULL REFERENCES actors(id),
   granted_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
 
   UNIQUE (space_id, grantee_type, grantee_id),
-  CONSTRAINT sea_valid_grantee_type CHECK (grantee_type IN ('actor', 'group')),
+  CONSTRAINT sea_valid_grantee_type CHECK (grantee_type = 'actor'),
   CONSTRAINT sea_valid_role         CHECK (role IN ('editor', 'admin'))
 );
 
@@ -116,18 +116,12 @@ CREATE OR REPLACE FUNCTION actor_has_entity_role(
   p_roles TEXT[]
 ) RETURNS BOOLEAN AS $$
   SELECT EXISTS (
-    -- Direct entity permission (actor or group)
+    -- Direct entity permission
     SELECT 1 FROM entity_permissions ep
     WHERE ep.entity_id = p_entity_id
-    AND ep.role = ANY(p_roles)
-    AND (
-      (ep.grantee_type = 'actor' AND ep.grantee_id = current_actor_id())
-      OR (ep.grantee_type = 'group' AND EXISTS (
-        SELECT 1 FROM group_memberships gm
-        WHERE gm.group_id = ep.grantee_id::text
-        AND gm.actor_id = current_actor_id()
-      ))
-    )
+      AND ep.role = ANY(p_roles)
+      AND ep.grantee_type = 'actor'
+      AND ep.grantee_id = current_actor_id()
   )
   OR EXISTS (
     -- Space-cascaded entity access
@@ -135,13 +129,7 @@ CREATE OR REPLACE FUNCTION actor_has_entity_role(
     JOIN space_entity_access sea ON sea.space_id = se.space_id
     WHERE se.entity_id = p_entity_id
       AND sea.role = ANY(p_roles)
-      AND (
-        (sea.grantee_type = 'actor' AND sea.grantee_id = current_actor_id())
-        OR (sea.grantee_type = 'group' AND EXISTS (
-          SELECT 1 FROM group_memberships gm
-          WHERE gm.group_id = sea.grantee_id::text
-          AND gm.actor_id = current_actor_id()
-        ))
-      )
+      AND sea.grantee_type = 'actor'
+      AND sea.grantee_id = current_actor_id()
   );
 $$ LANGUAGE sql STABLE SECURITY DEFINER;

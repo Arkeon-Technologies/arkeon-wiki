@@ -19,7 +19,7 @@ Two roles plus ownership:
 | **Admin** | Yes | Yes | No |
 | **Editor** | Yes | No | No |
 
-Grants target individual actors or groups via `entity_permissions` table (see `005-entity-permissions.sql`).
+Grants target individual actors via `entity_permissions` table (see `005-entity-permissions.sql`).
 
 There is no 'viewer' role — read access is governed entirely by classification levels. There is no 'contributor' role on entities — contribution is a space-level concept.
 
@@ -38,5 +38,5 @@ Spaces have their own layer with four roles: **admin**, **editor**, **contributo
 ## Ownership Transfer
 
 1. New owner is set (`owner_id` updated)
-2. `ownership_transferred` activity logged
+2. `ownership_transferred` audit record written
 3. Previous owner loses all access unless they have a separate permission grant (no automatic admin grant)

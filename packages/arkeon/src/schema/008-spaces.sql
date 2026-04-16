@@ -44,14 +44,14 @@ CREATE INDEX IF NOT EXISTS idx_spaces_last_activity ON spaces (last_activity_at 
 
 CREATE TABLE space_permissions (
   space_id     TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
-  grantee_type TEXT NOT NULL,                              -- 'actor' | 'group'
-  grantee_id   TEXT NOT NULL,                              -- actors.id or groups.id
+  grantee_type TEXT NOT NULL DEFAULT 'actor',              -- 'actor' (reserved for future grantee kinds)
+  grantee_id   TEXT NOT NULL,                              -- actors.id
   role         TEXT NOT NULL,                              -- admin | editor | contributor
   granted_by   TEXT NOT NULL REFERENCES actors(id),
   granted_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
 
   UNIQUE (space_id, grantee_type, grantee_id),
-  CONSTRAINT valid_grantee_type CHECK (grantee_type IN ('actor', 'group')),
+  CONSTRAINT valid_grantee_type CHECK (grantee_type = 'actor'),
   CONSTRAINT valid_space_role CHECK (role IN ('admin', 'editor', 'contributor'))
 );
 

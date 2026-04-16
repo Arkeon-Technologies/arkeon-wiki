@@ -3,7 +3,7 @@
 -- =============================================================================
 --
 -- Adds perform_group_merge() — merges an array of source entities into a single
--- target entity in one transaction. Same 14-step logic as perform_entity_merge()
+-- target entity in one transaction. Same 12-step logic as perform_entity_merge()
 -- but looped over multiple sources.
 --
 -- CAS is checked on the first iteration only. Subsequent ver increments are
@@ -93,10 +93,7 @@ BEGIN
     FROM space_entities WHERE entity_id = v_source_id
     ON CONFLICT (space_id, entity_id) DO NOTHING;
 
-    -- 8. Transfer comments
-    UPDATE comments SET entity_id = p_target_id WHERE entity_id = v_source_id;
-
-    -- 9. Update target entity
+    -- 8. Update target entity
     -- CAS guard on first iteration; properties only written on last iteration
     IF v_i = 1 THEN
       UPDATE entities
@@ -122,24 +119,20 @@ BEGIN
       RETURNING * INTO v_updated;
     END IF;
 
-    -- 10. Version snapshot only on last iteration (avoids noisy intermediates)
+    -- 9. Version snapshot only on last iteration (avoids noisy intermediates)
     IF v_is_last THEN
       INSERT INTO entity_versions (entity_id, ver, properties, edited_by, note, created_at)
       VALUES (p_target_id, v_new_ver, p_merged_properties, p_actor_id, 'batch merge', p_now);
     END IF;
 
-    -- 11. Log merge activity (always — one entry per source for audit trail)
-    INSERT INTO entity_activity (entity_id, actor_id, action, detail, ts)
-    VALUES (p_target_id, p_actor_id, 'entity_merged', p_merge_details[v_i], p_now);
-
-    -- 12. Repoint existing redirects that point to source (chain resolution)
+    -- 10. Repoint existing redirects that point to source (chain resolution)
     UPDATE entity_redirects SET new_id = p_target_id WHERE new_id = v_source_id;
 
-    -- 13. Insert redirect for the source
+    -- 11. Insert redirect for the source
     INSERT INTO entity_redirects (old_id, new_id, merged_at, merged_by)
     VALUES (v_source_id, p_target_id, p_now, p_actor_id);
 
-    -- 14. Delete source entity (CASCADE handles remaining refs)
+    -- 12. Delete source entity (CASCADE handles remaining refs)
     DELETE FROM entities WHERE id = v_source_id;
 
     v_expected_ver := v_new_ver;

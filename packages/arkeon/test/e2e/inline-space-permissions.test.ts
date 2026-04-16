@@ -54,7 +54,7 @@ describe("Inline space_id and permissions on entity/relationship creation", () =
   });
 
   test("Create entity with invalid space_id returns 404, no orphaned entity", async () => {
-    const { response } = await jsonRequest("/entities", {
+    const { response } = await jsonRequest("/wiki", {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -73,7 +73,7 @@ describe("Inline space_id and permissions on entity/relationship creation", () =
       maxWriteLevel: 2,
     });
 
-    const { response } = await jsonRequest("/entities", {
+    const { response } = await jsonRequest("/wiki", {
       method: "POST",
       apiKey: outsider.apiKey,
       json: {
@@ -119,7 +119,7 @@ describe("Inline space_id and permissions on entity/relationship creation", () =
     });
 
     // Verify grantee can edit the entity
-    const { response } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: grantee.apiKey,
       json: { ver: 1, properties: { label: "edited-by-grantee" } },
@@ -141,7 +141,7 @@ describe("Inline space_id and permissions on entity/relationship creation", () =
     });
 
     // Verify permissions via GET
-    const { body } = await getJson(`/entities/${entity.id}/permissions`, actor.apiKey);
+    const { body } = await getJson(`/wiki/${entity.id}/permissions`, actor.apiKey);
     const perms = (body as any).permissions as Array<{ grantee_id: string; role: string }>;
     expect(perms.find((p) => p.grantee_id === grantee1.id)?.role).toBe("editor");
     expect(perms.find((p) => p.grantee_id === grantee2.id)?.role).toBe("admin");
@@ -167,7 +167,7 @@ describe("Inline space_id and permissions on entity/relationship creation", () =
     expect((spaceBody as any).entities.map((e: any) => e.id)).toContain(entity.id);
 
     // Verify permission
-    const { body: permBody } = await getJson(`/entities/${entity.id}/permissions`, actor.apiKey);
+    const { body: permBody } = await getJson(`/wiki/${entity.id}/permissions`, actor.apiKey);
     const perms = (permBody as any).permissions as Array<{ grantee_id: string; role: string }>;
     expect(perms.find((p) => p.grantee_id === grantee.id)?.role).toBe("editor");
   });
@@ -185,7 +185,7 @@ describe("Inline space_id and permissions on entity/relationship creation", () =
   // --- Validation ---
 
   test("Invalid permissions array returns 400", async () => {
-    const { response } = await jsonRequest("/entities", {
+    const { response } = await jsonRequest("/wiki", {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -204,7 +204,7 @@ describe("Inline space_id and permissions on entity/relationship creation", () =
     const source = await createEntity(actor.apiKey, "note", { label: uniqueName("rel-src") });
     const target = await createEntity(actor.apiKey, "note", { label: uniqueName("rel-tgt") });
 
-    const { response, body } = await jsonRequest(`/entities/${source.id}/relationships`, {
+    const { response, body } = await jsonRequest(`/wiki/${source.id}/relationships`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -228,7 +228,7 @@ describe("Inline space_id and permissions on entity/relationship creation", () =
     const source = await createEntity(actor.apiKey, "note", { label: uniqueName("rel-perm-src") });
     const target = await createEntity(actor.apiKey, "note", { label: uniqueName("rel-perm-tgt") });
 
-    const { response, body } = await jsonRequest(`/entities/${source.id}/relationships`, {
+    const { response, body } = await jsonRequest(`/wiki/${source.id}/relationships`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -244,7 +244,7 @@ describe("Inline space_id and permissions on entity/relationship creation", () =
     const relId = (body as any).relationship.id;
 
     // Verify permission on relationship entity
-    const { body: permBody } = await getJson(`/entities/${relId}/permissions`, actor.apiKey);
+    const { body: permBody } = await getJson(`/wiki/${relId}/permissions`, actor.apiKey);
     const perms = (permBody as any).permissions as Array<{ grantee_id: string; role: string }>;
     expect(perms.find((p) => p.grantee_id === grantee.id)?.role).toBe("editor");
   });
@@ -253,7 +253,7 @@ describe("Inline space_id and permissions on entity/relationship creation", () =
     const source = await createEntity(actor.apiKey, "note", { label: uniqueName("rel-bad-space-src") });
     const target = await createEntity(actor.apiKey, "note", { label: uniqueName("rel-bad-space-tgt") });
 
-    const { response } = await jsonRequest(`/entities/${source.id}/relationships`, {
+    const { response } = await jsonRequest(`/wiki/${source.id}/relationships`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: {

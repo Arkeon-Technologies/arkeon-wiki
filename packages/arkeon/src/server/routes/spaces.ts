@@ -10,7 +10,6 @@ import {
   parseJsonBody,
   parseLimit,
   parseCursorParam,
-  parseOptionalTimestamp,
 } from "../lib/http";
 import { indexEntityById } from "../lib/meilisearch";
 import { generateUlid } from "../lib/ids";
@@ -48,15 +47,6 @@ const SpacePermissionSchema = z.object({
   grantee_id: EntityIdParam,
   role: z.enum(["viewer", "contributor", "editor", "admin"]),
   granted_at: DateTimeSchema,
-});
-
-const SpaceActivitySchema = z.object({
-  id: z.number().int(),
-  entity_id: EntityIdParam,
-  actor_id: EntityIdParam,
-  action: z.string(),
-  detail: z.any(),
-  ts: DateTimeSchema,
 });
 
 const createSpaceRoute = createRoute({
@@ -469,31 +459,6 @@ const listSpaceEntityAccessRoute = createRoute({
       ),
     },
     ...errorResponses([403, 404]),
-  },
-});
-
-const spacesFeedRoute = createRoute({
-  method: "get",
-  path: "/{id}/feed",
-  operationId: "listSpaceFeed",
-  tags: ["Spaces"],
-  summary: "Activity feed scoped to a specific space",
-  "x-arke-auth": "optional",
-  "x-arke-related": ["GET /activity"],
-  "x-arke-rules": ["Requires read_level clearance >= space's read_level", "Activity results further filtered by your classification clearance"],
-  request: {
-    params: entityIdParams("Space ULID"),
-    query: paginationQuerySchema(50, 200).extend({
-      action: queryParam("action", z.string().optional(), "Filter by action type"),
-      since: queryParam("since", DateTimeSchema.optional(), "ISO 8601 -- only events after this time"),
-    }),
-  },
-  responses: {
-    200: {
-      description: "Space activity feed",
-      content: jsonContent(cursorResponseSchema("activity", SpaceActivitySchema)),
-    },
-    ...errorResponses([400, 403, 404]),
   },
 });
 
@@ -1027,42 +992,3 @@ spacesRouter.openapi(listSpaceEntityAccessRoute, async (c) => {
   return c.json({ grants: grants as SpaceEntityAccessRecord[] }, 200);
 });
 
-spacesRouter.openapi(spacesFeedRoute, async (c) => {
-  const sql = createSql();
-  const spaceId = c.req.param("id");
-  const actorCtx = c.get("actor") ?? null;
-  const limit = parseLimit(c, { defaultValue: 50, maxValue: 200 });
-  const action = c.req.query("action");
-  const since = parseOptionalTimestamp(c.req.query("since"), "since");
-  const cursor = parseCursorParam(c);
-
-  // Verify space exists and is readable
-  const space = await fetchSpaceForActor(actorCtx, spaceId);
-  if (!space) {
-    throw new ApiError(404, "not_found", "Space not found");
-  }
-  const results = await sql.transaction([
-    ...setActorContext(sql, actorCtx),
-    sql.query(
-      `SELECT ea.id, ea.entity_id, ea.actor_id, ea.action, ea.detail, ea.ts
-       FROM entity_activity ea
-       JOIN space_entities se ON se.entity_id = ea.entity_id
-       WHERE se.space_id = $1
-         AND ($2::text IS NULL OR ea.action = $2)
-         AND ($3::timestamptz IS NULL OR ea.ts > $3::timestamptz)
-         AND ($4::timestamptz IS NULL OR (ea.ts, ea.id) < ($4::timestamptz, $5::bigint))
-       ORDER BY ea.ts DESC, ea.id DESC
-       LIMIT $6`,
-      [spaceId, action ?? null, since, cursor?.t ?? null, cursor?.i ?? null, limit + 1],
-    ),
-  ]);
-
-  const rows = results[results.length - 1];
-  const activity = (rows as Array<Record<string, unknown>>).slice(0, limit);
-  const next = (rows as Array<Record<string, unknown>>).length > limit ? activity[activity.length - 1] : null;
-
-  return c.json({
-    activity,
-    cursor: next ? encodeCursor({ t: next.ts as string | Date, i: next.id as string | number | bigint }) : null,
-  }, 200);
-});

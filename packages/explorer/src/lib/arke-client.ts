@@ -56,7 +56,7 @@ export function createArkeClient(apiKey?: string, baseUrl = ''): ArkeInstanceCli
   function buildRelUrl(id: string, direction: 'out' | 'in', limit: number, cursor?: string | null): string {
     const params = new URLSearchParams({ direction, limit: String(limit) })
     if (cursor) params.set('cursor', cursor)
-    return `/entities/${id}/relationships?${params.toString()}`
+    return `/wiki/${id}/relationships?${params.toString()}`
   }
 
   function dedup(rels: ArkeRelationship[]): ArkeRelationship[] {
@@ -117,16 +117,13 @@ export function createArkeClient(apiKey?: string, baseUrl = ''): ArkeInstanceCli
   const actorCache = new Map<string, Promise<ArkeActor>>()
 
   return {
-    async getActivity(cursor?: string, limit = 50) {
-      const params = new URLSearchParams({ limit: String(limit) })
-      if (cursor) params.set('cursor', cursor)
-      return apiFetch<{ activity: ActivityItem[]; cursor: string | null }>(
-        `/activity?${params.toString()}`
-      )
+    async getActivity() {
+      // Activity feed was removed in the wiki-first rewrite
+      return { activity: [], cursor: null }
     },
 
     async getEntity(id: string) {
-      const data = await apiFetch<{ entity: ArkeEntity }>(`/entities/${id}`)
+      const data = await apiFetch<{ entity: ArkeEntity }>(`/wiki/${id}`)
       return data.entity
     },
 
@@ -140,7 +137,7 @@ export function createArkeClient(apiKey?: string, baseUrl = ''): ArkeInstanceCli
     },
 
     async getEntityTip(id: string) {
-      return apiFetch<{ cid: string }>(`/entities/${id}/tip`)
+      return apiFetch<{ cid: string }>(`/wiki/${id}/tip`)
     },
 
     async getRelationship(relId: string) {
@@ -158,13 +155,9 @@ export function createArkeClient(apiKey?: string, baseUrl = ''): ArkeInstanceCli
       return cached
     },
 
-    async getComments(entityId: string, cursor?: string) {
-      const params = new URLSearchParams()
-      if (cursor) params.set('cursor', cursor)
-      const qs = params.toString()
-      return apiFetch<{ comments: ArkeComment[]; cursor: string | null }>(
-        `/entities/${entityId}/comments${qs ? `?${qs}` : ''}`
-      )
+    async getComments() {
+      // Comments were removed in the wiki-first rewrite
+      return { comments: [], cursor: null }
     },
 
     async listEntities(options?: { spaceId?: string; limit?: number; cursor?: string }) {
@@ -176,18 +169,13 @@ export function createArkeClient(apiKey?: string, baseUrl = ''): ArkeInstanceCli
       if (options?.spaceId) params.set('space_id', options.spaceId)
       if (options?.cursor) params.set('cursor', options.cursor)
       return apiFetch<{ entities: ArkeEntity[]; cursor: string | null }>(
-        `/entities?${params.toString()}`
+        `/wiki?${params.toString()}`
       )
     },
 
-    async getActivitySince(since: string, limit = 100) {
-      const params = new URLSearchParams({
-        since,
-        limit: String(limit),
-      })
-      return apiFetch<{ activity: ActivityItem[]; cursor: string | null }>(
-        `/activity?${params.toString()}`
-      )
+    async getActivitySince() {
+      // Activity feed was removed in the wiki-first rewrite
+      return { activity: [], cursor: null }
     },
 
     async getGraphData(options?: { spaceId?: string; limit?: number; cursor?: string }) {

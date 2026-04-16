@@ -335,13 +335,6 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
       VALUES (${wikiId}, 1, ${wikiProperties}::jsonb, ${actor.id}, NULL, ${now}::timestamptz)
     `;
 
-    // Activity
-    await tx`
-      INSERT INTO entity_activity (entity_id, actor_id, action, detail, ts)
-      VALUES (${wikiId}, ${actor.id}, 'entity_created',
-        ${{ kind: "entity", type: "wiki" }}::jsonb, ${now}::timestamptz)
-    `;
-
     // Add wiki to space
     await tx`
       INSERT INTO space_entities (space_id, entity_id, added_by, added_at)

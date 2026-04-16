@@ -129,7 +129,7 @@ async function listDocuments(apiKey: string, spaceId: string) {
 }
 
 async function getEntity(apiKey: string, entityId: string) {
-  const { response, body } = await getJson(`/entities/${entityId}`, apiKey);
+  const { response, body } = await getJson(`/wiki/${entityId}`, apiKey);
   if (response.status === 404 || response.status === 410) return null;
   expect(response.status).toBe(200);
   return (body as EntityResponse).entity;
@@ -138,14 +138,14 @@ async function getEntity(apiKey: string, entityId: string) {
 async function getIncomingRelationships(apiKey: string, entityId: string, predicate?: string) {
   const predicateParam = predicate ? `&predicate=${predicate}` : "";
   const { body } = await getJson(
-    `/entities/${entityId}/relationships?direction=in${predicateParam}`,
+    `/wiki/${entityId}/relationships?direction=in${predicateParam}`,
     apiKey,
   );
   return (body as RelationshipsResponse).relationships;
 }
 
 async function deleteEntity(apiKey: string, entityId: string) {
-  const response = await fetch(`${baseUrl}/entities/${entityId}`, {
+  const response = await fetch(`${baseUrl}/wiki/${entityId}`, {
     method: "DELETE",
     headers: { authorization: `ApiKey ${apiKey}` },
   });
@@ -153,7 +153,7 @@ async function deleteEntity(apiKey: string, entityId: string) {
 }
 
 async function updateEntity(apiKey: string, entityId: string, ver: number, properties: Record<string, unknown>) {
-  const { response } = await jsonRequest(`/entities/${entityId}`, {
+  const { response } = await jsonRequest(`/wiki/${entityId}`, {
     method: "PUT",
     apiKey,
     json: { ver, properties },

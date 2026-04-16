@@ -39,7 +39,7 @@ describe("Entity permissions", () => {
     );
     await grantEntityPermission(owner.apiKey, entity.id, "actor", otherActor.id, "editor");
 
-    const { response, body } = await getJson(`/entities/${entity.id}/permissions`, owner.apiKey);
+    const { response, body } = await getJson(`/wiki/${entity.id}/permissions`, owner.apiKey);
     expect(response.status).toBe(200);
     const perms = (body as any).permissions;
     expect(perms.some((p: any) => p.grantee_id === otherActor.id && p.role === "editor")).toBe(true);
@@ -54,7 +54,7 @@ describe("Entity permissions", () => {
     );
     await grantEntityPermission(owner.apiKey, entity.id, "actor", otherActor.id, "editor");
 
-    const { response, body } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response, body } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: otherActor.apiKey,
       json: { ver: entity.ver, properties: { label: "after-edit" } },
@@ -72,7 +72,7 @@ describe("Entity permissions", () => {
     );
     await grantEntityPermission(owner.apiKey, entity.id, "actor", otherActor.id, "editor");
 
-    const { response } = await apiRequest(`/entities/${entity.id}`, {
+    const { response } = await apiRequest(`/wiki/${entity.id}`, {
       method: "DELETE",
       apiKey: otherActor.apiKey,
     });
@@ -88,7 +88,7 @@ describe("Entity permissions", () => {
     );
     await grantEntityPermission(owner.apiKey, entity.id, "actor", otherActor.id, "admin");
 
-    const { response, body } = await getJson(`/entities/${entity.id}/permissions`, owner.apiKey);
+    const { response, body } = await getJson(`/wiki/${entity.id}/permissions`, owner.apiKey);
     expect(response.status).toBe(200);
     const perms = (body as any).permissions;
     expect(perms.some((p: any) => p.grantee_id === otherActor.id && p.role === "admin")).toBe(true);
@@ -103,7 +103,7 @@ describe("Entity permissions", () => {
     );
     await grantEntityPermission(owner.apiKey, entity.id, "actor", otherActor.id, "admin");
 
-    const { response } = await apiRequest(`/entities/${entity.id}`, {
+    const { response } = await apiRequest(`/wiki/${entity.id}`, {
       method: "DELETE",
       apiKey: otherActor.apiKey,
     });
@@ -122,7 +122,7 @@ describe("Entity permissions", () => {
       { read_level: 1, write_level: 1 },
     );
 
-    const { response } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: bystander.apiKey,
       json: { ver: entity.ver, properties: { label: "nope" } },
@@ -146,7 +146,7 @@ describe("Entity permissions", () => {
     );
     await grantEntityPermission(owner.apiKey, entity.id, "group", group.id, "editor");
 
-    const { response, body } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response, body } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: member.apiKey,
       json: { ver: entity.ver, properties: { label: "group-edited" } },
@@ -169,7 +169,7 @@ describe("Entity permissions", () => {
     await grantEntityPermission(owner.apiKey, entity.id, "actor", editor.id, "editor");
 
     // Verify editor can update
-    const { response: okRes } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response: okRes } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: editor.apiKey,
       json: { ver: entity.ver, properties: { label: "edited" } },
@@ -178,17 +178,17 @@ describe("Entity permissions", () => {
 
     // Revoke
     const { response: revokeRes } = await apiRequest(
-      `/entities/${entity.id}/permissions/${editor.id}`,
+      `/wiki/${entity.id}/permissions/${editor.id}`,
       { method: "DELETE", apiKey: owner.apiKey },
     );
     expect(revokeRes.status).toBe(204);
 
     // Re-fetch entity to get current ver
-    const { body: freshBody } = await getJson(`/entities/${entity.id}`, owner.apiKey);
+    const { body: freshBody } = await getJson(`/wiki/${entity.id}`, owner.apiKey);
     const freshVer = (freshBody as any).entity.ver;
 
     // Verify editor can no longer update
-    const { response: failRes } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response: failRes } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: editor.apiKey,
       json: { ver: freshVer, properties: { label: "should-fail" } },
@@ -208,7 +208,7 @@ describe("Entity permissions", () => {
       { read_level: 1, write_level: 1 },
     );
 
-    const { response, body } = await jsonRequest(`/entities/${entity.id}/owner`, {
+    const { response, body } = await jsonRequest(`/wiki/${entity.id}/owner`, {
       method: "PUT",
       apiKey: owner.apiKey,
       json: { owner_id: newOwner.id },
@@ -217,7 +217,7 @@ describe("Entity permissions", () => {
     expect((body as any).entity.owner_id).toBe(newOwner.id);
 
     // New owner can edit
-    const { response: editRes } = await jsonRequest(`/entities/${entity.id}`, {
+    const { response: editRes } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: newOwner.apiKey,
       json: { ver: entity.ver, properties: { label: "new-owner-edit" } },

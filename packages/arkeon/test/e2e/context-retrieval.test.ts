@@ -57,13 +57,13 @@ describe("Context-rich retrieval", () => {
   });
 
   // -------------------------------------------------------
-  // GET /entities/{id}?view=expanded
+  // GET /wiki/{id}?view=expanded
   // -------------------------------------------------------
 
-  describe("GET /entities/{id}?view=expanded", () => {
+  describe("GET /wiki/{id}?view=expanded", () => {
     test("returns entity with _relationships array", async () => {
       const { response, body } = await getJson(
-        `/entities/${personA.id}?view=expanded`,
+        `/wiki/${personA.id}?view=expanded`,
         actor.apiKey,
       );
       expect(response.status).toBe(200);
@@ -79,7 +79,7 @@ describe("Context-rich retrieval", () => {
 
     test("each relationship has correct shape with counterpart", async () => {
       const { body } = await getJson(
-        `/entities/${personA.id}?view=expanded`,
+        `/wiki/${personA.id}?view=expanded`,
         actor.apiKey,
       );
       const rels = (body as any).entity._relationships;
@@ -100,7 +100,7 @@ describe("Context-rich retrieval", () => {
 
     test("counterpart labels match related entities", async () => {
       const { body } = await getJson(
-        `/entities/${personA.id}?view=expanded`,
+        `/wiki/${personA.id}?view=expanded`,
         actor.apiKey,
       );
       const rels = (body as any).entity._relationships;
@@ -117,7 +117,7 @@ describe("Context-rich retrieval", () => {
         label: uniqueName("ctx-loner"),
       });
       const { response, body } = await getJson(
-        `/entities/${loner.id}?view=expanded`,
+        `/wiki/${loner.id}?view=expanded`,
         actor.apiKey,
       );
       expect(response.status).toBe(200);
@@ -126,7 +126,7 @@ describe("Context-rich retrieval", () => {
 
     test("rel_limit caps the number of relationships returned", async () => {
       const { body } = await getJson(
-        `/entities/${personA.id}?view=expanded&rel_limit=2`,
+        `/wiki/${personA.id}?view=expanded&rel_limit=2`,
         actor.apiKey,
       );
       const entity = (body as any).entity;
@@ -137,7 +137,7 @@ describe("Context-rich retrieval", () => {
     test("inbound relationships show correct direction", async () => {
       // orgEntity has inbound works_at from personA and personB
       const { body } = await getJson(
-        `/entities/${orgEntity.id}?view=expanded`,
+        `/wiki/${orgEntity.id}?view=expanded`,
         actor.apiKey,
       );
       const rels = (body as any).entity._relationships;
@@ -151,7 +151,7 @@ describe("Context-rich retrieval", () => {
 
     test("default view does NOT include _relationships", async () => {
       const { body } = await getJson(
-        `/entities/${personA.id}`,
+        `/wiki/${personA.id}`,
         actor.apiKey,
       );
       expect((body as any).entity._relationships).toBeUndefined();
@@ -159,7 +159,7 @@ describe("Context-rich retrieval", () => {
 
     test("view=summary does NOT include _relationships", async () => {
       const { body } = await getJson(
-        `/entities/${personA.id}?view=summary`,
+        `/wiki/${personA.id}?view=summary`,
         actor.apiKey,
       );
       expect((body as any).entity._relationships).toBeUndefined();
@@ -167,7 +167,7 @@ describe("Context-rich retrieval", () => {
 
     test("404 for nonexistent entity with view=expanded", async () => {
       const { response } = await getJson(
-        `/entities/01ZZZZZZZZZZZZZZZZZZZZZZZZ?view=expanded`,
+        `/wiki/01ZZZZZZZZZZZZZZZZZZZZZZZZ?view=expanded`,
         actor.apiKey,
       );
       expect(response.status).toBe(404);
@@ -175,13 +175,13 @@ describe("Context-rich retrieval", () => {
   });
 
   // -------------------------------------------------------
-  // POST /entities/bulk
+  // POST /wiki/bulk
   // -------------------------------------------------------
 
-  describe("POST /entities/bulk", () => {
+  describe("POST /wiki/bulk", () => {
     test("returns multiple entities in requested order", async () => {
       const ids = [reportEntity.id, personA.id, orgEntity.id];
-      const { response, body } = await jsonRequest("/entities/bulk", {
+      const { response, body } = await jsonRequest("/wiki/bulk", {
         method: "POST",
         apiKey: actor.apiKey,
         json: { ids },
@@ -197,7 +197,7 @@ describe("Context-rich retrieval", () => {
 
     test("silently omits nonexistent IDs", async () => {
       const ids = [personA.id, "01ZZZZZZZZZZZZZZZZZZZZZZZZ", orgEntity.id];
-      const { response, body } = await jsonRequest("/entities/bulk", {
+      const { response, body } = await jsonRequest("/wiki/bulk", {
         method: "POST",
         apiKey: actor.apiKey,
         json: { ids },
@@ -212,7 +212,7 @@ describe("Context-rich retrieval", () => {
 
     test("supports view=summary", async () => {
       const { response, body } = await apiRequest(
-        "/entities/bulk?view=summary",
+        "/wiki/bulk?view=summary",
         {
           method: "POST",
           apiKey: actor.apiKey,
@@ -231,7 +231,7 @@ describe("Context-rich retrieval", () => {
 
     test("supports view=expanded with relationships", async () => {
       const { response, body } = await apiRequest(
-        "/entities/bulk?view=expanded",
+        "/wiki/bulk?view=expanded",
         {
           method: "POST",
           apiKey: actor.apiKey,
@@ -259,7 +259,7 @@ describe("Context-rich retrieval", () => {
 
     test("rel_limit applies per entity in bulk expanded view", async () => {
       const { body } = await apiRequest(
-        "/entities/bulk?view=expanded&rel_limit=1",
+        "/wiki/bulk?view=expanded&rel_limit=1",
         {
           method: "POST",
           apiKey: actor.apiKey,
@@ -274,7 +274,7 @@ describe("Context-rich retrieval", () => {
     });
 
     test("empty ids array returns 400", async () => {
-      const { response } = await jsonRequest("/entities/bulk", {
+      const { response } = await jsonRequest("/wiki/bulk", {
         method: "POST",
         apiKey: actor.apiKey,
         json: { ids: [] },
@@ -289,7 +289,7 @@ describe("Context-rich retrieval", () => {
       }, { read_level: 4 });
 
       // Low-clearance actor cannot see it
-      const { body } = await jsonRequest("/entities/bulk", {
+      const { body } = await jsonRequest("/wiki/bulk", {
         method: "POST",
         apiKey: actor.apiKey,
         json: { ids: [personA.id, secret.id] },

@@ -4,25 +4,13 @@
 import { createRoute, z } from "@hono/zod-openapi";
 
 import { encodeCursor } from "../lib/cursor";
-import {
-  assertBodyObject,
-  addEntityToSpaceQuery,
-  grantEntityPermissionQuery,
-  InlinePermissionGrant,
-  validatePermissionGrant,
-} from "../lib/entities";
-import { requireSpaceRole } from "../lib/spaces";
 import { ApiError } from "../lib/errors";
-import { requireActor, parseCursorParam, parseJsonBody, parseLimit } from "../lib/http";
+import { parseCursorParam, parseLimit } from "../lib/http";
 import { setActorContext } from "../lib/actor-context";
-import { generateUlid } from "../lib/ids";
-import { fanOutNotifications } from "../lib/notifications";
 import { createRouter } from "../lib/openapi";
 import {
   ClassificationLevel,
-  DateTimeSchema,
   EntityIdParam,
-  EntitySchema,
   cursorResponseSchema,
   entityIdParams,
   errorResponses,
@@ -31,22 +19,7 @@ import {
   pathParam,
   queryParam,
 } from "../lib/schemas";
-import { backgroundTask } from "../lib/background";
-import { indexEntity, removeEntity } from "../lib/meilisearch";
 import { createSql } from "../lib/sql";
-
-type RelationshipRow = {
-  id: string;
-  predicate: string;
-  source_id: string;
-  target_id: string;
-  ver: number;
-  properties: Record<string, unknown>;
-  read_level: number;
-  write_level: number;
-  created_at?: string;
-  updated_at?: string;
-};
 
 const RelationshipSummarySchema = z.object({
   id: EntityIdParam,
@@ -66,10 +39,16 @@ const listRelationshipsRoute = createRoute({
   path: "/{id}/relationships",
   operationId: "listRelationships",
   tags: ["Relationships"],
-  summary: "List relationships for an entity",
+  summary: "List relationships for a wiki entity",
+  description:
+    "Relationships are created by the wiki pipeline when `[[links]]` in a wiki body are parsed and resolved. " +
+    "There is no public endpoint for creating relationships directly — they are a pure side effect of publishing a wiki.",
   "x-arke-auth": "optional",
-  "x-arke-related": ["POST /entities/{id}/relationships", "GET /relationships/{relId}"],
-  "x-arke-rules": ["Results filtered by your classification clearance", "Only shows relationships where you can read the relationship entity"],
+  "x-arke-related": ["GET /wiki/{id}", "GET /relationships/{relId}"],
+  "x-arke-rules": [
+    "Results filtered by your classification clearance",
+    "Only shows relationships where you can read the relationship entity",
+  ],
   request: {
     params: entityIdParams(),
     query: paginationQuerySchema(50, 200).extend({
@@ -87,58 +66,6 @@ const listRelationshipsRoute = createRoute({
   },
 });
 
-const createRelationshipRoute = createRoute({
-  method: "post",
-  path: "/{id}/relationships",
-  operationId: "createRelationship",
-  tags: ["Relationships"],
-  summary: "Create a relationship from this entity to a target, optionally adding it to a space and granting permissions",
-  "x-arke-auth": "required",
-  "x-arke-related": ["GET /entities/{id}/relationships", "DELETE /relationships/{relId}", "POST /spaces/{id}/entities", "POST /entities/{id}/permissions"],
-  "x-arke-rules": [
-    "Requires edit access on the source entity (owner, editor, or admin role)",
-    "Requires read access on the target entity",
-    "Relationship read_level must be >= max(source, target) read_level",
-    "Relationship write_level must be >= max(source, target) write_level",
-    "If space_id is provided, requires contributor role or above on that space",
-    "All operations (create, space add, permission grants) are atomic",
-  ],
-  request: {
-    params: entityIdParams("Source entity ULID"),
-    body: {
-      required: true,
-      content: jsonContent(
-        z.object({
-          predicate: z.string().describe("Relationship type (e.g. 'references', 'contains')"),
-          target_id: EntityIdParam.describe("Target entity ULID"),
-          properties: z.record(z.string(), z.any()).optional().describe("Relationship properties"),
-          read_level: ClassificationLevel.optional().describe("Classification level for reading. Must be >= max(source, target) read_level. Defaults to that maximum."),
-          write_level: ClassificationLevel.optional().describe("Classification level for writing. Must be >= max(source, target) write_level. Defaults to that maximum."),
-          space_id: EntityIdParam.optional().describe("Space ULID — if provided, the relationship entity is added to this space atomically"),
-          permissions: z.array(InlinePermissionGrant).optional().describe("Permission grants to apply to the new relationship entity atomically"),
-        }),
-      ),
-    },
-  },
-  responses: {
-    201: {
-      description: "Relationship created",
-      content: jsonContent(
-        z.object({
-          relationship: EntitySchema,
-          edge: z.object({
-            id: EntityIdParam,
-            source_id: EntityIdParam,
-            target_id: EntityIdParam,
-            predicate: z.string(),
-          }),
-        }),
-      ),
-    },
-    ...errorResponses([400, 401, 403, 404]),
-  },
-});
-
 const getRelationshipRoute = createRoute({
   method: "get",
   path: "/{relId}",
@@ -146,7 +73,7 @@ const getRelationshipRoute = createRoute({
   tags: ["Relationships"],
   summary: "Get a relationship by its ID with source/target details",
   "x-arke-auth": "optional",
-  "x-arke-related": ["PUT /relationships/{relId}", "DELETE /relationships/{relId}"],
+  "x-arke-related": ["GET /wiki/{id}/relationships"],
   "x-arke-rules": ["Requires read_level clearance >= relationship's read_level"],
   request: {
     params: z.object({
@@ -174,63 +101,10 @@ const getRelationshipRoute = createRoute({
   },
 });
 
-const updateRelationshipRoute = createRoute({
-  method: "put",
-  path: "/{relId}",
-  operationId: "updateRelationship",
-  tags: ["Relationships"],
-  summary: "Update relationship properties",
-  "x-arke-auth": "required",
-  "x-arke-rules": ["Only the owner, an entity editor, or an entity admin may update", "Requires write_level clearance >= relationship's write_level", "Optimistic concurrency: must pass current ver to update", "Properties are shallow-merged: only provided keys are updated, omitted keys are preserved"],
-  request: {
-    params: z.object({
-      relId: pathParam("relId", EntityIdParam, "Relationship entity ULID"),
-    }),
-    body: {
-      required: true,
-      content: jsonContent(
-        z.object({
-          properties: z.record(z.string(), z.any()).describe("New properties"),
-          ver: z.number().int().describe("Expected current version (CAS token). Server increments ver on success."),
-          note: z.string().optional().describe("Edit note"),
-        }),
-      ),
-    },
-  },
-  responses: {
-    200: {
-      description: "Relationship updated",
-      content: jsonContent(z.object({ relationship: EntitySchema })),
-    },
-    ...errorResponses([400, 401, 403, 404, 409]),
-  },
-});
-
-const deleteRelationshipRoute = createRoute({
-  method: "delete",
-  path: "/{relId}",
-  operationId: "deleteRelationship",
-  tags: ["Relationships"],
-  summary: "Delete a relationship",
-  "x-arke-auth": "required",
-  "x-arke-rules": ["Only the relationship owner, a system admin, or an actor with edit access on the source entity may delete"],
-  request: {
-    params: z.object({
-      relId: pathParam("relId", EntityIdParam, "Relationship entity ULID"),
-    }),
-  },
-  responses: {
-    204: {
-      description: "Relationship deleted",
-    },
-    ...errorResponses([400, 401, 403, 404]),
-  },
-});
-
-export const entityRelationshipsRouter = createRouter();
+export const wikiRelationshipsRouter = createRouter();
 export const relationshipDirectRouter = createRouter();
 
-entityRelationshipsRouter.openapi(listRelationshipsRoute, async (c) => {
+wikiRelationshipsRouter.openapi(listRelationshipsRoute, async (c) => {
   const sql = createSql();
   const entityId = c.req.param("id");
   const dirParam = c.req.query("direction");
@@ -304,153 +178,8 @@ entityRelationshipsRouter.openapi(listRelationshipsRoute, async (c) => {
   }, 200);
 });
 
-entityRelationshipsRouter.openapi(createRelationshipRoute, async (c) => {
-  const actor = requireActor(c);
-  const sourceId = c.req.param("id");
-  const body = await parseJsonBody<Record<string, unknown>>(c);
-  if (typeof body.predicate !== "string" || typeof body.target_id !== "string") {
-    throw new ApiError(400, "invalid_body", "Invalid relationship payload");
-  }
-  const properties = body.properties === undefined ? {} : assertBodyObject(body.properties, "properties");
-  const requestedReadLevel = typeof body.read_level === "number" ? body.read_level : null;
-  const requestedWriteLevel = typeof body.write_level === "number" ? body.write_level : null;
-  const spaceId = typeof body.space_id === "string" ? body.space_id : null;
-  const permissionGrants = Array.isArray(body.permissions)
-    ? (body.permissions as Array<Record<string, unknown>>).map((g, i) => validatePermissionGrant(g, i))
-    : [];
-  const relId = generateUlid();
-  const now = new Date().toISOString();
-  const sql = createSql();
-
-  // Pre-validate space access before the transaction
-  if (spaceId) {
-    await requireSpaceRole(sql, actor, spaceId, "contributor");
-  }
-
-  // Pre-validate: actor must see both entities, have edit access on source,
-  // and any requested classification levels must be at or above the endpoint floor
-  const preCheckResults = await sql.transaction([
-    ...setActorContext(sql, actor),
-    sql`
-      SELECT
-        src.owner_id AS source_owner,
-        (
-          current_actor_is_admin()
-          OR src.owner_id = current_actor_id()
-          OR actor_has_entity_role(src.id, ARRAY['editor', 'admin'])
-        ) AS can_edit_source,
-        GREATEST(src.read_level, tgt.read_level) AS min_read,
-        GREATEST(src.write_level, tgt.write_level) AS min_write
-      FROM entities src, entities tgt
-      WHERE src.id = ${sourceId} AND tgt.id = ${body.target_id}
-    `,
-  ]);
-  const preCheckRows = preCheckResults.at(-1) as Array<{
-    source_owner: string; can_edit_source: boolean;
-    min_read: number; min_write: number;
-  }>;
-
-  const preCheck = preCheckRows[0];
-  if (!preCheck) {
-    // At least one entity not visible to actor — diagnose which
-    const [, srcExists, tgtExists] = await sql.transaction([
-      sql`SELECT set_config('app.actor_id', '', true)`,
-      sql`SELECT entity_exists(${sourceId}) AS e`,
-      sql`SELECT entity_exists(${body.target_id}) AS e`,
-    ]);
-    const srcE = (srcExists as Array<{ e: boolean }>)[0]?.e;
-    const tgtE = (tgtExists as Array<{ e: boolean }>)[0]?.e;
-    if (!srcE) throw new ApiError(404, "not_found", "Source entity not found");
-    if (!tgtE) throw new ApiError(404, "not_found", "Target entity not found");
-    throw new ApiError(403, "forbidden", "Insufficient classification level to access source or target entity");
-  }
-  if (!preCheck.can_edit_source) {
-    throw new ApiError(403, "forbidden", "You need edit access on the source entity to create relationships from it");
-  }
-  if (requestedReadLevel !== null && requestedReadLevel < preCheck.min_read) {
-    throw new ApiError(400, "invalid_read_level",
-      `read_level ${requestedReadLevel} must be >= max(source, target) read_level (${preCheck.min_read})`);
-  }
-  if (requestedWriteLevel !== null && requestedWriteLevel < preCheck.min_write) {
-    throw new ApiError(400, "invalid_write_level",
-      `write_level ${requestedWriteLevel} must be >= max(source, target) write_level (${preCheck.min_write})`);
-  }
-
-  // Build transaction: core relationship insert + optional space/permission queries
-  const queries = [
-    ...setActorContext(sql, actor),
-    sql`
-      INSERT INTO entities (
-        id, kind, type, ver, properties, owner_id,
-        read_level, write_level,
-        edited_by, note, created_at, updated_at
-      )
-      SELECT
-        ${relId}, 'relationship', 'relationship', 1, ${JSON.stringify(properties)}::jsonb,
-        ${actor.id},
-        GREATEST(src.read_level, tgt.read_level, ${requestedReadLevel ?? 0}),
-        GREATEST(src.write_level, tgt.write_level, ${requestedWriteLevel ?? 0}),
-        ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
-      FROM entities src, entities tgt
-      WHERE src.id = ${sourceId} AND tgt.id = ${body.target_id}
-      RETURNING *
-    `,
-    sql`
-      INSERT INTO relationship_edges (id, source_id, target_id, predicate)
-      VALUES (${relId}, ${sourceId}, ${body.target_id}, ${body.predicate})
-      RETURNING *
-    `,
-    sql`
-      INSERT INTO entity_versions (entity_id, ver, properties, edited_by, note, created_at)
-      VALUES (${relId}, 1, ${JSON.stringify(properties)}::jsonb, ${actor.id}, NULL, ${now}::timestamptz)
-    `,
-    sql`
-      INSERT INTO entity_activity (entity_id, actor_id, action, detail, ts)
-      VALUES (${sourceId}, ${actor.id}, 'relationship_created',
-             ${JSON.stringify({ relationship_id: relId, predicate: body.predicate, target_id: body.target_id })}::jsonb,
-             ${now}::timestamptz)
-    `,
-  ];
-
-  if (spaceId) {
-    queries.push(addEntityToSpaceQuery(sql, spaceId, relId, actor.id, now));
-  }
-  for (const grant of permissionGrants) {
-    queries.push(grantEntityPermissionQuery(sql, relId, grant.grantee_type, grant.grantee_id, grant.role, actor.id));
-  }
-
-  const txResults = await sql.transaction(queries);
-  const entityRows = txResults[1];
-  const edgeRows = txResults[2];
-
-  backgroundTask(
-    fanOutNotifications({
-      entity_id: sourceId,
-      actor_id: actor.id,
-      action: "relationship_created",
-      detail: { relationship_id: relId, predicate: body.predicate, target_id: body.target_id },
-      ts: now,
-    }),
-  );
-
-  const relEntity = (entityRows as Array<Record<string, unknown>>)[0];
-  if (!relEntity) {
-    throw new ApiError(500, "internal_error", "Failed to create relationship entity");
-  }
-  backgroundTask(indexEntity(relEntity));
-
-  return c.json(
-    {
-      relationship: relEntity,
-      edge: (edgeRows as Array<Record<string, unknown>>)[0],
-    },
-    201,
-  );
-});
-
 relationshipDirectRouter.openapi(getRelationshipRoute, async (c) => {
   const sql = createSql();
-  const actorId = c.get("actor")?.id ?? "";
   const relId = c.req.param("relId");
 
   const actorCtx = c.get("actor");
@@ -483,119 +212,4 @@ relationshipDirectRouter.openapi(getRelationshipRoute, async (c) => {
   }
 
   return c.json(row, 200);
-});
-
-relationshipDirectRouter.openapi(updateRelationshipRoute, async (c) => {
-  const actor = requireActor(c);
-  const relId = c.req.param("relId");
-  const body = await parseJsonBody<Record<string, unknown>>(c);
-  if (typeof body.ver !== "number") {
-    throw new ApiError(400, "missing_required_field", "Missing ver");
-  }
-  const properties = assertBodyObject(body.properties, "properties");
-  const note = body.note === undefined ? null : typeof body.note === "string" ? body.note : null;
-  const now = new Date().toISOString();
-  const sql = createSql();
-
-  const results = await sql.transaction([
-    ...setActorContext(sql, actor),
-    sql.query(
-      `
-        UPDATE entities
-        SET properties = properties || $1::jsonb,
-            ver = ver + 1,
-            edited_by = $2,
-            note = $3,
-            updated_at = $4::timestamptz
-        WHERE id = $5
-          AND ver = $6
-        RETURNING *
-      `,
-      [JSON.stringify(properties), actor.id, note, now, relId, body.ver],
-    ),
-  ]);
-  const rows = results.at(-1) as Array<Record<string, unknown>>;
-
-  const row = rows[0];
-  if (!row) {
-    throw new ApiError(409, "cas_conflict", "Version mismatch");
-  }
-  await sql.transaction([
-    ...setActorContext(sql, actor),
-    sql.query(
-      `
-        INSERT INTO entity_versions (entity_id, ver, properties, edited_by, note, created_at)
-        SELECT id, ver, properties, edited_by, note, $2::timestamptz
-        FROM entities
-        WHERE id = $1
-      `,
-      [relId, now],
-    ),
-    sql.query(
-      `
-        INSERT INTO entity_activity (entity_id, actor_id, action, detail, ts)
-        SELECT re.source_id, $2, 'relationship_updated',
-               $3::jsonb, $4::timestamptz
-        FROM relationship_edges re
-        WHERE re.id = $1
-      `,
-      [relId, actor.id, JSON.stringify({ relationship_id: relId, ver: row.ver }), now],
-    ),
-  ]);
-  backgroundTask(indexEntity(row as Record<string, unknown>));
-  return c.json({ relationship: row }, 200);
-});
-
-relationshipDirectRouter.openapi(deleteRelationshipRoute, async (c) => {
-  const actor = requireActor(c);
-  const relId = c.req.param("relId");
-  const now = new Date().toISOString();
-  const sql = createSql();
-
-  const results = await sql.transaction([
-    ...setActorContext(sql, actor),
-    sql.query(
-      `
-        SELECT re.source_id, re.target_id, re.predicate
-        FROM relationship_edges re
-        WHERE re.id = $1
-      `,
-      [relId],
-    ),
-  ]);
-  const relRows = results.at(-1) as Array<{ source_id: string; target_id: string; predicate: string }>;
-
-  const rel = relRows[0];
-  if (!rel) {
-    throw new ApiError(404, "not_found", "Relationship not found");
-  }
-
-  await sql.transaction([
-    ...setActorContext(sql, actor),
-    sql`DELETE FROM entities WHERE id = ${relId}`,
-    sql`
-      INSERT INTO entity_activity (entity_id, actor_id, action, detail, ts)
-      VALUES (
-        ${rel.source_id},
-        ${actor.id},
-        'relationship_removed',
-        ${JSON.stringify({ relationship_id: relId, predicate: rel.predicate, target_id: rel.target_id })}::jsonb,
-        ${now}::timestamptz
-      )
-    `,
-  ]);
-
-  backgroundTask(removeEntity(relId));
-  backgroundTask(
-    fanOutNotifications({
-      entity_id: rel.source_id,
-      space_id: null,
-      actor_id: actor.id,
-      action: "relationship_removed",
-      detail: { relationship_id: relId, predicate: rel.predicate, target_id: rel.target_id },
-      ts: now,
-    }),
-  );
-
-  return new Response(null, { status: 204 });
 });

@@ -47,12 +47,13 @@ The graph is built from a small set of core tables:
   model (`space_permissions`) and a join table (`space_entities`).
 - **api_keys** — SHA-256 hashed authentication tokens.
 - **entity_permissions** — write ACL grants (admin, editor roles).
-- **groups** / **group_memberships** — actor groups that can be grantees
-  in permission tables.
 
-Supporting tables handle versioning (`entity_versions`), audit logging
-(`entity_activity`), comments, notifications, and the wiki draft queue
+Supporting tables handle versioning (`entity_versions`) and the wiki draft queue
 (used by the wiki pipeline).
+
+Entities are created exclusively through `POST /wiki` — there is no
+direct entity creation endpoint. The wiki pipeline validates, resolves
+links, and publishes entities as part of a single atomic operation.
 
 ## Access control
 

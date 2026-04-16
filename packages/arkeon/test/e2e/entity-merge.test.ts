@@ -61,7 +61,7 @@ describe("Entity Merge", () => {
     await grantEntityPermission(actor.apiKey, source.id, "actor", actorB.id, "editor");
 
     // Merge source into target (default: keep_source)
-    const { response, body } = await jsonRequest(`/entities/${target.id}/merge`, {
+    const { response, body } = await jsonRequest(`/wiki/${target.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -78,12 +78,12 @@ describe("Entity Merge", () => {
     expect(merged.properties.extra_field).toBe("from source");
 
     // Verify relationships were repointed to target
-    const { body: relBody } = await getJson(`/entities/${target.id}/relationships`, actor.apiKey);
+    const { body: relBody } = await getJson(`/wiki/${target.id}/relationships`, actor.apiKey);
     const rels = (relBody as any).relationships;
     expect(rels.some((r: any) => r.predicate === "authored" && r.target_id === other.id)).toBe(true);
 
     // Verify comments were transferred
-    const { body: commentBody } = await getJson(`/entities/${target.id}/comments`, actor.apiKey);
+    const { body: commentBody } = await getJson(`/wiki/${target.id}/comments`, actor.apiKey);
     const comments = (commentBody as any).comments;
     expect(comments.some((c: any) => c.body === "Comment on source entity")).toBe(true);
 
@@ -93,12 +93,12 @@ describe("Entity Merge", () => {
     expect(spaceEntities.some((e: any) => e.id === target.id)).toBe(true);
 
     // Verify permissions were transferred
-    const { body: permBody } = await getJson(`/entities/${target.id}/permissions`, actor.apiKey);
+    const { body: permBody } = await getJson(`/wiki/${target.id}/permissions`, actor.apiKey);
     const perms = (permBody as any).permissions;
     expect(perms.some((p: any) => p.grantee_id === actorB.id && p.role === "editor")).toBe(true);
 
     // Verify source is gone
-    const { response: sourceResp } = await apiRequest(`/entities/${source.id}`, {
+    const { response: sourceResp } = await apiRequest(`/wiki/${source.id}`, {
       apiKey: actor.apiKey,
     });
     expect(sourceResp.status).toBe(410);
@@ -116,7 +116,7 @@ describe("Entity Merge", () => {
       source_only: true,
     });
 
-    const { response, body } = await jsonRequest(`/entities/${target.id}/merge`, {
+    const { response, body } = await jsonRequest(`/wiki/${target.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -142,7 +142,7 @@ describe("Entity Merge", () => {
       source_only: true,
     });
 
-    const { response, body } = await jsonRequest(`/entities/${target.id}/merge`, {
+    const { response, body } = await jsonRequest(`/wiki/${target.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -170,7 +170,7 @@ describe("Entity Merge", () => {
       shared: "from-source",
     });
 
-    const { response, body } = await jsonRequest(`/entities/${target.id}/merge`, {
+    const { response, body } = await jsonRequest(`/wiki/${target.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -198,7 +198,7 @@ describe("Entity Merge", () => {
     // Grant editor (not admin) on source so actor can see it but shouldn't merge
     await grantEntityPermission(actorB.apiKey, source.id, "actor", actor.id, "editor");
 
-    const { response, body } = await jsonRequest(`/entities/${target.id}/merge`, {
+    const { response, body } = await jsonRequest(`/wiki/${target.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: { source_id: source.id, ver: target.ver },
@@ -215,7 +215,7 @@ describe("Entity Merge", () => {
     // actor owns source but not target; grant editor on target (not admin)
     await grantEntityPermission(actorB.apiKey, target.id, "actor", actor.id, "editor");
 
-    const { response, body } = await jsonRequest(`/entities/${target.id}/merge`, {
+    const { response, body } = await jsonRequest(`/wiki/${target.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: { source_id: source.id, ver: target.ver },
@@ -227,7 +227,7 @@ describe("Entity Merge", () => {
   test("400 when merging entity into itself", async () => {
     const entity = await createEntity(actor.apiKey, "note", { label: "self" });
 
-    const { response, body } = await jsonRequest(`/entities/${entity.id}/merge`, {
+    const { response, body } = await jsonRequest(`/wiki/${entity.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: { source_id: entity.id, ver: entity.ver },
@@ -243,7 +243,7 @@ describe("Entity Merge", () => {
     const relId = rel.relationship.id;
 
     // Try to merge relationship into entity
-    const { response } = await jsonRequest(`/entities/${entity.id}/merge`, {
+    const { response } = await jsonRequest(`/wiki/${entity.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: { source_id: relId, ver: entity.ver },
@@ -255,7 +255,7 @@ describe("Entity Merge", () => {
     const target = await createEntity(actor.apiKey, "note", { label: "t" });
     const source = await createEntity(actor.apiKey, "note", { label: "s" });
 
-    const { response, body } = await jsonRequest(`/entities/${target.id}/merge`, {
+    const { response, body } = await jsonRequest(`/wiki/${target.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: { source_id: source.id, ver: target.ver + 999 },
@@ -283,7 +283,7 @@ describe("Entity Merge", () => {
     const sourceRelId = rel2.relationship.id;
     const targetRelVer = rel1.relationship.ver;
 
-    const { response, body } = await jsonRequest(`/entities/${targetRelId}/merge`, {
+    const { response, body } = await jsonRequest(`/wiki/${targetRelId}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -317,7 +317,7 @@ describe("Entity Merge", () => {
     const rel1 = await createRelationship(actor.apiKey, entityA.id, "references", entityB.id);
     const rel2 = await createRelationship(actor.apiKey, entityA.id, "references", entityC.id);
 
-    const { response, body } = await jsonRequest(`/entities/${rel1.relationship.id}/merge`, {
+    const { response, body } = await jsonRequest(`/wiki/${rel1.relationship.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: {
@@ -343,7 +343,7 @@ describe("Entity Merge", () => {
     // Also a unique relationship only from source
     await createRelationship(actor.apiKey, source.id, "authored", other.id);
 
-    const { response } = await jsonRequest(`/entities/${target.id}/merge`, {
+    const { response } = await jsonRequest(`/wiki/${target.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: { source_id: source.id, ver: target.ver },
@@ -351,7 +351,7 @@ describe("Entity Merge", () => {
     expect(response.status).toBe(200);
 
     // Target should have exactly 2 outgoing relationships: cites and authored
-    const { body: relBody } = await getJson(`/entities/${target.id}/relationships?direction=out`, actor.apiKey);
+    const { body: relBody } = await getJson(`/wiki/${target.id}/relationships?direction=out`, actor.apiKey);
     const rels = (relBody as any).relationships ?? [];
     const predicates = rels.map((r: any) => r.predicate).sort();
     expect(predicates).toEqual(["authored", "cites"]);
@@ -366,7 +366,7 @@ describe("Entity Merge", () => {
     // Create relationship from source to target
     await createRelationship(actor.apiKey, source.id, "relates_to", target.id);
 
-    const { response } = await jsonRequest(`/entities/${target.id}/merge`, {
+    const { response } = await jsonRequest(`/wiki/${target.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: { source_id: source.id, ver: target.ver },
@@ -374,7 +374,7 @@ describe("Entity Merge", () => {
     expect(response.status).toBe(200);
 
     // Target should have no self-referencing relationships
-    const { body: relBody } = await getJson(`/entities/${target.id}/relationships`, actor.apiKey);
+    const { body: relBody } = await getJson(`/wiki/${target.id}/relationships`, actor.apiKey);
     const rels = (relBody as any).relationships;
     const selfRefs = rels.filter((r: any) => r.source_id === target.id && r.target_id === target.id);
     expect(selfRefs.length).toBe(0);
@@ -386,13 +386,13 @@ describe("Entity Merge", () => {
     const target = await createEntity(actor.apiKey, "note", { label: "t" });
     const source = await createEntity(actor.apiKey, "note", { label: "s" });
 
-    await jsonRequest(`/entities/${target.id}/merge`, {
+    await jsonRequest(`/wiki/${target.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: { source_id: source.id, ver: target.ver },
     });
 
-    const { response, body } = await apiRequest(`/entities/${source.id}`, {
+    const { response, body } = await apiRequest(`/wiki/${source.id}`, {
       apiKey: actor.apiKey,
     });
     expect(response.status).toBe(410);
@@ -412,7 +412,7 @@ describe("Entity Merge", () => {
     await grantEntityPermission(actor.apiKey, target.id, "actor", actorB.id, "admin");
     await grantEntityPermission(actor.apiKey, source.id, "actor", actorB.id, "admin");
 
-    const { response } = await jsonRequest(`/entities/${target.id}/merge`, {
+    const { response } = await jsonRequest(`/wiki/${target.id}/merge`, {
       method: "POST",
       apiKey: actorB.apiKey,
       json: { source_id: source.id, ver: target.ver },
@@ -425,7 +425,7 @@ describe("Entity Merge", () => {
   test("404 when source entity does not exist", async () => {
     const target = await createEntity(actor.apiKey, "note", { label: uniqueName("t") });
 
-    const { response, body } = await jsonRequest(`/entities/${target.id}/merge`, {
+    const { response, body } = await jsonRequest(`/wiki/${target.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: { source_id: "01ZZZZZZZZZZZZZZZZZZZZZZZZ", ver: target.ver },
@@ -436,7 +436,7 @@ describe("Entity Merge", () => {
   test("404 when target entity does not exist", async () => {
     const source = await createEntity(actor.apiKey, "note", { label: uniqueName("s") });
 
-    const { response } = await jsonRequest("/entities/01ZZZZZZZZZZZZZZZZZZZZZZZZ/merge", {
+    const { response } = await jsonRequest("/wiki/01ZZZZZZZZZZZZZZZZZZZZZZZZ/merge", {
       method: "POST",
       apiKey: actor.apiKey,
       json: { source_id: source.id, ver: 1 },
@@ -450,28 +450,28 @@ describe("Entity Merge", () => {
     const entityC = await createEntity(actor.apiKey, "note", { label: uniqueName("c") });
 
     // Merge A into B
-    await jsonRequest(`/entities/${entityB.id}/merge`, {
+    await jsonRequest(`/wiki/${entityB.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: { source_id: entityA.id, ver: entityB.ver },
     });
 
     // Merge B into C (B's ver is now 2 after absorbing A)
-    await jsonRequest(`/entities/${entityC.id}/merge`, {
+    await jsonRequest(`/wiki/${entityC.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: { source_id: entityB.id, ver: entityC.ver },
     });
 
     // A's redirect should now point directly to C (chain resolved)
-    const { response, body } = await apiRequest(`/entities/${entityA.id}`, {
+    const { response, body } = await apiRequest(`/wiki/${entityA.id}`, {
       apiKey: actor.apiKey,
     });
     expect(response.status).toBe(410);
     expect((body as any).error.details.merged_into).toBe(entityC.id);
 
     // B's redirect should also point to C
-    const { response: respB, body: bodyB } = await apiRequest(`/entities/${entityB.id}`, {
+    const { response: respB, body: bodyB } = await apiRequest(`/wiki/${entityB.id}`, {
       apiKey: actor.apiKey,
     });
     expect(respB.status).toBe(410);
@@ -491,7 +491,7 @@ describe("Entity Merge", () => {
     await createRelationship(actorB.apiKey, thirdParty.id, "references", source.id);
 
     // Actor merges source into target
-    const { response } = await jsonRequest(`/entities/${target.id}/merge`, {
+    const { response } = await jsonRequest(`/wiki/${target.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: { source_id: source.id, ver: target.ver },
@@ -499,7 +499,7 @@ describe("Entity Merge", () => {
     expect(response.status).toBe(200);
 
     // The third-party relationship should now point to target
-    const { body: relBody } = await getJson(`/entities/${thirdParty.id}/relationships?direction=out`, actorB.apiKey);
+    const { body: relBody } = await getJson(`/wiki/${thirdParty.id}/relationships?direction=out`, actorB.apiKey);
     const rels = (relBody as any).relationships ?? [];
     expect(rels.some((r: any) => r.predicate === "references" && r.target_id === target.id)).toBe(true);
     expect(rels.some((r: any) => r.target_id === source.id)).toBe(false);
@@ -518,7 +518,7 @@ describe("Entity Merge", () => {
     await addEntityToSpace(actorB.apiKey, space.id, source.id);
 
     // Actor merges source into target
-    const { response } = await jsonRequest(`/entities/${target.id}/merge`, {
+    const { response } = await jsonRequest(`/wiki/${target.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: { source_id: source.id, ver: target.ver },
@@ -543,7 +543,7 @@ describe("Entity Merge", () => {
     await createRelationship(actor.apiKey, other2.id, "references", source.id);
     await createRelationship(actor.apiKey, other3.id, "authored", source.id);
 
-    const { response } = await jsonRequest(`/entities/${target.id}/merge`, {
+    const { response } = await jsonRequest(`/wiki/${target.id}/merge`, {
       method: "POST",
       apiKey: actor.apiKey,
       json: { source_id: source.id, ver: target.ver },
@@ -551,7 +551,7 @@ describe("Entity Merge", () => {
     expect(response.status).toBe(200);
 
     // All incoming relationships should now point to target
-    const { body: relBody } = await getJson(`/entities/${target.id}/relationships?direction=in`, actor.apiKey);
+    const { body: relBody } = await getJson(`/wiki/${target.id}/relationships?direction=in`, actor.apiKey);
     const rels = (relBody as any).relationships ?? [];
     expect(rels.length).toBe(3);
     const predicates = rels.map((r: any) => r.predicate).sort();

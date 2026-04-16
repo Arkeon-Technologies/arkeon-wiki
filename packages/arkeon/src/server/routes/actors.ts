@@ -10,7 +10,6 @@ import {
   parseJsonBody,
   parseLimit,
   parseCursorParam,
-  parseOptionalTimestamp,
 } from "../lib/http";
 import { generateUlid } from "../lib/ids";
 import { createRouter } from "../lib/openapi";
@@ -18,7 +17,6 @@ import { createApiKey, sha256Hex } from "../lib/auth";
 import {
   ActorSchema,
   ClassificationLevel,
-  DateTimeSchema,
   EntityIdParam,
   JsonObjectSchema,
   cursorResponseSchema,
@@ -45,23 +43,6 @@ type ActorRecord = {
   created_at: string;
   updated_at: string;
 };
-
-const ActorActivitySchema = z.object({
-  id: z.number().int(),
-  entity_id: EntityIdParam,
-  actor_id: EntityIdParam,
-  action: z.string(),
-  detail: z.any(),
-  ts: DateTimeSchema,
-  entity: z.object({
-    id: EntityIdParam,
-    kind: z.string(),
-    type: z.string(),
-    properties: z.object({
-      label: z.any().optional(),
-    }),
-  }),
-});
 
 const createActorRoute = createRoute({
   method: "post",
@@ -117,8 +98,8 @@ const listActorsRoute = createRoute({
       ),
       kind: queryParam(
         "kind",
-        z.enum(["agent", "worker"]).optional(),
-        "Filter by kind (legacy 'worker' actors are still listable but are no longer invokable)",
+        z.enum(["agent"]).optional(),
+        "Filter by kind",
       ),
     }),
   },
@@ -238,50 +219,14 @@ const createActorKeyRoute = createRoute({
   },
 });
 
-const actorActivityRoute = createRoute({
-  method: "get",
-  path: "/{id}/activity",
-  operationId: "listActorActivity",
-  tags: ["Actors"],
-  summary: "Activity feed filtered by a specific actor",
-  "x-arke-auth": "optional",
-  "x-arke-related": ["GET /activity"],
-  "x-arke-rules": ["Results filtered by your classification clearance"],
-  request: {
-    params: entityIdParams("Actor ULID"),
-    query: paginationQuerySchema(50, 200).extend({
-      since: queryParam(
-        "since",
-        DateTimeSchema.optional(),
-        "ISO 8601 -- only events after this time",
-      ),
-      action: queryParam("action", z.string().optional(), "Filter by action type"),
-    }),
-  },
-  responses: {
-    200: {
-      description: "Actor activity feed",
-      content: jsonContent(cursorResponseSchema("activity", ActorActivitySchema)),
-    },
-    ...errorResponses([400, 403, 404]),
-  },
-});
-
 export const actorsRouter = createRouter();
 
 actorsRouter.openapi(createActorRoute, async (c) => {
   const actor = requireActor(c);
   const body = await parseJsonBody<Record<string, unknown>>(c);
 
-  if (body.kind === "worker") {
-    throw new ApiError(
-      400,
-      "unsupported_kind",
-      "Worker actors are no longer supported. Create actors with kind='agent' instead — the worker runtime (sandboxed execution, scheduler, POST /workers/{id}/invoke) was removed.",
-    );
-  }
-  if (body.kind !== "agent") {
-    throw new ApiError(400, "missing_required_field", "Missing or invalid kind (expected 'agent')");
+  if (body.kind !== undefined && body.kind !== "agent") {
+    throw new ApiError(400, "invalid_kind", "kind must be 'agent' (the only supported actor kind)");
   }
 
   const maxReadLevel = typeof body.max_read_level === "number" ? body.max_read_level : 1;
@@ -519,40 +464,3 @@ actorsRouter.openapi(createActorKeyRoute, async (c) => {
   );
 });
 
-actorsRouter.openapi(actorActivityRoute, async (c) => {
-  const sql = createSql();
-  const actorId = c.req.param("id");
-  const requestActorId = c.get("actor")?.id ?? "";
-  const limit = parseLimit(c, { defaultValue: 50, maxValue: 200 });
-  const since = parseOptionalTimestamp(c.req.query("since"), "since");
-  const action = c.req.query("action");
-  const cursor = parseCursorParam(c);
-
-  const actorCtx = c.get("actor") ?? null;
-  const results = await sql.transaction([
-    ...setActorContext(sql, actorCtx),
-    sql.query(
-      `
-        SELECT ea.*, json_build_object('id', e.id, 'kind', e.kind, 'type', e.type, 'properties', json_build_object('label', e.properties->>'label')) AS entity
-        FROM entity_activity ea
-        JOIN entities e ON e.id = ea.entity_id
-        WHERE ea.actor_id = $1
-          AND ($2::text IS NULL OR ea.action = $2)
-          AND ($3::timestamptz IS NULL OR ea.ts > $3::timestamptz)
-          AND ($4::timestamptz IS NULL OR (ea.ts, ea.id) < ($4::timestamptz, $5::bigint))
-        ORDER BY ea.ts DESC, ea.id DESC
-        LIMIT $6
-      `,
-      [actorId, action ?? null, since, cursor?.t ?? null, cursor?.i ?? null, limit + 1],
-    ),
-  ]);
-  const rows = results.at(-1) as Array<Record<string, unknown>>;
-
-  const activity = rows.slice(0, limit);
-  const next = rows.length > limit ? activity[activity.length - 1] : null;
-
-  return c.json({
-    activity,
-    cursor: next ? encodeCursor({ t: next.ts as string | Date, i: next.id as string | number | bigint }) : null,
-  }, 200);
-});
