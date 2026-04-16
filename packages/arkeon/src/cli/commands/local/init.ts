@@ -23,11 +23,11 @@ import { existsSync, unlinkSync } from "node:fs";
 
 import {
   arkeonDir,
-  clearPendingLlm,
+  clearLlmConfig,
   ensureArkeonDir,
   loadOrCreateSecrets,
   secretsFile,
-  writePendingLlm,
+  writeLlmConfig,
 } from "../../lib/local-runtime.js";
 import { buildLlmConfigFromFlags, type InitLlmFlags } from "../../lib/local.js";
 import { output } from "../../lib/output.js";
@@ -78,11 +78,11 @@ export function registerInitCommand(program: Command): void {
         const secrets = loadOrCreateSecrets();
 
         if (llm) {
-          writePendingLlm(llm);
+          writeLlmConfig(llm);
         } else {
-          // Ensure no stale pending file survives a re-init without
-          // LLM flags — the user probably wants a clean slate.
-          clearPendingLlm();
+          // Ensure no stale config survives a re-init without LLM flags —
+          // the user probably wants a clean slate.
+          clearLlmConfig();
         }
 
         output.result({
@@ -90,11 +90,11 @@ export function registerInitCommand(program: Command): void {
           state_dir: arkeonDir(),
           admin_key_prefix: `${secrets.adminBootstrapKey.slice(0, 8)}...`,
           rotated: Boolean(opts.force),
-          llm_pending: llm
-            ? { provider: llm.provider, base_url: llm.base_url, model: llm.model }
+          llm_configured: llm?.default
+            ? { provider: llm.default.provider, base_url: llm.default.base_url, model: llm.default.model }
             : null,
           llm_hint: llm
-            ? null
+            ? "Per-step overrides (resolve/exists/draft/dedup) can be hand-edited in ~/.arkeon/llm.json."
             : "No LLM provider configured. Pass --llm-provider, --llm-base-url, --llm-api-key, --llm-model to stage one.",
           next: "arkeon up",
         });

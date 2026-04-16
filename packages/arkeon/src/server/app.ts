@@ -29,6 +29,7 @@ import { createHelpRouter } from "./routes/help";
 import { inboxRouter } from "./routes/inbox";
 import { opsRouter } from "./routes/ops";
 import { entityRelationshipsRouter, relationshipDirectRouter } from "./routes/relationships";
+import { resolveRouter } from "./routes/resolve";
 import { graphRouter } from "./routes/traverse";
 import { searchRouter } from "./routes/search";
 import { spacesRouter } from "./routes/spaces";
@@ -155,6 +156,7 @@ export function createApp(options?: { adminKey?: string }) {
   app.route("/groups", groupsRouter);
   app.route("/ops", opsRouter);
   app.route("/relationships", relationshipDirectRouter);
+  app.route("/resolve", resolveRouter);
   app.route("/search", searchRouter);
   app.route("/spaces", spacesRouter);
   app.route("/wiki", wikiRouter);

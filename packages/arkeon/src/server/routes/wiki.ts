@@ -52,6 +52,21 @@ const createWikiRoute = createRoute({
       content: jsonContent(
         z.object({
           content: z.string().min(1).describe("Markdown body with typed [[links]]"),
+          label: z
+            .string()
+            .min(1)
+            .max(200)
+            .describe("Canonical display name for the wiki (like an article title)"),
+          keywords: z
+            .array(z.string().min(1).max(100))
+            .min(1)
+            .max(20)
+            .describe("Alternate names and search phrasings someone might use to find this wiki"),
+          short_description: z
+            .string()
+            .min(10)
+            .max(400)
+            .describe("One to two sentences of framing, used in search previews and multi-choice disambiguation"),
           primary_entities: z
             .array(EntityIdParam)
             .min(1)
@@ -100,6 +115,9 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   const now = new Date().toISOString();
 
   const content = body.content as string;
+  const label = body.label as string;
+  const keywordsRaw = body.keywords;
+  const short_description = body.short_description as string;
   const primary_entities = body.primary_entities as string[];
   const space_id = body.space_id as string;
   const read_level = typeof body.read_level === "number" ? body.read_level : 1;
@@ -108,6 +126,16 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
 
   if (!content || typeof content !== "string") {
     throw new ApiError(400, "invalid_request", "content is required and must be a string");
+  }
+  if (!label || typeof label !== "string") {
+    throw new ApiError(400, "invalid_request", "label is required and must be a string");
+  }
+  if (!Array.isArray(keywordsRaw) || keywordsRaw.length === 0 || !keywordsRaw.every((k) => typeof k === "string" && k.trim().length > 0)) {
+    throw new ApiError(400, "invalid_request", "keywords must be a non-empty array of non-empty strings");
+  }
+  const keywords = (keywordsRaw as string[]).map((k) => k.trim());
+  if (!short_description || typeof short_description !== "string" || short_description.trim().length < 10) {
+    throw new ApiError(400, "invalid_request", "short_description is required and must be at least 10 characters");
   }
   if (!Array.isArray(primary_entities) || primary_entities.length === 0) {
     throw new ApiError(400, "invalid_request", "primary_entities must be a non-empty array of entity IDs");
@@ -174,6 +202,9 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
 
   const wikiId = generateUlid();
   const wikiProperties = {
+    label,
+    keywords,
+    short_description: short_description.trim(),
     content,
     submitted_content: content,
     primary_entities,

@@ -7999,6 +7999,185 @@
         ]
       }
     },
+    "/resolve": {
+      "post": {
+        "operationId": "resolveSubject",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "candidate_filter": {
+                    "description": "Additional Meilisearch filters, e.g. [\"type = \\\"wiki\\\"\"]",
+                    "items": {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 10,
+                    "type": "array"
+                  },
+                  "context": {
+                    "description": "Surrounding prose passed to the LLM judge as disambiguation hints — never used as a search query",
+                    "maxLength": 4000,
+                    "type": "string"
+                  },
+                  "description": {
+                    "description": "Free-form description — used both for query generation and as disambiguation context",
+                    "maxLength": 2000,
+                    "type": "string"
+                  },
+                  "keywords": {
+                    "description": "Alternate names/search phrasings (each becomes its own Meilisearch query)",
+                    "items": {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 20,
+                    "type": "array"
+                  },
+                  "label": {
+                    "description": "Canonical name of the thing to match",
+                    "maxLength": 400,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "limit": {
+                    "description": "Max matches to return (default: all)",
+                    "maximum": 20,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "llm_step": {
+                    "description": "Which LLM step config to use (defaults to \"resolve\")",
+                    "enum": [
+                      "resolve",
+                      "exists",
+                      "dedup"
+                    ],
+                    "type": "string"
+                  },
+                  "space_id": {
+                    "description": "If set, restrict candidates to this space",
+                    "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "label"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "actor_read_level": {
+                      "description": "The read_level the candidate pool was filtered against",
+                      "maximum": 4,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "matches": {
+                      "items": {
+                        "properties": {
+                          "confidence": {
+                            "description": "1.0 = exact normalized-label match; 0.8 = LLM-confirmed; 0 = no match",
+                            "type": "number"
+                          },
+                          "id": {
+                            "description": "ULID string",
+                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                            "type": "string"
+                          },
+                          "rationale": {
+                            "description": "Short explanation of the match decision",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "confidence"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "matches",
+                    "actor_read_level"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Matches (possibly empty) in rank order"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Service unavailable"
+          }
+        },
+        "summary": "Find existing entities matching a subject via multi-query Meilisearch + LLM judge",
+        "tags": [
+          "Resolve"
+        ],
+        "x-arke-auth": "required",
+        "x-arke-related": [
+          "POST /wiki",
+          "GET /search"
+        ],
+        "x-arke-rules": [
+          "Candidate pool is filtered to entities visible under the caller's max_read_level",
+          "Returns 503 if no LLM provider is configured (see ~/.arkeon/llm.json)"
+        ]
+      }
+    },
     "/search": {
       "get": {
         "description": "Keyword search with typo tolerance, prefix matching, and relevance ranking. Results are automatically filtered by the caller's read clearance level. Use the read_level parameter to restrict results below your clearance. Use view=expanded to include each result's relationships with counterpart summaries.",
@@ -10300,6 +10479,23 @@
                     "minimum": 0,
                     "type": "integer"
                   },
+                  "keywords": {
+                    "description": "Alternate names and search phrasings someone might use to find this wiki",
+                    "items": {
+                      "maxLength": 100,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 20,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "label": {
+                    "description": "Canonical display name for the wiki (like an article title)",
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
                   "primary_entities": {
                     "description": "Entity IDs this wiki is about",
                     "items": {
@@ -10318,6 +10514,12 @@
                     "minimum": 0,
                     "type": "integer"
                   },
+                  "short_description": {
+                    "description": "One to two sentences of framing, used in search previews and multi-choice disambiguation",
+                    "maxLength": 400,
+                    "minLength": 10,
+                    "type": "string"
+                  },
                   "space_id": {
                     "description": "Space to create the wiki in",
                     "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
@@ -10334,6 +10536,9 @@
                 },
                 "required": [
                   "content",
+                  "label",
+                  "keywords",
+                  "short_description",
                   "primary_entities",
                   "space_id"
                 ],

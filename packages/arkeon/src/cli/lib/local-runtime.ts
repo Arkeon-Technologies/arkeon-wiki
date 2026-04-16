@@ -64,7 +64,7 @@ export function secretsFile(): string { return join(arkeonHome(), "secrets.json"
 export function pidfile(): string { return join(arkeonHome(), "arkeon.pid"); }
 export function meiliPidfile(): string { return join(arkeonHome(), "meili.pid"); }
 export function logfile(): string { return join(arkeonHome(), "arkeon.log"); }
-export function pendingLlmFile(): string { return join(arkeonHome(), "pending-llm.json"); }
+export function llmConfigFile(): string { return join(arkeonHome(), "llm.json"); }
 
 // Meilisearch version pinned for reproducibility. Bump deliberately.
 const MEILI_VERSION = "v1.41.0";
@@ -597,36 +597,41 @@ export function fmtPgUrl(
 // Pending LLM config (written by `arkeon init`, consumed by `arkeon up`)
 // =====================================================================
 //
-// One-shot carrier for the LLM provider settings collected at init time,
-// applied against the running API by `arkeon up` once /health is green.
-//
-// Persisted to ~/.arkeon/pending-llm.json with mode 0600. The file is
-// deleted on successful apply; `arkeon reset` wipes it along with the
-// rest of the data directory so stale creds never linger.
+// LLM provider settings persisted at ~/.arkeon/llm.json (mode 0600).
+// Read directly by the server (see server/lib/llm.ts). `arkeon init
+// --llm-*` writes the `default` block; users can hand-edit the file to
+// set per-step overrides for the wiki pipeline (resolve, exists, draft,
+// dedup). `arkeon reset` wipes it along with the rest of the data
+// directory so stale creds never linger.
 
-export interface PendingLlmConfig {
-  /** Free-form provider label — "openai", "anthropic", "openrouter", etc. */
-  provider: string;
-  /** OpenAI-compatible base URL. No defaults. */
-  base_url: string;
-  /** API key for the provider. */
-  api_key: string;
-  /** Model identifier — "gpt-4.1-nano", "claude-3-5-sonnet-20241022", etc. */
-  model: string;
+export interface LlmStepConfig {
+  provider?: string;
+  base_url?: string;
+  api_key?: string;
+  model?: string;
+  max_tokens?: number;
 }
 
-export function readPendingLlm(): PendingLlmConfig | null {
-  const path = pendingLlmFile();
+export interface LlmConfig {
+  default?: LlmStepConfig;
+  resolve?: LlmStepConfig;
+  exists?: LlmStepConfig;
+  draft?: LlmStepConfig;
+  dedup?: LlmStepConfig;
+}
+
+export function readLlmConfig(): LlmConfig | null {
+  const path = llmConfigFile();
   if (!existsSync(path)) return null;
   try {
-    return JSON.parse(readFileSync(path, "utf-8")) as PendingLlmConfig;
+    return JSON.parse(readFileSync(path, "utf-8")) as LlmConfig;
   } catch {
     return null;
   }
 }
 
-export function writePendingLlm(cfg: PendingLlmConfig): void {
-  const path = pendingLlmFile();
+export function writeLlmConfig(cfg: LlmConfig): void {
+  const path = llmConfigFile();
   if (!existsSync(arkeonHome())) mkdirSync(arkeonHome(), { recursive: true });
   writeFileSync(path, JSON.stringify(cfg, null, 2), { mode: 0o600 });
   // Belt-and-suspenders — writeFileSync's `mode` only applies on create.
@@ -639,8 +644,8 @@ export function writePendingLlm(cfg: PendingLlmConfig): void {
   }
 }
 
-export function clearPendingLlm(): void {
-  const path = pendingLlmFile();
+export function clearLlmConfig(): void {
+  const path = llmConfigFile();
   if (existsSync(path)) unlinkSync(path);
 }
 

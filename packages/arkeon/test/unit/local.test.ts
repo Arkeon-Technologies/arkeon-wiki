@@ -8,13 +8,13 @@ import { join } from "node:path";
 
 import { buildLlmConfigFromFlags, parseEnv } from "../../src/cli/lib/local.js";
 import {
-  clearPendingLlm,
+  clearLlmConfig,
+  llmConfigFile,
   loadOrCreateSecrets,
-  pendingLlmFile,
-  readPendingLlm,
+  readLlmConfig,
   readSecrets,
   secretsFile,
-  writePendingLlm,
+  writeLlmConfig,
 } from "../../src/cli/lib/local-runtime.js";
 
 // ---------------------------------------------------------------------------
@@ -67,12 +67,14 @@ describe("buildLlmConfigFromFlags", () => {
     expect(buildLlmConfigFromFlags({})).toBeNull();
   });
 
-  test("returns a full config when all four flags are provided", () => {
+  test("returns a full default-scoped config when all four flags are provided", () => {
     expect(buildLlmConfigFromFlags(full)).toEqual({
-      provider: "openai",
-      base_url: "https://api.openai.com/v1",
-      api_key: "sk-test",
-      model: "gpt-4.1-nano",
+      default: {
+        provider: "openai",
+        base_url: "https://api.openai.com/v1",
+        api_key: "sk-test",
+        model: "gpt-4.1-nano",
+      },
     });
   });
 
@@ -105,8 +107,8 @@ describe("buildLlmConfigFromFlags", () => {
       llmApiKey: "sk-or-v1-xxx",
       llmModel: "anthropic/claude-3.5-sonnet",
     });
-    expect(cfg?.provider).toBe("openrouter");
-    expect(cfg?.model).toBe("anthropic/claude-3.5-sonnet");
+    expect(cfg?.default?.provider).toBe("openrouter");
+    expect(cfg?.default?.model).toBe("anthropic/claude-3.5-sonnet");
   });
 
   test("accepts a localhost URL for local provider endpoints", () => {
@@ -116,15 +118,15 @@ describe("buildLlmConfigFromFlags", () => {
       llmApiKey: "ollama",
       llmModel: "llama3",
     });
-    expect(cfg?.base_url).toBe("http://localhost:11434/v1");
+    expect(cfg?.default?.base_url).toBe("http://localhost:11434/v1");
   });
 });
 
 // ---------------------------------------------------------------------------
-// Pending-LLM roundtrip (writes to ~/.arkeon/pending-llm.json with 0600)
+// LLM config roundtrip (writes to ~/.arkeon/llm.json with 0600)
 // ---------------------------------------------------------------------------
 
-describe("pending LLM config", () => {
+describe("LLM config", () => {
   let scratch: string;
   let prevHome: string | undefined;
 
@@ -140,53 +142,63 @@ describe("pending LLM config", () => {
     rmSync(scratch, { recursive: true, force: true });
   });
 
-  test("readPendingLlm returns null when no file exists", () => {
-    expect(readPendingLlm()).toBeNull();
+  test("readLlmConfig returns null when no file exists", () => {
+    expect(readLlmConfig()).toBeNull();
   });
 
-  test("writePendingLlm roundtrips via readPendingLlm", () => {
-    writePendingLlm({
-      provider: "openai",
-      base_url: "https://api.openai.com/v1",
-      api_key: "sk-roundtrip",
-      model: "gpt-4.1-nano",
+  test("writeLlmConfig roundtrips via readLlmConfig with per-step overrides", () => {
+    writeLlmConfig({
+      default: {
+        provider: "openai",
+        base_url: "https://api.openai.com/v1",
+        api_key: "sk-roundtrip",
+        model: "gpt-4o-mini",
+      },
+      draft: { model: "gpt-4o", max_tokens: 8000 },
     });
-    expect(readPendingLlm()).toEqual({
-      provider: "openai",
-      base_url: "https://api.openai.com/v1",
-      api_key: "sk-roundtrip",
-      model: "gpt-4.1-nano",
+    expect(readLlmConfig()).toEqual({
+      default: {
+        provider: "openai",
+        base_url: "https://api.openai.com/v1",
+        api_key: "sk-roundtrip",
+        model: "gpt-4o-mini",
+      },
+      draft: { model: "gpt-4o", max_tokens: 8000 },
     });
   });
 
-  test("writePendingLlm stores the file at 0600 on POSIX", () => {
+  test("writeLlmConfig stores the file at 0600 on POSIX", () => {
     if (platform() === "win32") return; // no POSIX perms to check
-    writePendingLlm({
-      provider: "p",
-      base_url: "https://example.com",
-      api_key: "k",
-      model: "m",
+    writeLlmConfig({
+      default: {
+        provider: "p",
+        base_url: "https://example.com",
+        api_key: "k",
+        model: "m",
+      },
     });
-    const mode = statSync(pendingLlmFile()).mode & 0o777;
+    const mode = statSync(llmConfigFile()).mode & 0o777;
     expect(mode).toBe(0o600);
   });
 
-  test("clearPendingLlm removes the file", () => {
-    writePendingLlm({
-      provider: "p",
-      base_url: "https://example.com",
-      api_key: "k",
-      model: "m",
+  test("clearLlmConfig removes the file", () => {
+    writeLlmConfig({
+      default: {
+        provider: "p",
+        base_url: "https://example.com",
+        api_key: "k",
+        model: "m",
+      },
     });
-    expect(existsSync(pendingLlmFile())).toBe(true);
-    clearPendingLlm();
-    expect(existsSync(pendingLlmFile())).toBe(false);
-    expect(readPendingLlm()).toBeNull();
+    expect(existsSync(llmConfigFile())).toBe(true);
+    clearLlmConfig();
+    expect(existsSync(llmConfigFile())).toBe(false);
+    expect(readLlmConfig()).toBeNull();
   });
 
-  test("readPendingLlm returns null on a corrupt file rather than throwing", () => {
-    writeFileSync(pendingLlmFile(), "not json");
-    expect(readPendingLlm()).toBeNull();
+  test("readLlmConfig returns null on a corrupt file rather than throwing", () => {
+    writeFileSync(llmConfigFile(), "not json");
+    expect(readLlmConfig()).toBeNull();
   });
 });
 

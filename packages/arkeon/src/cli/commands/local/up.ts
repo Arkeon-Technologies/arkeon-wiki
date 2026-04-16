@@ -8,18 +8,15 @@
  * Shape of the flow:
  *   1. Refuse if a live daemon already owns the pidfile
  *   2. Ensure ~/.arkeon, load or generate secrets
- *   3. If ~/.arkeon/pending-llm.json exists (written by `arkeon init
- *      --llm-*`), apply it as OPENAI_API_KEY / OPENAI_BASE_URL /
- *      WIKI_RESOLVE_MODEL env vars in the child environment, then clear
- *      the file.
- *   4. Spawn `arkeon start` as a detached child with stdio piped to
+ *   3. Spawn `arkeon start` as a detached child with stdio piped to
  *      ~/.arkeon/arkeon.log (append). The child writes the pidfile
- *      once the API is listening.
- *   5. Poll http://localhost:<port>/health with a 120s deadline.
+ *      once the API is listening. The daemon reads LLM config from
+ *      ~/.arkeon/llm.json directly — no threading needed here.
+ *   4. Poll http://localhost:<port>/health with a 120s deadline.
  *      On timeout, tail the log and surface it.
- *   6. Save credentials so subsequent `arkeon entities list` etc. are
+ *   5. Save credentials so subsequent `arkeon entities list` etc. are
  *      auto-authenticated against this stack.
- *   7. Print a JSON result + exit 0; the detached child keeps running.
+ *   6. Print a JSON result + exit 0; the detached child keeps running.
  */
 
 import type { Command } from "commander";
@@ -37,14 +34,12 @@ import {
   DEFAULT_MEILI_PORT,
   DEFAULT_PG_PORT,
   arkeonDir,
-  clearPendingLlm,
   ensureArkeonDir,
   findCliEntry,
   isPortInUse,
   isProcessAlive,
   loadOrCreateSecrets,
   logfile,
-  readPendingLlm,
   readPidfile,
   removePidfile,
 } from "../../lib/local-runtime.js";
@@ -217,17 +212,8 @@ async function runUp(opts: UpOptions): Promise<void> {
     }
   }
 
-  // Apply any LLM config pre-staged by `arkeon init --llm-*` so the wiki
-  // resolver can call the configured provider. We thread the config through
-  // env vars rather than a config file so the daemon's existing env-based
-  // config path just works.
-  const pendingLlm = readPendingLlm();
-  const llmEnv: Record<string, string> = {};
-  if (pendingLlm) {
-    llmEnv.OPENAI_API_KEY = pendingLlm.api_key;
-    if (pendingLlm.base_url) llmEnv.OPENAI_BASE_URL = pendingLlm.base_url;
-    if (pendingLlm.model) llmEnv.WIKI_RESOLVE_MODEL = pendingLlm.model;
-  }
+  // LLM config is read directly from ~/.arkeon/llm.json by the daemon
+  // (see packages/arkeon/src/server/lib/llm.ts). Nothing to thread.
 
   const child = spawn(entry.cmd, childArgs, {
     detached: true,
@@ -236,7 +222,6 @@ async function runUp(opts: UpOptions): Promise<void> {
     env: {
       ...process.env,
       ...explorerDistEnv,
-      ...llmEnv,
     },
   });
 
@@ -315,20 +300,12 @@ async function runUp(opts: UpOptions): Promise<void> {
     keyPrefix: secrets.adminBootstrapKey.slice(0, 8),
   });
 
-  // Clear the pending LLM config now that it's been applied via env.
-  // This prevents a stale key from being re-applied on subsequent `up` runs
-  // with a different staged config.
-  if (pendingLlm) clearPendingLlm();
-
   output.result({
     operation: "up",
     api_url: apiUrl,
     explorer_url: `${apiUrl}/explore`,
     health_url: `${apiUrl}/health`,
     ready_url: `${apiUrl}/ready`,
-    llm_configured: pendingLlm
-      ? { provider: pendingLlm.provider, base_url: pendingLlm.base_url, model: pendingLlm.model }
-      : null,
     admin_key_stored: true,
     admin_key_prefix: `${secrets.adminBootstrapKey.slice(0, 8)}...`,
     logs_hint: "arkeon logs",

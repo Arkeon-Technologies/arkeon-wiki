@@ -709,6 +709,19 @@ const OPERATIONS: GeneratedOperation[] = [
     bodyFields: [{ name: "note", description: "Edit note", required: false, type: "string" }, { name: "properties", description: "New properties", required: true, type: "object" }, { name: "ver", description: "Expected current version (CAS token). Server increments ver on success.", required: true, type: "integer" }],
   },
   {
+    operationId: "resolveSubject",
+    group: "resolve",
+    action: "post-resolve",
+    method: "POST",
+    path: "/resolve",
+    summary: "Find existing entities matching a subject via multi-query Meilisearch + LLM judge",
+    description: "Find existing entities matching a subject via multi-query Meilisearch + LLM judge",
+    auth: "required",
+    pathParams: [],
+    queryParams: [],
+    bodyFields: [{ name: "candidate_filter", description: "Additional Meilisearch filters, e.g. [\"type = \\\"wiki\\\"\"]", required: false, type: "array" }, { name: "context", description: "Surrounding prose passed to the LLM judge as disambiguation hints — never used as a search query", required: false, type: "string" }, { name: "description", description: "Free-form description — used both for query generation and as disambiguation context", required: false, type: "string" }, { name: "keywords", description: "Alternate names/search phrasings (each becomes its own Meilisearch query)", required: false, type: "array" }, { name: "label", description: "Canonical name of the thing to match", required: true, type: "string" }, { name: "limit", description: "Max matches to return (default: all)", required: false, type: "integer" }, { name: "llm_step", description: "Which LLM step config to use (defaults to \"resolve\")", required: false, type: "string", enumValues: ["resolve","exists","dedup"] }, { name: "space_id", description: "If set, restrict candidates to this space", required: false, type: "string" }],
+  },
+  {
     operationId: "multiSearch",
     group: "search",
     action: "post-multi",
@@ -940,12 +953,12 @@ const OPERATIONS: GeneratedOperation[] = [
     auth: "required",
     pathParams: [],
     queryParams: [],
-    bodyFields: [{ name: "content", description: "Markdown body with typed [[links]]", required: true, type: "string" }, { name: "depth", description: "Internal recursion depth — clients should not set this", required: false, type: "integer" }, { name: "primary_entities", description: "Entity IDs this wiki is about", required: true, type: "array" }, { name: "read_level", description: "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED", required: false, type: "integer" }, { name: "space_id", description: "Space to create the wiki in", required: true, type: "string" }, { name: "write_level", description: "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED", required: false, type: "integer" }],
+    bodyFields: [{ name: "content", description: "Markdown body with typed [[links]]", required: true, type: "string" }, { name: "depth", description: "Internal recursion depth — clients should not set this", required: false, type: "integer" }, { name: "keywords", description: "Alternate names and search phrasings someone might use to find this wiki", required: true, type: "array" }, { name: "label", description: "Canonical display name for the wiki (like an article title)", required: true, type: "string" }, { name: "primary_entities", description: "Entity IDs this wiki is about", required: true, type: "array" }, { name: "read_level", description: "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED", required: false, type: "integer" }, { name: "short_description", description: "One to two sentences of framing, used in search previews and multi-choice disambiguation", required: true, type: "string" }, { name: "space_id", description: "Space to create the wiki in", required: true, type: "string" }, { name: "write_level", description: "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED", required: false, type: "integer" }],
   }
 ];
 
 export function registerApiCommands(program: Command, options: { skipExisting?: boolean } = {}): void {
-  for (const group of ["activity","actors","admin","auth","comments","entities","graph","groups","ingest","relationships","search","spaces","wiki"]) {
+  for (const group of ["activity","actors","admin","auth","comments","entities","graph","groups","ingest","relationships","resolve","search","spaces","wiki"]) {
     const existing = program.commands.find((command) => command.name() === group);
     if (existing && options.skipExisting) {
       registerGeneratedGroup(existing, OPERATIONS.filter((operation) => operation.group === group));

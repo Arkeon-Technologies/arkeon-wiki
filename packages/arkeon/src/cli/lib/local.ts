@@ -12,7 +12,7 @@
  * handlers and tests import directly.
  */
 
-import type { PendingLlmConfig } from "./local-runtime.js";
+import type { LlmConfig } from "./local-runtime.js";
 
 // ---------------------------------------------------------------------------
 // .env parser (still useful for reading user-supplied .env files in
@@ -62,16 +62,19 @@ export interface InitLlmFlags {
 }
 
 /**
- * Build a PendingLlmConfig from the CLI flags, or null if the caller
- * passed no LLM flags at all. Partial flag sets are an error — either
- * all four of provider/base_url/api_key/model or none. We deliberately
- * do not prompt interactively; `arkeon init` assumes a non-interactive
- * caller (deployment script or LLM agent).
+ * Build an LlmConfig with just a `default` block populated from the CLI
+ * flags, or null if the caller passed no LLM flags at all. Partial flag
+ * sets are an error — either all four of provider/base_url/api_key/model
+ * or none. We deliberately do not prompt interactively; `arkeon init`
+ * assumes a non-interactive caller (deployment script or LLM agent).
+ *
+ * Per-step overrides (resolve/exists/draft/dedup) are set by hand-editing
+ * ~/.arkeon/llm.json after init — see docs/dev/WIKI_PIPELINE.md.
  *
  * Throws Error with a message naming the missing flags on partial input,
  * or naming the offending URL on base-URL validation failure.
  */
-export function buildLlmConfigFromFlags(flags: InitLlmFlags): PendingLlmConfig | null {
+export function buildLlmConfigFromFlags(flags: InitLlmFlags): LlmConfig | null {
   const { llmProvider, llmBaseUrl, llmApiKey, llmModel } = flags;
   const provided = [llmProvider, llmBaseUrl, llmApiKey, llmModel].filter(
     (v): v is string => Boolean(v),
@@ -91,8 +94,7 @@ export function buildLlmConfigFromFlags(flags: InitLlmFlags): PendingLlmConfig |
     );
   }
 
-  // URL sanity check — catch typos before the value gets persisted to
-  // pending-llm.json.
+  // URL sanity check — catch typos before the value gets persisted.
   try {
     // eslint-disable-next-line no-new
     new URL(llmBaseUrl!);
@@ -101,9 +103,11 @@ export function buildLlmConfigFromFlags(flags: InitLlmFlags): PendingLlmConfig |
   }
 
   return {
-    provider: llmProvider!,
-    base_url: llmBaseUrl!,
-    api_key: llmApiKey!,
-    model: llmModel!,
+    default: {
+      provider: llmProvider!,
+      base_url: llmBaseUrl!,
+      api_key: llmApiKey!,
+      model: llmModel!,
+    },
   };
 }
