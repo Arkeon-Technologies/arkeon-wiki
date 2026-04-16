@@ -34,14 +34,28 @@ export interface ParsedLink {
   spanText: string;
 }
 
-// Matches [[type:content]] where type is one of the four link types.
-// Content is either:
-//   - A bare ID (for entity:)
-//   - "quoted string" optionally followed by |"quoted string" (for resolve/draft/gap)
-const LINK_RE = /\[\[(entity|resolve|draft|gap):([^\]]+)\]\]/g;
+export interface WikiLinkParseErrorDetail {
+  raw: string;
+  offset: number;
+  reason: string;
+}
+
+export class WikiLinkParseError extends Error {
+  details: WikiLinkParseErrorDetail[];
+
+  constructor(details: WikiLinkParseErrorDetail[]) {
+    super("Malformed wiki links");
+    this.name = "WikiLinkParseError";
+    this.details = details;
+  }
+}
+
+// Matches every bracketed wiki link. Each block is then validated strictly.
+const BRACKET_LINK_RE = /\[\[([^\]]*)\]\]/g;
 
 // Matches "quoted" with optional |"quoted"
 const QUOTED_RE = /^"([^"]*)"(?:\|"([^"]*)")?$/;
+const ENTITY_ID_RE = /^[A-Za-z0-9_-]+$/;
 
 /**
  * Parse all typed links from wiki markdown content.
@@ -55,17 +69,38 @@ export function parseWikiLinks(
   maxDepth: number,
 ): ParsedLink[] {
   const links: ParsedLink[] = [];
+  const errors: WikiLinkParseErrorDetail[] = [];
+  const matchedOffsets = new Set<number>();
 
   let match: RegExpExecArray | null;
-  // Reset lastIndex since we reuse the global regex
-  LINK_RE.lastIndex = 0;
+  // Reset lastIndex since we reuse the global regex.
+  BRACKET_LINK_RE.lastIndex = 0;
 
-  while ((match = LINK_RE.exec(content)) !== null) {
-    let type = match[1] as LinkType;
-    const body = match[2]!.trim();
+  while ((match = BRACKET_LINK_RE.exec(content)) !== null) {
+    const inner = match[1]!.trim();
     const offset = match.index;
     const length = match[0].length;
     const raw = match[0];
+    matchedOffsets.add(offset);
+    const colon = inner.indexOf(":");
+
+    if (colon <= 0) {
+      errors.push({ raw, offset, reason: "Expected typed link syntax like [[entity:id]] or [[resolve:\"Label\"]]" });
+      continue;
+    }
+
+    const typeText = inner.slice(0, colon);
+    const body = inner.slice(colon + 1).trim();
+    if (!isLinkType(typeText)) {
+      errors.push({ raw, offset, reason: `Unknown wiki link type "${typeText}"` });
+      continue;
+    }
+    if (!body) {
+      errors.push({ raw, offset, reason: "Link target cannot be empty" });
+      continue;
+    }
+
+    let type = typeText;
 
     // Promote draft → gap at max depth
     if (type === "draft" && depth >= maxDepth) {
@@ -75,27 +110,54 @@ export function parseWikiLinks(
     const spanText = extractSpanText(content, offset, length);
 
     if (type === "entity") {
+      if (!ENTITY_ID_RE.test(body)) {
+        errors.push({ raw, offset, reason: "entity links must use an unquoted entity ID" });
+        continue;
+      }
       links.push({ type, raw, offset, length, id: body, spanText });
     } else {
       const quoted = QUOTED_RE.exec(body);
-      if (quoted) {
-        links.push({
-          type,
-          raw,
-          offset,
-          length,
-          label: quoted[1]!,
-          description: quoted[2] ?? undefined,
-          spanText,
-        });
-      } else {
-        // Unquoted fallback — treat entire body as label
-        links.push({ type, raw, offset, length, label: body, spanText });
+      if (!quoted) {
+        errors.push({ raw, offset, reason: `${type}: links must use quoted syntax: [[${type}:\"Label\"|\"Description\"]]` });
+        continue;
       }
+      if (!quoted[1]) {
+        errors.push({ raw, offset, reason: "Link label cannot be empty" });
+        continue;
+      }
+      links.push({
+        type,
+        raw,
+        offset,
+        length,
+        label: quoted[1]!,
+        description: quoted[2] ?? undefined,
+        spanText,
+      });
     }
   }
 
+  let openOffset = content.indexOf("[[");
+  while (openOffset !== -1) {
+    if (!matchedOffsets.has(openOffset)) {
+      errors.push({
+        raw: content.slice(openOffset, Math.min(content.length, openOffset + 80)),
+        offset: openOffset,
+        reason: "Unclosed wiki link",
+      });
+    }
+    openOffset = content.indexOf("[[", openOffset + 2);
+  }
+
+  if (errors.length > 0) {
+    throw new WikiLinkParseError(errors);
+  }
+
   return links;
+}
+
+function isLinkType(value: string): value is LinkType {
+  return value === "entity" || value === "resolve" || value === "draft" || value === "gap";
 }
 
 /**

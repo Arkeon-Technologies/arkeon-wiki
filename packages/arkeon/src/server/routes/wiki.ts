@@ -20,10 +20,9 @@ import { generateUlid } from "../lib/ids";
 import { createRouter } from "../lib/openapi";
 import { createSql, withTransaction } from "../lib/sql";
 import { setActorContext } from "../lib/actor-context";
-import { addEntityToSpaceQuery } from "../lib/entities";
 import { indexEntity } from "../lib/meilisearch";
 import { backgroundTask } from "../lib/background";
-import { parseWikiLinks, type ParsedLink } from "../lib/wiki-links";
+import { parseWikiLinks, WikiLinkParseError, type ParsedLink } from "../lib/wiki-links";
 import { resolveLinks } from "../lib/wiki-resolve";
 import {
   ClassificationLevel,
@@ -34,6 +33,7 @@ import {
 } from "../lib/schemas";
 
 const MAX_DEPTH = 2;
+const REL_PREDICATE_REFERENCES = "references";
 
 const createWikiRoute = createRoute({
   method: "post",
@@ -120,20 +120,31 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   await requireSpaceRole(sql, actor, space_id, "contributor");
 
   // --- Parse links ---
-  const links = parseWikiLinks(content, depth, MAX_DEPTH);
+  let links: ParsedLink[];
+  try {
+    links = parseWikiLinks(content, depth, MAX_DEPTH);
+  } catch (err) {
+    if (err instanceof WikiLinkParseError) {
+      throw new ApiError(400, "malformed_wiki_links", "Malformed wiki links", {
+        links: err.details,
+      });
+    }
+    throw err;
+  }
+  const replacements: Array<{ offset: number; length: number; value: string }> = [];
 
   // --- Validate entity: links exist ---
   const entityLinks = links.filter((l) => l.type === "entity");
+  const canonicalEntityIds = new Map<string, string>();
   if (entityLinks.length > 0) {
-    const entityIds = entityLinks.map((l) => l.id!);
-    const found = await withTransaction(async (tx) => {
-      for (const q of setActorContext(tx, actor)) await q;
-      return tx`SELECT id FROM entities WHERE id = ANY(${entityIds}) AND kind = 'entity'`;
-    });
-    const foundIds = new Set(found.map((r) => String(r.id)));
     for (const link of entityLinks) {
-      if (!foundIds.has(link.id!)) {
+      const canonicalId = await resolveVisibleEntityId(sql, actor, link.id!);
+      if (!canonicalId) {
         throw new ApiError(404, "not_found", `Entity ${link.id} not found or not visible`);
+      }
+      canonicalEntityIds.set(link.id!, canonicalId);
+      if (canonicalId !== link.id) {
+        replacements.push({ offset: link.offset, length: link.length, value: `[[entity:${canonicalId}]]` });
       }
     }
   }
@@ -152,30 +163,6 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
     }
   }
 
-  // --- Wiki-exists check ---
-  {
-    const existing = await withTransaction(async (tx) => {
-      for (const q of setActorContext(tx, actor)) await q;
-      return tx`
-        SELECT e.id FROM entities e
-        JOIN space_entities se ON se.entity_id = e.id
-        WHERE se.space_id = ${space_id}
-          AND e.type = 'wiki'
-          AND e.kind = 'entity'
-          AND EXISTS (
-            SELECT 1 FROM jsonb_array_elements_text(e.properties->'primary_entities') AS pe
-            WHERE pe = ANY(${primary_entities})
-          )
-        LIMIT 1
-      `;
-    });
-    if (existing.length > 0) {
-      throw new ApiError(409, "wiki_exists", `A wiki with overlapping primary entities already exists`, {
-        existing_wiki_id: String(existing[0]!.id),
-      });
-    }
-  }
-
   // --- Stage 1: Mint placeholders and persist draft wiki ---
 
   const draftLinks = links.filter((l) => l.type === "draft");
@@ -183,17 +170,43 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   const resolveLinksArr = links.filter((l) => l.type === "resolve");
 
   const placeholders: Array<{ id: string; label: string; status: "draft" | "gap" }> = [];
+  const placeholderLinks: Array<{ id: string; link: ParsedLink }> = [];
 
   const wikiId = generateUlid();
   const wikiProperties = {
     content,
+    submitted_content: content,
     primary_entities,
     status: "draft",
   };
 
   // Build the atomic transaction for Stage 1
-  const stage1Wiki = await withTransaction(async (tx) => {
+  await withTransaction(async (tx) => {
     for (const q of setActorContext(tx, actor)) await q;
+
+    // Serialize overlapping wiki submissions. The route rejects any primary
+    // entity overlap, so lock each primary entity in sorted order.
+    for (const primaryEntityId of canonicalLockEntityIds(primary_entities)) {
+      await tx`SELECT pg_advisory_xact_lock(hashtext(${`${space_id}:${primaryEntityId}`}))`;
+    }
+
+    const existing = await tx`
+      SELECT e.id FROM entities e
+      JOIN space_entities se ON se.entity_id = e.id
+      WHERE se.space_id = ${space_id}
+        AND e.type = 'wiki'
+        AND e.kind = 'entity'
+        AND EXISTS (
+          SELECT 1 FROM jsonb_array_elements_text(e.properties->'primary_entities') AS pe
+          WHERE pe = ANY(${primary_entities})
+        )
+      LIMIT 1
+    `;
+    if (existing.length > 0) {
+      throw new ApiError(409, "wiki_exists", `A wiki with overlapping primary entities already exists`, {
+        existing_wiki_id: String(existing[0]!.id),
+      });
+    }
 
     // Create wiki entity
     const [wiki] = await tx`
@@ -201,7 +214,7 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
         id, kind, type, ver, properties, owner_id,
         read_level, write_level, edited_by, note, created_at, updated_at
       ) VALUES (
-        ${wikiId}, 'entity', 'wiki', 1, ${JSON.stringify(wikiProperties)}::jsonb, ${actor.id},
+        ${wikiId}, 'entity', 'wiki', 1, ${wikiProperties}::jsonb, ${actor.id},
         ${read_level}, ${write_level}, ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
       ) RETURNING *
     `;
@@ -209,14 +222,14 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
     // Version snapshot
     await tx`
       INSERT INTO entity_versions (entity_id, ver, properties, edited_by, note, created_at)
-      VALUES (${wikiId}, 1, ${JSON.stringify(wikiProperties)}::jsonb, ${actor.id}, NULL, ${now}::timestamptz)
+      VALUES (${wikiId}, 1, ${wikiProperties}::jsonb, ${actor.id}, NULL, ${now}::timestamptz)
     `;
 
     // Activity
     await tx`
       INSERT INTO entity_activity (entity_id, actor_id, action, detail, ts)
       VALUES (${wikiId}, ${actor.id}, 'entity_created',
-        ${JSON.stringify({ kind: "entity", type: "wiki" })}::jsonb, ${now}::timestamptz)
+        ${{ kind: "entity", type: "wiki" }}::jsonb, ${now}::timestamptz)
     `;
 
     // Add wiki to space
@@ -229,14 +242,14 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
     // Mint placeholder entities for draft: links
     for (const link of draftLinks) {
       const phId = generateUlid();
-      const phProps = { label: link.label, description: link.description ?? null };
+      const phProps = { label: link.label, description: link.description ?? null, status: "draft" };
 
       await tx`
         INSERT INTO entities (
           id, kind, type, ver, properties, owner_id,
           read_level, write_level, edited_by, note, created_at, updated_at
         ) VALUES (
-          ${phId}, 'entity', 'placeholder', 1, ${JSON.stringify(phProps)}::jsonb, ${actor.id},
+          ${phId}, 'entity', 'placeholder', 1, ${phProps}::jsonb, ${actor.id},
           ${read_level}, ${write_level}, ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
         )
       `;
@@ -254,11 +267,34 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
       `;
 
       placeholders.push({ id: phId, label: link.label ?? "", status: "draft" });
+      placeholderLinks.push({ id: phId, link });
+      replacements.push({ offset: link.offset, length: link.length, value: `[[entity:${phId}]]` });
     }
 
-    // Record gap links (no entities created)
+    // Gap links get non-queued placeholder entities so references remain visible in the graph.
     for (const link of gapLinks) {
-      placeholders.push({ id: "", label: link.label ?? "", status: "gap" });
+      const gapId = generateUlid();
+      const gapProps = { label: link.label, description: link.description ?? null, status: "gap" };
+
+      await tx`
+        INSERT INTO entities (
+          id, kind, type, ver, properties, owner_id,
+          read_level, write_level, edited_by, note, created_at, updated_at
+        ) VALUES (
+          ${gapId}, 'entity', 'placeholder', 1, ${gapProps}::jsonb, ${actor.id},
+          ${read_level}, ${write_level}, ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
+        )
+      `;
+
+      await tx`
+        INSERT INTO space_entities (space_id, entity_id, added_by, added_at)
+        VALUES (${space_id}, ${gapId}, ${actor.id}, ${now}::timestamptz)
+        ON CONFLICT (space_id, entity_id) DO NOTHING
+      `;
+
+      placeholders.push({ id: gapId, label: link.label ?? "", status: "gap" });
+      placeholderLinks.push({ id: gapId, link });
+      replacements.push({ offset: link.offset, length: link.length, value: `[[entity:${gapId}]]` });
     }
 
     return wiki;
@@ -288,14 +324,28 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
 
   // Entity links get "references" relationships
   for (const link of entityLinks) {
-    targets.push({ targetId: link.id!, predicate: "references", spanText: link.spanText });
+    targets.push({
+      targetId: canonicalEntityIds.get(link.id!) ?? link.id!,
+      predicate: REL_PREDICATE_REFERENCES,
+      spanText: link.spanText,
+    });
+  }
+
+  // Draft/gap links get relationships to their newly minted placeholders.
+  for (const placeholderLink of placeholderLinks) {
+    targets.push({
+      targetId: placeholderLink.id,
+      predicate: REL_PREDICATE_REFERENCES,
+      spanText: placeholderLink.link.spanText,
+    });
   }
 
   // Resolved links
   const unresolvedLinks: ParsedLink[] = [];
   for (const r of resolved) {
     if (r.entityId) {
-      targets.push({ targetId: r.entityId, predicate: "references", spanText: r.link.spanText });
+      targets.push({ targetId: r.entityId, predicate: REL_PREDICATE_REFERENCES, spanText: r.link.spanText });
+      replacements.push({ offset: r.link.offset, length: r.link.length, value: `[[entity:${r.entityId}]]` });
     } else {
       unresolvedLinks.push(r.link);
     }
@@ -310,14 +360,14 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
       if (depth < MAX_DEPTH) {
         // Mint placeholder
         const phId = generateUlid();
-        const phProps = { label: link.label, description: link.description ?? null };
+        const phProps = { label: link.label, description: link.description ?? null, status: "draft" };
 
         await tx`
           INSERT INTO entities (
             id, kind, type, ver, properties, owner_id,
             read_level, write_level, edited_by, note, created_at, updated_at
           ) VALUES (
-            ${phId}, 'entity', 'placeholder', 1, ${JSON.stringify(phProps)}::jsonb, ${actor.id},
+            ${phId}, 'entity', 'placeholder', 1, ${phProps}::jsonb, ${actor.id},
             ${read_level}, ${write_level}, ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
           )
         `;
@@ -333,10 +383,32 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
           VALUES (${phId}, ${depth + 1}, ${actor.id}, ${new Date(Date.now() + 3600_000).toISOString()}::timestamptz, 'pending', ${now}::timestamptz)
         `;
 
-        targets.push({ targetId: phId, predicate: "references", spanText: link.spanText });
+        targets.push({ targetId: phId, predicate: REL_PREDICATE_REFERENCES, spanText: link.spanText });
         minted.push({ id: phId, label: link.label ?? "", status: "draft" });
+        replacements.push({ offset: link.offset, length: link.length, value: `[[entity:${phId}]]` });
       } else {
-        minted.push({ id: "", label: link.label ?? "", status: "gap" });
+        const gapId = generateUlid();
+        const gapProps = { label: link.label, description: link.description ?? null, status: "gap" };
+
+        await tx`
+          INSERT INTO entities (
+            id, kind, type, ver, properties, owner_id,
+            read_level, write_level, edited_by, note, created_at, updated_at
+          ) VALUES (
+            ${gapId}, 'entity', 'placeholder', 1, ${gapProps}::jsonb, ${actor.id},
+            ${read_level}, ${write_level}, ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
+          )
+        `;
+
+        await tx`
+          INSERT INTO space_entities (space_id, entity_id, added_by, added_at)
+          VALUES (${space_id}, ${gapId}, ${actor.id}, ${now}::timestamptz)
+          ON CONFLICT (space_id, entity_id) DO NOTHING
+        `;
+
+        targets.push({ targetId: gapId, predicate: REL_PREDICATE_REFERENCES, spanText: link.spanText });
+        minted.push({ id: gapId, label: link.label ?? "", status: "gap" });
+        replacements.push({ offset: link.offset, length: link.length, value: `[[entity:${gapId}]]` });
       }
     }
     return minted;
@@ -361,7 +433,7 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
             read_level, write_level, edited_by, note, created_at, updated_at
           )
           SELECT
-            ${relId}, 'relationship', 'relationship', 1, ${JSON.stringify(relProps)}::jsonb,
+            ${relId}, 'relationship', 'relationship', 1, ${relProps}::jsonb,
             ${actor.id},
             GREATEST(src.read_level, tgt.read_level),
             GREATEST(src.write_level, tgt.write_level),
@@ -389,14 +461,15 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   }
 
   // --- Promote wiki to published ---
+  const publishedContent = applyLinkReplacements(content, replacements);
   const publishedWiki = await withTransaction(async (tx) => {
     for (const q of setActorContext(tx, actor)) await q;
 
-    const publishedProps = { ...wikiProperties, status: "published" };
+    const publishedProps = { ...wikiProperties, content: publishedContent, status: "published" };
 
     const [updated] = await tx`
       UPDATE entities
-      SET properties = ${JSON.stringify(publishedProps)}::jsonb,
+      SET properties = ${publishedProps}::jsonb,
           ver = ver + 1,
           updated_at = ${now}::timestamptz
       WHERE id = ${wikiId}
@@ -406,7 +479,7 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
     // Version snapshot for the publish
     await tx`
       INSERT INTO entity_versions (entity_id, ver, properties, edited_by, note, created_at)
-      VALUES (${wikiId}, 2, ${JSON.stringify(publishedProps)}::jsonb, ${actor.id}, 'published', ${now}::timestamptz)
+      VALUES (${wikiId}, 2, ${publishedProps}::jsonb, ${actor.id}, 'published', ${now}::timestamptz)
     `;
 
     return updated;
@@ -415,15 +488,57 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   // Index in Meilisearch (background)
   backgroundTask(indexEntity(publishedWiki as Record<string, unknown>));
 
-  // Filter out gap placeholders (no ID) from the response
-  const responsePlaceholders = placeholders.filter((p) => p.id !== "");
-
   return c.json(
     {
       wiki: publishedWiki,
-      placeholders: responsePlaceholders,
+      placeholders,
       relationships_created: relationshipsCreated,
     },
     201,
   );
 });
+
+function applyLinkReplacements(
+  content: string,
+  replacements: Array<{ offset: number; length: number; value: string }>,
+): string {
+  if (replacements.length === 0) return content;
+  let rewritten = content;
+  for (const replacement of [...replacements].sort((a, b) => b.offset - a.offset)) {
+    rewritten = rewritten.slice(0, replacement.offset) +
+      replacement.value +
+      rewritten.slice(replacement.offset + replacement.length);
+  }
+  return rewritten;
+}
+
+function canonicalLockEntityIds(ids: string[]): string[] {
+  return [...new Set(ids)].sort();
+}
+
+async function resolveVisibleEntityId(
+  sql: ReturnType<typeof createSql>,
+  actor: ReturnType<typeof requireActor>,
+  id: string,
+): Promise<string | null> {
+  let current = id;
+  const seen = new Set<string>();
+
+  for (let i = 0; i < 10; i++) {
+    if (seen.has(current)) return null;
+    seen.add(current);
+
+    const found = await withTransaction(async (tx) => {
+      for (const q of setActorContext(tx, actor)) await q;
+      return tx`SELECT id FROM entities WHERE id = ${current} AND kind = 'entity' LIMIT 1`;
+    });
+    if (found.length > 0) return current;
+
+    const redirectRows = await sql`SELECT new_id FROM entity_redirects WHERE old_id = ${current} LIMIT 1`;
+    const redirect = redirectRows[0] as { new_id?: string } | undefined;
+    if (!redirect?.new_id) return null;
+    current = String(redirect.new_id);
+  }
+
+  return null;
+}

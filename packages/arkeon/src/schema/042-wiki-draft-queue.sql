@@ -16,3 +16,5 @@ CREATE TABLE IF NOT EXISTS wiki_draft_queue (
 
 CREATE INDEX IF NOT EXISTS wiki_draft_queue_pending_idx
   ON wiki_draft_queue (created_at) WHERE status = 'pending';
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON wiki_draft_queue TO arke_app;
