@@ -2253,6 +2253,273 @@
         ]
       }
     },
+    "/ops": {
+      "post": {
+        "description": "Compatibility endpoint for structured ingestion. Supports `entity` and `relate` operations, `defaults.space_id`, and `source.entity_id` provenance. Wiki authoring remains the preferred path for narrative pages.",
+        "operationId": "postOps",
+        "parameters": [
+          {
+            "description": "Validate and plan IDs without writing",
+            "in": "query",
+            "name": "dry_run",
+            "required": false,
+            "schema": {
+              "description": "Validate and plan IDs without writing",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "defaults": {
+                    "properties": {
+                      "read_level": {
+                        "maximum": 4,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "space_id": {
+                        "description": "ULID string",
+                        "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                        "type": "string"
+                      },
+                      "write_level": {
+                        "maximum": 4,
+                        "minimum": 0,
+                        "type": "integer"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "format": {
+                    "enum": [
+                      "arke.ops/v1"
+                    ],
+                    "type": "string"
+                  },
+                  "ops": {
+                    "items": {
+                      "$ref": "#/components/schemas/JsonObject"
+                    },
+                    "maxItems": 1000,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "source": {
+                    "properties": {
+                      "entity_id": {
+                        "description": "ULID string",
+                        "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "format",
+                  "ops"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "committed": {
+                      "type": "boolean"
+                    },
+                    "edges": {
+                      "items": {
+                        "properties": {
+                          "id": {
+                            "description": "ULID string",
+                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                            "type": "string"
+                          },
+                          "predicate": {
+                            "type": "string"
+                          },
+                          "ref": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "source": {
+                            "description": "ULID string",
+                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                            "type": "string"
+                          },
+                          "target": {
+                            "description": "ULID string",
+                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "ref",
+                          "id",
+                          "source",
+                          "predicate",
+                          "target"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "entities": {
+                      "items": {
+                        "properties": {
+                          "action": {
+                            "enum": [
+                              "created"
+                            ],
+                            "type": "string"
+                          },
+                          "id": {
+                            "description": "ULID string",
+                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "ref": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "type": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "ref",
+                          "id",
+                          "type",
+                          "label",
+                          "action"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "errors": {
+                      "items": {},
+                      "type": "array"
+                    },
+                    "format": {
+                      "enum": [
+                        "arke.ops/v1"
+                      ],
+                      "type": "string"
+                    },
+                    "stats": {
+                      "properties": {
+                        "edges": {
+                          "type": "integer"
+                        },
+                        "entities": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "entities",
+                        "edges"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "format",
+                    "committed",
+                    "entities",
+                    "edges",
+                    "stats"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Ops committed or dry-run planned"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          }
+        },
+        "summary": "Bulk ingest entities and relationships",
+        "tags": [
+          "Ops"
+        ],
+        "x-arke-auth": "required",
+        "x-arke-rules": [
+          "Requires write clearance for inserted entities and relationships",
+          "If defaults.space_id is provided, requires contributor role on that space",
+          "Relationship creation requires edit access on source and read access on target; RLS is the final authority",
+          "source.entity_id creates extracted_from relationships from every created entity and relationship to the source entity"
+        ]
+      }
+    },
     "/relationships/{relId}": {
       "get": {
         "operationId": "getRelationship",
@@ -4967,6 +5234,11 @@
                     "minLength": 1,
                     "type": "string"
                   },
+                  "properties": {
+                    "additionalProperties": {},
+                    "description": "Additional JSON properties to store on the wiki entity. Reserved wiki metadata keys from this request take precedence.",
+                    "type": "object"
+                  },
                   "read_level": {
                     "default": 1,
                     "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
@@ -4986,8 +5258,14 @@
                     "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
                     "type": "string"
                   },
-                  "type": {
+                  "subject_type": {
                     "description": "Semantic subject type for the page, e.g. person, concept, book, event. Stored as properties.subject_type; the internal entity type remains wiki.",
+                    "maxLength": 80,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "type": {
+                    "description": "Deprecated alias for subject_type. Stored as properties.subject_type; the internal entity type remains wiki.",
                     "maxLength": 80,
                     "minLength": 1,
                     "type": "string"

@@ -135,10 +135,10 @@ const LLMS_FILTER_SYNTAX = [
   "#   that have an extracted_from relationship to entity 01ABC.",
   "#",
   "# Examples:",
-  "#   filter=kind:entity,type:book,created_at>2026-01-01",
+  "#   filter=kind:entity,properties.subject_type:book,created_at>2026-01-01",
   "#   filter=owner_id:01ABC,read_level<=2",
   "#   filter=kind!:relationship,language:English",
-  "#   filter=rel.extracted_from:01ABC,type:character",
+  "#   filter=rel.extracted_from:01ABC,properties.subject_type:character",
   "",
 ];
 

@@ -122,7 +122,7 @@ async function addDocumentEntity(
 
 async function listDocuments(apiKey: string, spaceId: string) {
   const { body } = await getJson(
-    `/entities?filter=${encodeURIComponent("type:document")}&space_id=${spaceId}&limit=200`,
+    `/wiki?filter=${encodeURIComponent("type:document")}&space_id=${spaceId}&limit=200`,
     apiKey,
   );
   return (body as ListResponse).entities;
@@ -347,7 +347,7 @@ describe("Repo commands — init / diff / add / rm flow", () => {
   test("add: re-adding with same hash is idempotent (via filter check)", async () => {
     // Query for existing doc with same source_file
     const { body } = await getJson(
-      `/entities?filter=${encodeURIComponent("type:document,properties.source_file:texts/book-01.md")}&space_id=${spaceId}&limit=1`,
+      `/wiki?filter=${encodeURIComponent("type:document,properties.source_file:texts/book-01.md")}&space_id=${spaceId}&limit=1`,
       actor.apiKey,
     );
     const existing = (body as ListResponse).entities;

@@ -33,7 +33,7 @@ graph in seconds — no extraction step required.
   - `sanctified_by` — sabbath → god (2:3)
 
 The graph fits comfortably in a single `POST /ops` request (~300 ops, well
-under the 2,000-op cap) and uses only `@local` refs, so loading it is one
+under the 1000-op cap) and uses only `@local` refs, so loading it is one
 HTTP call.
 
 ## Loading
@@ -56,7 +56,7 @@ If you'd rather skip the wrapper:
 
 ```bash
 curl -X POST "$ARKE_API/ops" \
-  -H "X-API-Key: $ARKE_KEY" \
+  -H "Authorization: ApiKey $ARKE_KEY" \
   -H "Content-Type: application/json" \
   --data-binary @genesis-creation.ops.json
 ```
@@ -65,17 +65,20 @@ curl -X POST "$ARKE_API/ops" \
 
 ```bash
 # All 34 verses, with both languages
-curl "$ARKE_API/entities?type=verse&limit=50" -H "X-API-Key: $ARKE_KEY"
+curl "$ARKE_API/wiki?filter=type:verse&limit=50" \
+  -H "Authorization: ApiKey $ARKE_KEY"
 
 # The single God entity
-curl "$ARKE_API/entities?type=deity" -H "X-API-Key: $ARKE_KEY"
+curl "$ARKE_API/wiki?filter=type:deity" \
+  -H "Authorization: ApiKey $ARKE_KEY"
 
 # Every verse that mentions God (use the ULID returned by the call above)
-curl "$ARKE_API/entities/{god_ulid}/relationships?predicate=mentions" \
-  -H "X-API-Key: $ARKE_KEY"
+curl "$ARKE_API/wiki/{god_ulid}/relationships?predicate=mentions" \
+  -H "Authorization: ApiKey $ARKE_KEY"
 
 # Walk the seventh-day chain
-curl "$ARKE_API/entities?label=Day%207" -H "X-API-Key: $ARKE_KEY"
+curl "$ARKE_API/wiki?filter=label:Day%207" \
+  -H "Authorization: ApiKey $ARKE_KEY"
 ```
 
 ## Re-loading

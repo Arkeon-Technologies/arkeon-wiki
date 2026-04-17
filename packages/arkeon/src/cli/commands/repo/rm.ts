@@ -35,19 +35,29 @@ type RelationshipsResponse = {
   cursor: string | null;
 };
 
+const DOCUMENT_FILTER = "properties.subject_type:document";
+const LEGACY_DOCUMENT_FILTER = "type:document";
+
 async function findDocBySourceFile(
   apiUrl: string,
   apiKey: string,
   spaceId: string,
   sourceFile: string,
 ): Promise<string | null> {
-  const filter = `type:document,properties.source_file:${sourceFile}`;
-  const resp = await apiGet<ListResponse>(
-    apiUrl,
-    `/wiki?filter=${encodeURIComponent(filter)}&space_id=${spaceId}&limit=1`,
-    apiKey,
-  );
-  return resp.entities[0]?.id ?? null;
+  const filters = [
+    `${DOCUMENT_FILTER},properties.source_file:${sourceFile}`,
+    `${LEGACY_DOCUMENT_FILTER},properties.source_file:${sourceFile}`,
+  ];
+  for (const filter of filters) {
+    const resp = await apiGet<ListResponse>(
+      apiUrl,
+      `/wiki?filter=${encodeURIComponent(filter)}&space_id=${spaceId}&limit=1`,
+      apiKey,
+    );
+    const id = resp.entities[0]?.id;
+    if (id) return id;
+  }
+  return null;
 }
 
 /**

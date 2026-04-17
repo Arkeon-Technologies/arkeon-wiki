@@ -14,7 +14,7 @@ Expressions are comma-separated and ANDed.
 
 | Op | Meaning | Example |
 |----|---------|---------|
-| `:` | equals | `type:book` |
+| `:` | equals | `properties.subject_type:book` |
 | `!:` | not equals | `kind!:relationship` |
 | `>` | greater than | `ver>3` |
 | `>=` | gte | `created_at>=2026-01-01T00:00:00Z` |

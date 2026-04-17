@@ -94,12 +94,22 @@ const createWikiRoute = createRoute({
             .min(1)
             .max(80)
             .optional()
+            .describe("Deprecated alias for subject_type. Stored as properties.subject_type; the internal entity type remains wiki."),
+          subject_type: z
+            .string()
+            .min(1)
+            .max(80)
+            .optional()
             .describe("Semantic subject type for the page, e.g. person, concept, book, event. Stored as properties.subject_type; the internal entity type remains wiki."),
           aliases: z
             .array(z.string().min(1).max(200))
             .max(50)
             .optional()
             .describe("Alternate titles or spellings for this wiki page. Used for duplicate detection and search metadata."),
+          properties: z
+            .record(z.string(), z.any())
+            .optional()
+            .describe("Additional JSON properties to store on the wiki entity. Reserved wiki metadata keys from this request take precedence."),
           space_id: EntityIdParam
             .optional()
             .describe("Space to create the wiki in. Optional — defaults to the only space the actor can contribute to. 400 if ambiguous (multiple candidates) or none."),
@@ -162,8 +172,13 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   const label = typeof body.label === "string" ? body.label.trim() : "";
   const keywordsRaw = body.keywords;
   const short_description = body.short_description as string;
-  const subject_type = typeof body.type === "string" ? body.type.trim() : undefined;
+  const subject_type = typeof body.subject_type === "string"
+    ? body.subject_type.trim()
+    : typeof body.type === "string"
+      ? body.type.trim()
+      : undefined;
   const aliasesRaw = body.aliases;
+  const extraPropertiesRaw = body.properties;
   const space_id_input = body.space_id;
   const read_level = typeof body.read_level === "number" ? body.read_level : 1;
   const write_level = typeof body.write_level === "number" ? body.write_level : 1;
@@ -185,12 +200,22 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   if (body.type !== undefined && (!subject_type || typeof body.type !== "string")) {
     throw new ApiError(400, "invalid_request", "type must be a non-empty string when provided");
   }
+  if (body.subject_type !== undefined && (!subject_type || typeof body.subject_type !== "string")) {
+    throw new ApiError(400, "invalid_request", "subject_type must be a non-empty string when provided");
+  }
   if (aliasesRaw !== undefined && (!Array.isArray(aliasesRaw) || !aliasesRaw.every((a) => typeof a === "string" && a.trim().length > 0))) {
     throw new ApiError(400, "invalid_request", "aliases must be an array of non-empty strings when provided");
+  }
+  if (
+    extraPropertiesRaw !== undefined &&
+    (!extraPropertiesRaw || typeof extraPropertiesRaw !== "object" || Array.isArray(extraPropertiesRaw))
+  ) {
+    throw new ApiError(400, "invalid_request", "properties must be an object when provided");
   }
   const aliases = Array.isArray(aliasesRaw)
     ? [...new Set((aliasesRaw as string[]).map((a) => a.trim()).filter((a) => a.length > 0))]
     : [];
+  const extraProperties = sanitizeExtraProperties((extraPropertiesRaw as Record<string, unknown> | undefined) ?? {});
 
   // space_id is optional — fall back to the actor's single contributable space.
   const space_id =
@@ -281,6 +306,7 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
 
   const wikiId = generateUlid();
   const wikiProperties = {
+    ...extraProperties,
     label,
     ...(subject_type ? { subject_type } : {}),
     ...(aliases.length > 0 ? { aliases } : {}),
@@ -570,6 +596,22 @@ function wikiIdentityKeys(label: string, aliases: string[]): string[] {
 function identitySetsOverlap(left: string[], right: string[]): boolean {
   const leftSet = new Set(left);
   return right.some((key) => leftSet.has(key));
+}
+
+function sanitizeExtraProperties(properties: Record<string, unknown>): Record<string, unknown> {
+  const reserved = new Set([
+    "label",
+    "subject_type",
+    "aliases",
+    "keywords",
+    "short_description",
+    "content",
+    "submitted_content",
+    "status",
+  ]);
+  return Object.fromEntries(
+    Object.entries(properties).filter(([key]) => !reserved.has(key)),
+  );
 }
 
 function normalizeWikiIdentity(value: string): string {

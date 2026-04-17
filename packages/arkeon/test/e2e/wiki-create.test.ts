@@ -41,7 +41,7 @@ describe("Wiki create", () => {
       json: {
         content,
         label: "Primary Subject Wiki",
-        type: "topic",
+        subject_type: "topic",
         aliases: ["Primary Subject"],
         keywords: ["primary subject", "test wiki", "linked wiki"],
         short_description: "A test wiki that exercises entity, assign, and placeholder link types end to end.",
@@ -227,7 +227,7 @@ describe("Wiki create", () => {
         content: "A page about mimetic theory and its author.",
         label: "René Girard",
         aliases: ["Rene Girard"],
-        type: "person",
+        subject_type: "person",
         keywords: ["mimetic theory"],
         short_description: "French thinker known for mimetic theory and the scapegoat mechanism.",
         space_id: space.id,
@@ -313,7 +313,7 @@ describe("Wiki create", () => {
       json: {
         content: "Straightforward body with no typed links for this test.",
         label: "George Washington",
-        type: "person",
+        subject_type: "person",
         aliases: ["Washington"],
         keywords: ["first president", "founding father", "Washington"],
         short_description: "American Founding Father and the first president of the United States.",

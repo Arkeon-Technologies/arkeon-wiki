@@ -77,7 +77,7 @@ View or clear your space config:
 ${FILTERING_HINT}
 
 Example:
-  arkeon entities list --filter 'kind:entity,type:book,created_at>2026-01-01'
+  arkeon wiki list --filter 'kind:entity,properties.subject_type:book,created_at>2026-01-01'
 
 ## Best Practices
 

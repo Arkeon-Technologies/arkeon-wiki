@@ -181,7 +181,7 @@ async function probeSeedLoaded(
   adminKey: string,
 ): Promise<{ loaded: boolean; bookId: string | null }> {
   try {
-    const res = await fetch(`${apiUrl}/wiki?filter=${encodeURIComponent("type:book")}&limit=20`, {
+    const res = await fetch(`${apiUrl}/wiki?filter=${encodeURIComponent("properties.subject_type:book")}&limit=20`, {
       headers: { authorization: `ApiKey ${adminKey}` },
     });
     if (!res.ok) return { loaded: false, bookId: null };
@@ -195,4 +195,3 @@ async function probeSeedLoaded(
     return { loaded: false, bookId: null };
   }
 }
-

@@ -134,7 +134,7 @@ Key rules:
 
 **e. Submit:**
 ```bash
-npx arkeon ingest post-ops --data @/tmp/arkeon-connect-{spaceA}-{spaceB}.json
+npx arkeon ops post-ops --data @/tmp/arkeon-connect-{spaceA}-{spaceB}.json
 ```
 
 **f. Enrich thin entities.** When you find the same entity in two spaces but one has a richer description, update the thinner one:

@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join, relative } from "node:path";
 
-import { apiGet, apiPut } from "../../lib/api-client.js";
+import { apiGet, apiPost, apiPut } from "../../lib/api-client.js";
 import { credentials } from "../../lib/credentials.js";
 import { output } from "../../lib/output.js";
 import { requireRepoState } from "../../lib/repo-state.js";
@@ -60,7 +60,13 @@ type ListResponse = {
   cursor: string | null;
 };
 
+type CreateWikiResponse = {
+  wiki: EntityResult;
+};
+
 const TEXT_EXTENSIONS = new Set([".md", ".txt", ".tex", ".rst", ".adoc", ".org"]);
+const DOCUMENT_FILTER = "properties.subject_type:document";
+const LEGACY_DOCUMENT_FILTER = "type:document";
 
 function sha256(filePath: string): string {
   const content = readFileSync(filePath);
@@ -88,19 +94,63 @@ async function findExistingDoc(
   spaceId: string,
   sourceFile: string,
 ): Promise<{ entity_id: string; source_hash: string; ver: number } | null> {
-  const filter = `type:document,properties.source_file:${sourceFile}`;
-  const resp = await apiGet<ListResponse>(
-    apiUrl,
-    `/wiki?filter=${encodeURIComponent(filter)}&space_id=${spaceId}&limit=1`,
-    apiKey,
-  );
-  if (resp.entities.length === 0) return null;
-  const entity = resp.entities[0]!;
+  const filters = [
+    `${DOCUMENT_FILTER},properties.source_file:${sourceFile}`,
+    `${LEGACY_DOCUMENT_FILTER},properties.source_file:${sourceFile}`,
+  ];
+  let entity: EntityResult | undefined;
+  for (const filter of filters) {
+    const resp = await apiGet<ListResponse>(
+      apiUrl,
+      `/wiki?filter=${encodeURIComponent(filter)}&space_id=${spaceId}&limit=1`,
+      apiKey,
+    );
+    entity = resp.entities[0];
+    if (entity) break;
+  }
+  if (!entity) return null;
   return {
     entity_id: entity.id,
     source_hash: (entity.properties?.source_hash as string) ?? "",
     ver: entity.ver,
   };
+}
+
+function keyword(value: string): string {
+  return value.slice(0, 100);
+}
+
+function documentShortDescription(relPath: string): string {
+  return `Document registered from ${relPath}`.slice(0, 400);
+}
+
+function documentLabel(relPath: string): string {
+  return relPath.length <= 200 ? relPath : relPath.slice(-200);
+}
+
+async function createDocumentWiki(
+  apiUrl: string,
+  apiKey: string,
+  spaceId: string,
+  file: { relPath: string; hash: string; ext: string; content: string | null },
+): Promise<EntityResult> {
+  const label = documentLabel(file.relPath);
+  const fileKind = fileType(file.ext);
+  const content = file.content ?? `Binary ${fileKind} document registered from ${file.relPath}.`;
+  const created = await apiPost<CreateWikiResponse>(apiUrl, "/wiki", apiKey, {
+    label,
+    subject_type: "document",
+    keywords: [keyword(file.relPath), keyword(fileKind)],
+    short_description: documentShortDescription(file.relPath),
+    content,
+    properties: {
+      source_file: file.relPath,
+      source_hash: file.hash,
+      file_type: fileKind,
+    },
+    space_id: spaceId,
+  });
+  return created.wiki;
 }
 
 export function registerAddCommand(program: Command): void {
@@ -184,11 +234,13 @@ export function registerAddCommand(program: Command): void {
           }
         }
 
-        if (toCreate.length > 0) {
-          throw new Error(
-            "Creating new document entities is unavailable because the wiki-first API removed POST /ops. " +
-            "Existing registered documents can still be updated; new repo ingestion needs a wiki-native creation flow.",
-          );
+        // Create new documents through the wiki pipeline with repo tracking
+        // properties attached to the initial entity.
+        for (const file of toCreate) {
+          const entity = await createDocumentWiki(state.api_url, apiKey, state.space_id, file);
+          documents.push({ path: file.relPath, entity_id: entity.id, action: "added" });
+          output.progress(`  + ${file.relPath} -> ${entity.id}`);
+          addedCount++;
         }
 
         // Update modified documents via PUT /wiki/{id}

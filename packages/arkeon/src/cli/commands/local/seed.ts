@@ -5,13 +5,13 @@
  * `arkeon seed` — load the bundled Genesis knowledge graph into the
  * running stack.
  *
- * The wiki-first API removed the old /ops bulk ingestion endpoint that
- * Genesis seeding depended on. Keep the command registered so users get a
- * precise error instead of a 404 against a deleted route.
+ * Posts the bundled Genesis ops envelope to the compatibility /ops
+ * endpoint using the admin key loaded from ~/.arkeon/secrets.json.
  */
 
 import type { Command } from "commander";
 
+import { GENESIS_OPS } from "../../../generated/assets.js";
 import { config } from "../../lib/config.js";
 import {
   DEFAULT_API_PORT,
@@ -26,12 +26,21 @@ interface SeedOptions {
   force?: boolean;
 }
 
+interface OpsResponse {
+  format: "arke.ops/v1";
+  committed: boolean;
+  entities: Array<{ ref: string | null; id: string; action?: "created" }>;
+  edges: Array<{ ref: string | null; id: string }>;
+  stats: { entities: number; edges: number };
+  errors?: unknown[];
+}
+
 export function registerSeedCommand(program: Command): void {
   program
     .command("seed")
-    .description("Genesis seed is unavailable in the wiki-first API")
-    .option("--dry-run", "Accepted for backward-compatible parsing; seeding is unavailable")
-    .option("--force", "Accepted for backward-compatible parsing; seeding is unavailable")
+    .description("Load the bundled Genesis knowledge graph via POST /ops")
+    .option("--dry-run", "Validate the envelope and return planned IDs without writing")
+    .option("--force", "Re-run even if the Genesis book entity already exists")
     .action(async (opts: SeedOptions) => {
       try {
         await runSeed(opts);
@@ -72,15 +81,47 @@ async function runSeed(opts: SeedOptions): Promise<void> {
     }
   }
 
-  throw new Error(
-    "Genesis seeding is unavailable because the wiki-first API removed POST /ops. " +
-    "Seed data must be rewritten as wiki submissions before this command can run.",
+  output.progress(
+    `[arkeon] Posting Genesis envelope (${GENESIS_OPS.ops.length} ops)${opts.dryRun ? " in dry-run mode" : ""}...`,
   );
+
+  const url = `${apiUrl.replace(/\/$/, "")}/ops${opts.dryRun ? "?dry_run=true" : ""}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `ApiKey ${adminKey}`,
+    },
+    body: JSON.stringify(GENESIS_OPS),
+  });
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as
+      | { error?: { message?: string } }
+      | null;
+    throw new Error(
+      `POST ${url} failed: ${response.status} ${response.statusText} - ${body?.error?.message ?? "no detail"}`,
+    );
+  }
+
+  const result = (await response.json()) as OpsResponse;
+  const entitiesCreated = result.stats?.entities ?? result.entities?.length ?? 0;
+  const edgesCreated = result.stats?.edges ?? result.edges?.length ?? 0;
+
+  output.result({
+    operation: "seed",
+    dry_run: Boolean(opts.dryRun),
+    committed: result.committed,
+    entities_created: entitiesCreated,
+    relationships_created: edgesCreated,
+    errors: result.errors ?? [],
+    next: "arkeon wiki list --filter properties.subject_type:book",
+  });
 }
 
 async function checkGenesisBook(apiUrl: string, adminKey: string): Promise<string | null> {
   try {
-    const res = await fetch(`${apiUrl.replace(/\/$/, "")}/wiki?filter=${encodeURIComponent("type:book")}&limit=20`, {
+    const res = await fetch(`${apiUrl.replace(/\/$/, "")}/wiki?filter=${encodeURIComponent("properties.subject_type:book")}&limit=20`, {
       headers: { authorization: `ApiKey ${adminKey}` },
     });
     if (!res.ok) return null;

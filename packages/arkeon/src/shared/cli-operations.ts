@@ -364,17 +364,24 @@ export function deriveDefaultGroup(operation: OpenAPIOperation, path: string): s
   return toKebabCase(path.split("/").filter(Boolean)[0] ?? "api");
 }
 
+const RESOURCE_NOUNS =
+  "(entities|entity|commons|relationships|relationship|comments|comment|actors|actor|activity|authenticated|wikis|wiki|ops)";
+
+export function normalizeActionNoun(noun: string): string {
+  return noun
+    .replace(new RegExp(`^${RESOURCE_NOUNS}-?`), "")
+    .replace(new RegExp(`-?${RESOURCE_NOUNS}$`), "");
+}
+
 export function deriveDefaultAction(operationId: string, method: string, path: string): string {
   const baseSegment = path.split("/").filter(Boolean).at(-1) ?? "run";
   const verbMatch = operationId.match(
-    /^(list|get|create|update|delete|count|transfer|rename|complete|search|revoke)(.+)$/,
+    /^(bulkDelete|bulkGet|list|get|create|update|delete|count|transfer|rename|complete|search|revoke|change|grant|merge)(.+)$/,
   );
   if (verbMatch) {
-    const verb = toKebabCase(verbMatch[1]);
-    const noun = toKebabCase(verbMatch[2]).replace(
-      /^(entity|entities|commons|relationship|relationships|comment|comments|actor|activity|authenticated)-?/,
-      "",
-    );
+    const rawVerb = verbMatch[1];
+    const verb = toKebabCase(rawVerb);
+    const noun = normalizeActionNoun(toKebabCase(verbMatch[2]));
     if (!noun) {
       return verb;
     }
@@ -387,6 +394,47 @@ export function deriveDefaultAction(operationId: string, method: string, path: s
     return "get";
   }
   return `${method.toLowerCase()}-${toKebabCase(baseSegment.replace(/[{}]/g, ""))}`;
+}
+
+export function dedupeOperationActions(operations: GeneratedOperation[]): void {
+  const byCommand = new Map<string, GeneratedOperation[]>();
+
+  for (const operation of operations) {
+    const key = `${operation.group}:${operation.action}`;
+    byCommand.set(key, [...(byCommand.get(key) ?? []), operation]);
+  }
+
+  for (const duplicates of byCommand.values()) {
+    if (duplicates.length < 2) {
+      continue;
+    }
+
+    const used = new Set(
+      operations
+        .filter((operation) => operation.group === duplicates[0]?.group && !duplicates.includes(operation))
+        .map((operation) => operation.action),
+    );
+
+    for (const operation of duplicates) {
+      let candidate = toKebabCase(operation.operationId);
+      if (candidate.startsWith(`${operation.group}-`)) {
+        candidate = candidate.slice(operation.group.length + 1);
+      }
+      if (!candidate) {
+        candidate = `${operation.method.toLowerCase()}-${toKebabCase(operation.path.replace(/[/:{}]+/g, "-"))}`;
+      }
+
+      let unique = candidate;
+      let suffix = 2;
+      while (used.has(unique)) {
+        unique = `${candidate}-${suffix}`;
+        suffix += 1;
+      }
+
+      operation.action = unique;
+      used.add(unique);
+    }
+  }
 }
 
 export function buildParameters(spec: OpenAPISpec, pathItem: PathItem, operation: OpenAPIOperation) {
@@ -463,6 +511,7 @@ export function parseOperations(spec: OpenAPISpec): GeneratedOperation[] {
     }
   }
 
+  dedupeOperationActions(operations);
   operations.sort((a, b) => `${a.group}:${a.action}`.localeCompare(`${b.group}:${b.action}`));
   return operations;
 }
