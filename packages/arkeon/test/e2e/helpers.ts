@@ -130,13 +130,13 @@ export async function createWiki(
     json: {
       label,
       keywords: [label],
-      short_description: label,
+      short_description: `${label} test wiki page.`,
       content,
       ...extra,
     },
   });
   expect(response.status).toBe(201);
-  return (body as { entity: Record<string, any> }).entity;
+  return (body as { wiki: Record<string, any> }).wiki;
 }
 
 /**

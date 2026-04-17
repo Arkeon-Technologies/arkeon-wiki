@@ -44,7 +44,7 @@ async function findDocBySourceFile(
   const filter = `type:document,properties.source_file:${sourceFile}`;
   const resp = await apiGet<ListResponse>(
     apiUrl,
-    `/entities?filter=${encodeURIComponent(filter)}&space_id=${spaceId}&limit=1`,
+    `/wiki?filter=${encodeURIComponent(filter)}&space_id=${spaceId}&limit=1`,
     apiKey,
   );
   return resp.entities[0]?.id ?? null;
@@ -64,7 +64,7 @@ async function hasMultipleSources(
 ): Promise<boolean> {
   const resp = await apiGet<RelationshipsResponse>(
     apiUrl,
-    `/entities/${entityId}/relationships?direction=out&predicate=extracted_from&limit=2`,
+    `/wiki/${entityId}/relationships?direction=out&predicate=extracted_from&limit=2`,
     apiKey,
   );
   return resp.relationships.length > 1;
@@ -83,18 +83,18 @@ async function deleteDocumentAndChildren(
     const cursorParam = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
     const resp: RelationshipsResponse = await apiGet<RelationshipsResponse>(
       apiUrl,
-      `/entities/${entityId}/relationships?direction=in&predicate=extracted_from&limit=200${cursorParam}`,
+      `/wiki/${entityId}/relationships?direction=in&predicate=extracted_from&limit=200${cursorParam}`,
       apiKey,
     );
 
     for (const rel of resp.relationships) {
       const multiSource = await hasMultipleSources(apiUrl, apiKey, rel.source_id);
       if (multiSource) {
-        // Entity has other sources — just sever the edge, keep the entity
-        await apiDelete(apiUrl, `/relationships/${rel.id}`, apiKey);
-        preserved++;
+        throw new Error(
+          "Cannot remove a document with shared extracted children because direct relationship deletion was removed in the wiki-first API.",
+        );
       } else {
-        await apiDelete(apiUrl, `/entities/${rel.source_id}`, apiKey);
+        await apiDelete(apiUrl, `/wiki/${rel.source_id}`, apiKey);
         cascaded++;
       }
     }
@@ -103,7 +103,7 @@ async function deleteDocumentAndChildren(
     if (!cursor) break;
   }
 
-  await apiDelete(apiUrl, `/entities/${entityId}`, apiKey);
+  await apiDelete(apiUrl, `/wiki/${entityId}`, apiKey);
   return { cascaded, preserved };
 }
 
@@ -119,7 +119,7 @@ async function countExtractedChildren(
     const cursorParam = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
     const resp: RelationshipsResponse = await apiGet<RelationshipsResponse>(
       apiUrl,
-      `/entities/${entityId}/relationships?direction=in&predicate=extracted_from&limit=200${cursorParam}`,
+      `/wiki/${entityId}/relationships?direction=in&predicate=extracted_from&limit=200${cursorParam}`,
       apiKey,
     );
     for (const rel of resp.relationships) {

@@ -45,48 +45,33 @@ The route index (GET /help) shows each route's auth requirement.
 
 ## Your First Workflow
 
-1. Create an entity
-   POST /entities
+1. Create a wiki
+   POST /wiki
    {
+     "label": "Hello",
      "type": "note",
-     "properties": { "title": "Hello", "body": "My first entity." }
+     "keywords": ["hello"],
+     "short_description": "A short description for search previews.",
+     "content": "My first wiki."
    }
-2. List entities
-   GET /entities
+2. List wikis/entities
+   GET /wiki
 
-3. Create a relationship
-   POST /entities/{sourceId}/relationships
-   {
-     "predicate": "references",
-     "target_id": "<entity B>",
-     "properties": { "label": "references" }
-   }
+3. Create relationships
+   Add typed [[links]] to wiki content. Relationships are materialized when
+   the wiki publishes; there is no direct relationship creation endpoint.
 
 4. Search
    GET /search?q=hello
 
 ## Working Within a Space
 
-Spaces are organizational containers with their own access controls. You can
-add an entity to a space and grant permissions in the same call that creates it:
-
-   POST /entities
-   {
-     "type": "note",
-     "properties": { "title": "Hello" },
-     "space_id": "<space ULID>",
-     "permissions": [
-       { "grantee_type": "actor", "grantee_id": "<actor ULID>", "role": "editor" }
-     ]
-   }
-
-This is atomic — if any part fails (e.g. you lack contributor access on the
-space), nothing is created. The same space_id and permissions fields work on
-relationship creation (POST /entities/{id}/relationships).
+Spaces are organizational containers with their own access controls. Pass
+space_id to POST /wiki to publish into a specific space.
 
 You can still add entities to spaces and grant permissions separately:
    POST /spaces/{id}/entities          — add existing entity to space
-   POST /entities/{id}/permissions     — grant permissions on existing entity
+   POST /wiki/{id}/permissions         — grant permissions on existing entity
 
 ## Filtering
 
@@ -121,7 +106,7 @@ available as a command. Use --help on any command for full options.
 Install:    npm install @arkeon-technologies/sdk
 Usage:      import { ArkeonClient } from '@arkeon-technologies/sdk';
             const client = new ArkeonClient();
-            await client.get('/entities');
+            await client.get('/wiki');
 
 The SDK reads ARKE_API_URL and ARKE_API_KEY from the environment and handles
 authentication, pagination, and error handling automatically.
@@ -129,7 +114,7 @@ authentication, pagination, and error handling automatically.
 ## Getting More Help
 
 GET /help                         Full route index with auth & summary
-GET /help/GET/entities/{id}       Detailed docs for any specific route
+GET /help/GET/wiki/{id}           Detailed docs for any specific route
 GET /help/guide/wiki              Authoring wikis with typed links
 GET /help/guide/explorer          Explorer graph + screenshot server docs
 GET /llms.txt                     Machine-readable route index
@@ -288,9 +273,10 @@ ULIDs.
 POST /wiki
 {
   "label": "Photosynthesis",
+  "type": "concept",
+  "aliases": ["Plant photosynthesis"],
   "keywords": ["photosynthesis", "light reaction", "calvin cycle"],
   "short_description": "Process by which plants convert light energy into chemical energy.",
-  "primary_entities": ["01HXYZ..."],        // the entity this wiki is about
   "content": "...see below..."
 }
 
@@ -318,7 +304,6 @@ What happens:
   - "Chlorophyll" becomes a non-queued placeholder — inert stub.
   - "ATP Synthase" is queued for the background drafter.
   - Every link becomes a \`references\` relationship from this wiki.
-  - The primary_entity becomes an \`about\` relationship.
 
 ## space_id
 
@@ -333,7 +318,7 @@ On success (201):
   wiki                     The published wiki entity.
   placeholders             IDs of placeholder entities minted this request,
                            each with status 'placeholder' or 'assigned'.
-  relationships_created    Count of \`about\`/\`references\` edges created.
+  relationships_created    Count of \`references\` edges created.
   resolve_warnings         Present only if any resolve: link soft-degraded.
                            Each warning: { label, reason }.
                            reason is "llm_not_configured" or "no_match".
@@ -351,8 +336,8 @@ in words.
                              \`details\` lists each offending link with a
                              reason and correct syntax.
 404 not_found                An [[entity:id]] link pointed at a non-existent
-                             or invisible entity, or a primary_entity does.
-409 wiki_exists              A wiki with overlapping primary_entities
+                             or invisible entity.
+409 wiki_exists              A wiki with the same normalized label or alias
                              already exists in the target space. Response
                              includes \`existing_wiki_id\` — update it,
                              don't duplicate.
@@ -364,8 +349,8 @@ in words.
 ## See also
 
 POST /resolve                       Standalone subject → candidate-matches primitive
-GET  /entities/{id}                 Read the published wiki as an entity
-GET  /entities/{id}/relationships   See the materialized edges
+GET  /wiki/{id}                     Read the published wiki as an entity
+GET  /wiki/{id}/relationships       See the materialized edges
 `;
 
 const EXPLORER_GUIDE = `# Arkeon — Explorer & Visual Inspection

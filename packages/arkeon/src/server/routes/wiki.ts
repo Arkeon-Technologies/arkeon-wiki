@@ -6,7 +6,7 @@
  *
  * Two-stage processing:
  *   Stage 1 (sync): Validate schema/links, wiki-exists check, mint
- *     placeholders for draft: links, persist wiki as draft.
+ *     placeholders for placeholder:/assign: links, persist wiki as draft.
  *   Stage 2 (sync): Resolve resolve: links via Meilisearch + LLM,
  *     create relationships with span_text, promote to published.
  */
@@ -47,7 +47,7 @@ const WIKI_CONTENT_DESCRIPTION = [
   "",
   "Labels must be double-quoted. Description is optional for resolve/placeholder/assign but recommended — it gives the resolver and future drafters context. Entity IDs are unquoted ULIDs.",
   "",
-  "Every parsed link materializes as a `references` relationship from the published wiki to the target (or to a newly-minted placeholder). `primary_entities` materialize as `about` relationships.",
+  "Every parsed link materializes as a `references` relationship from the published wiki to the target (or to a newly-minted placeholder). The wiki page itself is the canonical graph entity for its subject.",
   "",
   "Choosing between resolve / placeholder / assign: use `resolve` when the thing probably already exists and you want the server to find it; use `placeholder` when you want a stub but don't want anything auto-drafted; use `assign` to hand off actual drafting to a background worker.",
   "",
@@ -66,7 +66,7 @@ const createWikiRoute = createRoute({
     "Requires contributor role or above on the target space",
     "All [[entity:ULID]] links must reference existing visible entities — 404 otherwise",
     "[[resolve:...]] links soft-degrade to placeholders on LLM miss / no-match — the wiki still publishes with resolve_warnings",
-    "Returns 409 if a wiki with overlapping primary_entities already exists in the space",
+    "Returns 409 if a wiki with the same normalized label or alias already exists in the space",
     "If space_id is omitted, falls back to the only space the actor can contribute to; 400 if ambiguous or none",
   ],
   request: {
@@ -89,10 +89,17 @@ const createWikiRoute = createRoute({
             .min(10)
             .max(400)
             .describe("One to two sentences of framing, used in search previews and multi-choice disambiguation"),
-          primary_entities: z
-            .array(EntityIdParam)
+          type: z
+            .string()
             .min(1)
-            .describe("Entity IDs this wiki is about. A wiki with overlapping primary_entities in the same space returns 409."),
+            .max(80)
+            .optional()
+            .describe("Semantic subject type for the page, e.g. person, concept, book, event. Stored as properties.subject_type; the internal entity type remains wiki."),
+          aliases: z
+            .array(z.string().min(1).max(200))
+            .max(50)
+            .optional()
+            .describe("Alternate titles or spellings for this wiki page. Used for duplicate detection and search metadata."),
           space_id: EntityIdParam
             .optional()
             .describe("Space to create the wiki in. Optional — defaults to the only space the actor can contribute to. 400 if ambiguous (multiple candidates) or none."),
@@ -152,10 +159,11 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   const now = new Date().toISOString();
 
   const content = body.content as string;
-  const label = body.label as string;
+  const label = typeof body.label === "string" ? body.label.trim() : "";
   const keywordsRaw = body.keywords;
   const short_description = body.short_description as string;
-  const primary_entities = body.primary_entities as string[];
+  const subject_type = typeof body.type === "string" ? body.type.trim() : undefined;
+  const aliasesRaw = body.aliases;
   const space_id_input = body.space_id;
   const read_level = typeof body.read_level === "number" ? body.read_level : 1;
   const write_level = typeof body.write_level === "number" ? body.write_level : 1;
@@ -164,7 +172,7 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   if (!content || typeof content !== "string") {
     throw new ApiError(400, "invalid_request", "content is required and must be a string");
   }
-  if (!label || typeof label !== "string") {
+  if (!label) {
     throw new ApiError(400, "invalid_request", "label is required and must be a string");
   }
   if (!Array.isArray(keywordsRaw) || keywordsRaw.length === 0 || !keywordsRaw.every((k) => typeof k === "string" && k.trim().length > 0)) {
@@ -174,9 +182,15 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   if (!short_description || typeof short_description !== "string" || short_description.trim().length < 10) {
     throw new ApiError(400, "invalid_request", "short_description is required and must be at least 10 characters");
   }
-  if (!Array.isArray(primary_entities) || primary_entities.length === 0) {
-    throw new ApiError(400, "invalid_request", "primary_entities must be a non-empty array of entity IDs");
+  if (body.type !== undefined && (!subject_type || typeof body.type !== "string")) {
+    throw new ApiError(400, "invalid_request", "type must be a non-empty string when provided");
   }
+  if (aliasesRaw !== undefined && (!Array.isArray(aliasesRaw) || !aliasesRaw.every((a) => typeof a === "string" && a.trim().length > 0))) {
+    throw new ApiError(400, "invalid_request", "aliases must be an array of non-empty strings when provided");
+  }
+  const aliases = Array.isArray(aliasesRaw)
+    ? [...new Set((aliasesRaw as string[]).map((a) => a.trim()).filter((a) => a.length > 0))]
+    : [];
 
   // space_id is optional — fall back to the actor's single contributable space.
   const space_id =
@@ -213,20 +227,6 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
       canonicalEntityIds.set(link.id!, canonicalId);
       if (canonicalId !== link.id) {
         replacements.push({ offset: link.offset, length: link.length, value: `[[entity:${canonicalId}]]` });
-      }
-    }
-  }
-
-  // --- Validate primary_entities exist ---
-  {
-    const found = await withTransaction(async (tx) => {
-      for (const q of setActorContext(tx, actor)) await q;
-      return tx`SELECT id FROM entities WHERE id = ANY(${primary_entities}) AND kind = 'entity'`;
-    });
-    const foundIds = new Set(found.map((r) => String(r.id)));
-    for (const pe of primary_entities) {
-      if (!foundIds.has(pe)) {
-        throw new ApiError(404, "not_found", `Primary entity ${pe} not found or not visible`);
       }
     }
   }
@@ -282,11 +282,12 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   const wikiId = generateUlid();
   const wikiProperties = {
     label,
+    ...(subject_type ? { subject_type } : {}),
+    ...(aliases.length > 0 ? { aliases } : {}),
     keywords,
     short_description: short_description.trim(),
     content,
     submitted_content: content,
-    primary_entities,
     status: "draft",
   };
 
@@ -294,27 +295,28 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   await withTransaction(async (tx) => {
     for (const q of setActorContext(tx, actor)) await q;
 
-    // Serialize overlapping wiki submissions. The route rejects any primary
-    // entity overlap, so lock each primary entity in sorted order.
-    for (const primaryEntityId of canonicalLockEntityIds(primary_entities)) {
-      await tx`SELECT pg_advisory_xact_lock(hashtext(${`${space_id}:${primaryEntityId}`}))`;
+    const identityKeys = wikiIdentityKeys(label, aliases);
+    for (const identityKey of identityKeys) {
+      await tx`SELECT pg_advisory_xact_lock(hashtext(${`${space_id}:wiki:${identityKey}`}))`;
     }
 
     const existing = await tx`
-      SELECT e.id FROM entities e
+      SELECT e.id, e.properties FROM entities e
       JOIN space_entities se ON se.entity_id = e.id
       WHERE se.space_id = ${space_id}
         AND e.type = 'wiki'
         AND e.kind = 'entity'
-        AND EXISTS (
-          SELECT 1 FROM jsonb_array_elements_text(e.properties->'primary_entities') AS pe
-          WHERE pe = ANY(${primary_entities})
-        )
-      LIMIT 1
     `;
-    if (existing.length > 0) {
-      throw new ApiError(409, "wiki_exists", `A wiki with overlapping primary entities already exists`, {
-        existing_wiki_id: String(existing[0]!.id),
+    const conflictingWiki = existing.find((row) => {
+      const props = (row.properties as Record<string, unknown>) ?? {};
+      const existingAliases = Array.isArray(props.aliases)
+        ? props.aliases.filter((a): a is string => typeof a === "string")
+        : [];
+      return identitySetsOverlap(identityKeys, wikiIdentityKeys(String(props.label ?? ""), existingAliases));
+    });
+    if (conflictingWiki) {
+      throw new ApiError(409, "wiki_exists", `A wiki with this label or alias already exists`, {
+        existing_wiki_id: String(conflictingWiki.id),
       });
     }
 
@@ -387,7 +389,7 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   // --- Stage 2: Resolve links and create relationships ---
 
   // Collect all links that need relationships:
-  //   - entity: links → direct reference
+  //   - entity: links -> direct reference
   //   - resolved resolve: links → matched entity
   //   - unresolved resolve: links → mint placeholder (unqueued)
   interface LinkTarget {
@@ -397,11 +399,6 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   }
 
   const targets: LinkTarget[] = [];
-
-  // Primary entities get "about" relationships
-  for (const pe of primary_entities) {
-    targets.push({ targetId: pe, predicate: "about", spanText: "" });
-  }
 
   // Entity links get "references" relationships
   for (const link of entityLinks) {
@@ -566,8 +563,22 @@ function applyLinkReplacements(
   return rewritten;
 }
 
-function canonicalLockEntityIds(ids: string[]): string[] {
-  return [...new Set(ids)].sort();
+function wikiIdentityKeys(label: string, aliases: string[]): string[] {
+  return [...new Set([label, ...aliases].map(normalizeWikiIdentity).filter(Boolean))].sort();
+}
+
+function identitySetsOverlap(left: string[], right: string[]): boolean {
+  const leftSet = new Set(left);
+  return right.some((key) => leftSet.has(key));
+}
+
+function normalizeWikiIdentity(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
 async function resolveVisibleEntityId(

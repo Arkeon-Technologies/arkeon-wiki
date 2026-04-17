@@ -116,7 +116,7 @@ export async function startApi(config: ArkeonApiConfig = {}): Promise<ArkeonApi>
 
   // TODO(phase-2): Start wiki background processors here:
   //   - Draft worker: polls wiki_draft_queue, calls POST /wiki with depth+1
-  //   - Dedup poller: watches published wikis, finds overlapping primary_entities, dispatches edits
+  //   - Dedup poller: watches published wikis, finds duplicate labels/aliases, dispatches edits
   // Pattern: use setInterval like retention.ts, or a dedicated poller
 
   const address = server.address() as AddressInfo;

@@ -7,8 +7,8 @@ import { ApiError } from "./errors";
 import type { SqlClient } from "./sql";
 
 export const InlinePermissionGrant = z.object({
-  grantee_type: z.enum(["actor", "group"]).describe("Type of grantee"),
-  grantee_id: z.string().describe("Actor or group ULID"),
+  grantee_type: z.enum(["actor"]).describe("Type of grantee"),
+  grantee_id: z.string().describe("Actor ULID"),
   role: z.enum(["admin", "editor"]).describe("Permission role to grant"),
 });
 
@@ -66,8 +66,8 @@ export type PermissionGrant = {
  */
 export function validatePermissionGrant(grant: Record<string, unknown>, index?: number): PermissionGrant {
   const prefix = index !== undefined ? `permissions[${index}]: ` : "";
-  if (typeof grant.grantee_type !== "string" || !["actor", "group"].includes(grant.grantee_type)) {
-    throw new ApiError(400, "invalid_body", `${prefix}grantee_type must be "actor" or "group"`);
+  if (typeof grant.grantee_type !== "string" || grant.grantee_type !== "actor") {
+    throw new ApiError(400, "invalid_body", `${prefix}grantee_type must be "actor"`);
   }
   if (typeof grant.grantee_id !== "string" || !grant.grantee_id) {
     throw new ApiError(400, "invalid_body", `${prefix}missing grantee_id`);

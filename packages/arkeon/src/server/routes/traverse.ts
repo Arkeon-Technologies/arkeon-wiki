@@ -41,8 +41,8 @@ const traverseRoute = createRoute({
   ].join("\n"),
   "x-arke-auth": "optional",
   "x-arke-related": [
-    "GET /entities/{id}",
-    "GET /entities/{id}/relationships",
+    "GET /wiki/{id}",
+    "GET /wiki/{id}/relationships",
     "GET /search",
   ],
   "x-arke-rules": [
@@ -160,11 +160,11 @@ const graphDataRoute = createRoute({
     "Returns lightweight node and edge data suitable for rendering large graphs.",
     "Nodes include only id, label, type, and space memberships.",
     "Edges include only id, source_id, target_id, and predicate.",
-    "Full entity details should be loaded on-demand via GET /entities/{id}.",
+    "Full entity details should be loaded on-demand via GET /wiki/{id}.",
   ].join("\n"),
   "x-arke-auth": "optional",
   "x-arke-related": [
-    "GET /entities/{id}",
+    "GET /wiki/{id}",
     "GET /graph/traverse",
   ],
   "x-arke-rules": [

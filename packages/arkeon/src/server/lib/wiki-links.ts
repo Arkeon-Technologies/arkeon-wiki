@@ -26,9 +26,9 @@ export interface ParsedLink {
   length: number;
   /** For entity: links — the entity ID */
   id?: string;
-  /** For resolve/draft/gap: links — the label */
+  /** For resolve/placeholder/assign links — the label */
   label?: string;
-  /** For resolve/draft/gap: links — optional description */
+  /** For resolve/placeholder/assign links — optional description */
   description?: string;
   /** Surrounding prose context */
   spanText: string;
@@ -60,8 +60,8 @@ const ENTITY_ID_RE = /^[A-Za-z0-9_-]+$/;
 /**
  * Parse all typed links from wiki markdown content.
  *
- * When depth >= maxDepth, draft: links are promoted to gap: links
- * so no new placeholders are created.
+ * When depth >= maxDepth, assign: links are demoted to placeholder: links
+ * so no new draft work is queued.
  */
 export function parseWikiLinks(
   content: string,
@@ -191,4 +191,4 @@ export function extractSpanText(
   return content.slice(start, end);
 }
 
-// TODO(phase-2): draft worker processes queued placeholders created from draft: links
+// TODO(phase-2): draft worker processes queued placeholders created from assign: links

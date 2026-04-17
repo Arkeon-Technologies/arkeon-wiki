@@ -276,9 +276,9 @@ export const GraphDataResponseSchema = z
 
 export const ExpandedEntitySchema = EntitySchema.extend({
   _relationships: z.array(RelationshipSummarySchema)
-    .describe("Relationship summaries with counterpart labels. Capped by rel_limit — use GET /entities/{id}/relationships for the full set."),
+    .describe("Relationship summaries with counterpart labels. Capped by rel_limit — use GET /wiki/{id}/relationships for the full set."),
   _relationships_truncated: z.boolean()
-    .describe("True if more relationships exist than were returned. Use GET /entities/{id}/relationships to paginate through all."),
+    .describe("True if more relationships exist than were returned. Use GET /wiki/{id}/relationships to paginate through all."),
 }).openapi("ExpandedEntity");
 
 export const FilterQuery = z.object({

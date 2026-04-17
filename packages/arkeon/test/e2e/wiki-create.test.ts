@@ -22,21 +22,17 @@ describe("Wiki create", () => {
     });
   });
 
-  test("publishes canonical content and creates relationships for entity, draft, and gap links", async () => {
+  test("publishes canonical content and creates relationships for entity, placeholder, and assign links", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("wiki-space"));
-    const primary = await createEntity(actor.apiKey, "topic", {
-      label: uniqueName("wiki-primary"),
-      description: "Primary wiki subject",
-    }, { space_id: space.id });
     const referenced = await createEntity(actor.apiKey, "person", {
       label: uniqueName("wiki-ref"),
       description: "Known referenced person",
     }, { space_id: space.id });
 
     const content = [
-      `This wiki is about the primary subject and cites [[entity:${referenced.id}]] in context.`,
-      `It promises a future page for [[draft:"Draft Concept"|"A concept the author intends to expand"]].`,
-      `It also marks an open gap for [[gap:"Gap Concept"|"A concept nobody committed to draft"]].`,
+      `This wiki cites [[entity:${referenced.id}]] in context.`,
+      `It promises a future page for [[assign:"Assigned Concept"|"A concept the author intends to expand"]].`,
+      `It also marks an open placeholder for [[placeholder:"Placeholder Concept"|"A concept nobody committed to draft"]].`,
     ].join("\n\n");
 
     const { response, body } = await jsonRequest("/wiki", {
@@ -45,9 +41,10 @@ describe("Wiki create", () => {
       json: {
         content,
         label: "Primary Subject Wiki",
+        type: "topic",
+        aliases: ["Primary Subject"],
         keywords: ["primary subject", "test wiki", "linked wiki"],
-        short_description: "A test wiki that exercises entity, draft, and gap link types end to end.",
-        primary_entities: [primary.id],
+        short_description: "A test wiki that exercises entity, assign, and placeholder link types end to end.",
         space_id: space.id,
       },
     });
@@ -59,22 +56,24 @@ describe("Wiki create", () => {
     expect(wiki.properties.status).toBe("published");
     expect(wiki.properties.submitted_content).toBe(content);
     expect(wiki.properties.label).toBe("Primary Subject Wiki");
+    expect(wiki.properties.subject_type).toBe("topic");
+    expect(wiki.properties.aliases).toEqual(["Primary Subject"]);
     expect(wiki.properties.keywords).toEqual(["primary subject", "test wiki", "linked wiki"]);
     expect(wiki.properties.short_description).toContain("test wiki");
-    expect(created.relationships_created).toBe(4);
+    expect(created.relationships_created).toBe(3);
 
-    const draft = created.placeholders.find((p: any) => p.label === "Draft Concept");
-    const gap = created.placeholders.find((p: any) => p.label === "Gap Concept");
-    expect(draft).toBeTruthy();
-    expect(draft.status).toBe("draft");
-    expect(gap).toBeTruthy();
-    expect(gap.status).toBe("gap");
+    const assigned = created.placeholders.find((p: any) => p.label === "Assigned Concept");
+    const placeholder = created.placeholders.find((p: any) => p.label === "Placeholder Concept");
+    expect(assigned).toBeTruthy();
+    expect(assigned.status).toBe("assigned");
+    expect(placeholder).toBeTruthy();
+    expect(placeholder.status).toBe("placeholder");
 
     expect(wiki.properties.content).toContain(`[[entity:${referenced.id}]]`);
-    expect(wiki.properties.content).toContain(`[[entity:${draft.id}]]`);
-    expect(wiki.properties.content).toContain(`[[entity:${gap.id}]]`);
-    expect(wiki.properties.content).not.toContain("[[draft:");
-    expect(wiki.properties.content).not.toContain("[[gap:");
+    expect(wiki.properties.content).toContain(`[[entity:${assigned.id}]]`);
+    expect(wiki.properties.content).toContain(`[[entity:${placeholder.id}]]`);
+    expect(wiki.properties.content).not.toContain("[[assign:");
+    expect(wiki.properties.content).not.toContain("[[placeholder:");
 
     const { response: relResponse, body: relBody } = await getJson(
       `/wiki/${wiki.id}/relationships?direction=out&limit=20`,
@@ -82,23 +81,19 @@ describe("Wiki create", () => {
     );
     expect(relResponse.status).toBe(200);
     const rels = (relBody as any).relationships;
-    expect(rels.some((r: any) => r.predicate === "about" && r.target_id === primary.id)).toBe(true);
     expect(rels.some((r: any) => r.predicate === "references" && r.target_id === referenced.id)).toBe(true);
 
-    const draftRel = rels.find((r: any) => r.target_id === draft.id);
-    expect(draftRel).toBeTruthy();
-    expect(draftRel.properties.span_text).toContain("future page");
+    const assignRel = rels.find((r: any) => r.target_id === assigned.id);
+    expect(assignRel).toBeTruthy();
+    expect(assignRel.properties.span_text).toContain("future page");
 
-    const gapRel = rels.find((r: any) => r.target_id === gap.id);
-    expect(gapRel).toBeTruthy();
-    expect(gapRel.properties.span_text).toContain("open gap");
+    const placeholderRel = rels.find((r: any) => r.target_id === placeholder.id);
+    expect(placeholderRel).toBeTruthy();
+    expect(placeholderRel.properties.span_text).toContain("open placeholder");
   });
 
   test("rejects malformed bare wiki links", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("wiki-bad-space"));
-    const primary = await createEntity(actor.apiKey, "topic", {
-      label: uniqueName("wiki-bad-primary"),
-    }, { space_id: space.id });
 
     const { response, body } = await jsonRequest("/wiki", {
       method: "POST",
@@ -108,7 +103,6 @@ describe("Wiki create", () => {
         label: "Bad Wiki",
         keywords: ["bad wiki"],
         short_description: "A wiki that should not pass validation because of a bare link.",
-        primary_entities: [primary.id],
         space_id: space.id,
       },
     });
@@ -118,15 +112,11 @@ describe("Wiki create", () => {
     expect((body as any).error.details.links[0].raw).toBe("[[Bare Link]]");
   });
 
-  test("depth limit turns new draft and resolve targets into non-queued gap placeholders", async () => {
+  test("depth limit turns assign targets into non-queued placeholders", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("wiki-depth-space"));
-    const primary = await createEntity(actor.apiKey, "topic", {
-      label: uniqueName("wiki-depth-primary"),
-    }, { space_id: space.id });
 
     const content = [
-      `Depth-limited draft [[draft:"Depth Draft ${uniqueName("x")}"|"should become gap"]].`,
-      `Depth-limited resolve [[resolve:"Depth Resolve ${uniqueName("x")}"|"should become gap if no match"]].`,
+      `Depth-limited assign [[assign:"Depth Assign ${uniqueName("x")}"|"should become placeholder"]].`,
     ].join("\n");
 
     const { response, body } = await jsonRequest("/wiki", {
@@ -135,9 +125,8 @@ describe("Wiki create", () => {
       json: {
         content,
         label: "Depth Limit Wiki",
-        keywords: ["depth test", "gap promotion"],
-        short_description: "A wiki at max depth whose draft and resolve links should become gaps.",
-        primary_entities: [primary.id],
+        keywords: ["depth test", "placeholder promotion"],
+        short_description: "A wiki at max depth whose assign links should become placeholders.",
         space_id: space.id,
         depth: 2,
       },
@@ -145,11 +134,10 @@ describe("Wiki create", () => {
 
     expect(response.status).toBe(201);
     const created = body as any;
-    expect(created.placeholders).toHaveLength(2);
-    expect(created.placeholders.every((p: any) => p.status === "gap")).toBe(true);
-    expect(created.wiki.properties.content).not.toContain("[[draft:");
-    expect(created.wiki.properties.content).not.toContain("[[resolve:");
-    expect(created.wiki.properties.content.match(/\[\[entity:/g)).toHaveLength(2);
+    expect(created.placeholders).toHaveLength(1);
+    expect(created.placeholders.every((p: any) => p.status === "placeholder")).toBe(true);
+    expect(created.wiki.properties.content).not.toContain("[[assign:");
+    expect(created.wiki.properties.content.match(/\[\[entity:/g)).toHaveLength(1);
 
     for (const placeholder of created.placeholders) {
       const { response: phResponse, body: phBody } = await getJson(
@@ -158,15 +146,12 @@ describe("Wiki create", () => {
       );
       expect(phResponse.status).toBe(200);
       expect((phBody as any).entity.type).toBe("placeholder");
-      expect((phBody as any).entity.properties.status).toBe("gap");
+      expect((phBody as any).entity.properties.status).toBe("placeholder");
     }
   });
 
   test("entity links to merged IDs are accepted and rewritten to canonical targets", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("wiki-redirect-space"));
-    const primary = await createEntity(actor.apiKey, "topic", {
-      label: uniqueName("wiki-redirect-primary"),
-    }, { space_id: space.id });
     const target = await createEntity(actor.apiKey, "person", {
       label: uniqueName("wiki-redirect-target"),
     }, { space_id: space.id });
@@ -193,7 +178,6 @@ describe("Wiki create", () => {
         label: "Redirect Wiki",
         keywords: ["redirect test", "merge follow"],
         short_description: "A wiki that references a merged entity to verify redirect canonicalization.",
-        primary_entities: [primary.id],
         space_id: space.id,
       },
     });
@@ -210,18 +194,14 @@ describe("Wiki create", () => {
     expect((relBody as any).relationships.some((r: any) => r.target_id === target.id)).toBe(true);
   });
 
-  test("concurrent submissions with overlapping primary entities return one winner", async () => {
+  test("concurrent submissions with the same label return one winner", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("wiki-concurrent-space"));
-    const primary = await createEntity(actor.apiKey, "topic", {
-      label: uniqueName("wiki-concurrent-primary"),
-    }, { space_id: space.id });
 
     const payload = {
       content: "Concurrent wiki with no secondary links.",
       label: "Concurrent Wiki",
       keywords: ["concurrency test"],
-      short_description: "A wiki used to verify concurrent submissions are serialized by primary entity.",
-      primary_entities: [primary.id],
+      short_description: "A wiki used to verify concurrent submissions are serialized by label.",
       space_id: space.id,
     };
 
@@ -237,11 +217,43 @@ describe("Wiki create", () => {
     expect((conflict?.body as any).error.details.existing_wiki_id).toBeTruthy();
   });
 
+  test("duplicate detection matches aliases and folded accents", async () => {
+    const space = await createSpace(actor.apiKey, uniqueName("wiki-alias-space"));
+
+    const first = await jsonRequest("/wiki", {
+      method: "POST",
+      apiKey: actor.apiKey,
+      json: {
+        content: "A page about mimetic theory and its author.",
+        label: "René Girard",
+        aliases: ["Rene Girard"],
+        type: "person",
+        keywords: ["mimetic theory"],
+        short_description: "French thinker known for mimetic theory and the scapegoat mechanism.",
+        space_id: space.id,
+      },
+    });
+    expect(first.response.status).toBe(201);
+
+    const second = await jsonRequest("/wiki", {
+      method: "POST",
+      apiKey: actor.apiKey,
+      json: {
+        content: "A duplicate page using an unaccented spelling.",
+        label: "Rene Girard",
+        keywords: ["duplicate"],
+        short_description: "Another attempted page for the same French thinker.",
+        space_id: space.id,
+      },
+    });
+
+    expect(second.response.status).toBe(409);
+    expect((second.body as any).error.code).toBe("wiki_exists");
+    expect((second.body as any).error.details.existing_wiki_id).toBe((first.body as any).wiki.id);
+  });
+
   test("requires label, keywords, and short_description metadata", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("wiki-meta-space"));
-    const primary = await createEntity(actor.apiKey, "topic", {
-      label: uniqueName("wiki-meta-primary"),
-    }, { space_id: space.id });
 
     // Missing label
     {
@@ -252,7 +264,6 @@ describe("Wiki create", () => {
           content: "A wiki body with no typed links.",
           keywords: ["test"],
           short_description: "Ten or more characters of framing text.",
-          primary_entities: [primary.id],
           space_id: space.id,
         },
       });
@@ -270,7 +281,6 @@ describe("Wiki create", () => {
           label: "Valid Label",
           keywords: [],
           short_description: "Ten or more characters of framing text.",
-          primary_entities: [primary.id],
           space_id: space.id,
         },
       });
@@ -287,7 +297,6 @@ describe("Wiki create", () => {
           label: "Valid Label",
           keywords: ["valid"],
           short_description: "too short",
-          primary_entities: [primary.id],
           space_id: space.id,
         },
       });
@@ -297,9 +306,6 @@ describe("Wiki create", () => {
 
   test("keywords and short_description are indexed and retrievable", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("wiki-meta-index-space"));
-    const primary = await createEntity(actor.apiKey, "topic", {
-      label: uniqueName("wiki-meta-index-primary"),
-    }, { space_id: space.id });
 
     const { response, body } = await jsonRequest("/wiki", {
       method: "POST",
@@ -307,9 +313,10 @@ describe("Wiki create", () => {
       json: {
         content: "Straightforward body with no typed links for this test.",
         label: "George Washington",
+        type: "person",
+        aliases: ["Washington"],
         keywords: ["first president", "founding father", "Washington"],
         short_description: "American Founding Father and the first president of the United States.",
-        primary_entities: [primary.id],
         space_id: space.id,
       },
     });
@@ -317,6 +324,8 @@ describe("Wiki create", () => {
     expect(response.status).toBe(201);
     const wiki = (body as any).wiki;
     expect(wiki.properties.label).toBe("George Washington");
+    expect(wiki.properties.subject_type).toBe("person");
+    expect(wiki.properties.aliases).toEqual(["Washington"]);
     expect(wiki.properties.keywords).toContain("first president");
     expect(wiki.properties.keywords).toContain("founding father");
     expect(wiki.properties.short_description).toContain("Founding Father");

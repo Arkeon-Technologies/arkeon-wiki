@@ -75,7 +75,7 @@ async function fetchDocumentEntities(
     const cursorParam = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
     const resp: ListResponse = await apiGet<ListResponse>(
       apiUrl,
-      `/entities?filter=${encodeURIComponent("type:document")}&space_id=${spaceId}&limit=200${cursorParam}`,
+      `/wiki?filter=${encodeURIComponent("type:document")}&space_id=${spaceId}&limit=200${cursorParam}`,
       apiKey,
     );
 

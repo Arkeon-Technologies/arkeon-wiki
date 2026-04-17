@@ -5,15 +5,13 @@
  * `arkeon seed` — load the bundled Genesis knowledge graph into the
  * running stack.
  *
- * Posts the inlined GENESIS_OPS envelope (76 entities + ~220 edges) to
- * /ops using the admin key loaded from ~/.arkeon/secrets.json. Works
- * against the local stack by default; --api-url overrides for seeding
- * a remote instance.
+ * The wiki-first API removed the old /ops bulk ingestion endpoint that
+ * Genesis seeding depended on. Keep the command registered so users get a
+ * precise error instead of a 404 against a deleted route.
  */
 
 import type { Command } from "commander";
 
-import { GENESIS_OPS } from "../../../generated/assets.js";
 import { config } from "../../lib/config.js";
 import {
   DEFAULT_API_PORT,
@@ -23,16 +21,6 @@ import {
 } from "../../lib/local-runtime.js";
 import { output } from "../../lib/output.js";
 
-// Ops endpoint response shape — pulled from packages/api/src/lib/ops-execute.ts.
-interface OpsResponse {
-  format: "arke.ops/v1";
-  committed: boolean;
-  entities: Array<{ ref: string; id: string; action?: "created" | "updated" }>;
-  edges: Array<{ ref: string; id: string }>;
-  stats: { entities: number; edges: number };
-  errors?: unknown[];
-}
-
 interface SeedOptions {
   dryRun?: boolean;
   force?: boolean;
@@ -41,9 +29,9 @@ interface SeedOptions {
 export function registerSeedCommand(program: Command): void {
   program
     .command("seed")
-    .description("Load the bundled Genesis knowledge graph (76 entities, ~220 edges) via POST /ops")
-    .option("--dry-run", "Validate the envelope and return planned IDs without writing")
-    .option("--force", "Re-run even if the Genesis book entity already exists")
+    .description("Genesis seed is unavailable in the wiki-first API")
+    .option("--dry-run", "Accepted for backward-compatible parsing; seeding is unavailable")
+    .option("--force", "Accepted for backward-compatible parsing; seeding is unavailable")
     .action(async (opts: SeedOptions) => {
       try {
         await runSeed(opts);
@@ -84,50 +72,15 @@ async function runSeed(opts: SeedOptions): Promise<void> {
     }
   }
 
-  output.progress(
-    `[arkeon] Posting Genesis envelope (${GENESIS_OPS.ops.length} ops)${opts.dryRun ? " in dry-run mode" : ""}...`,
+  throw new Error(
+    "Genesis seeding is unavailable because the wiki-first API removed POST /ops. " +
+    "Seed data must be rewritten as wiki submissions before this command can run.",
   );
-
-  const url = `${apiUrl.replace(/\/$/, "")}/ops${opts.dryRun ? "?dry_run=true" : ""}`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `ApiKey ${adminKey}`,
-    },
-    body: JSON.stringify(GENESIS_OPS),
-  });
-
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as
-      | { error?: { message?: string } }
-      | null;
-    throw new Error(
-      `POST ${url} failed: ${response.status} ${response.statusText} — ${body?.error?.message ?? "no detail"}`,
-    );
-  }
-
-  const result = (await response.json()) as OpsResponse;
-
-  // The ops handler returns `stats.entities` + `stats.edges` — use those
-  // directly. PR #16's `result.entities?.length ?? ...` chain was
-  // looking for a field that doesn't exist and reported 0 for both.
-  const entitiesCreated = result.stats?.entities ?? result.entities?.length ?? 0;
-  const edgesCreated = result.stats?.edges ?? result.edges?.length ?? 0;
-
-  output.result({
-    operation: "seed",
-    dry_run: Boolean(opts.dryRun),
-    entities_created: entitiesCreated,
-    relationships_created: edgesCreated,
-    errors: result.errors ?? [],
-    next: "arkeon entities list --type book   # see the Genesis book entity",
-  });
 }
 
 async function checkGenesisBook(apiUrl: string, adminKey: string): Promise<string | null> {
   try {
-    const res = await fetch(`${apiUrl.replace(/\/$/, "")}/entities?type=book&limit=20`, {
+    const res = await fetch(`${apiUrl.replace(/\/$/, "")}/wiki?filter=${encodeURIComponent("type:book")}&limit=20`, {
       headers: { authorization: `ApiKey ${adminKey}` },
     });
     if (!res.ok) return null;

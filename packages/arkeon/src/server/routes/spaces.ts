@@ -259,8 +259,8 @@ const removeSpaceEntityRoute = createRoute({
 });
 
 const SpaceGrantSchema = z.object({
-  grantee_type: z.enum(["actor", "group"]).default("actor").describe("Grantee type"),
-  grantee_id: z.string().describe("Actor or group ID"),
+  grantee_type: z.enum(["actor"]).default("actor").describe("Grantee type"),
+  grantee_id: z.string().describe("Actor ID"),
   role: z.enum(["contributor", "editor", "admin"]).describe("Role to grant"),
 });
 
@@ -311,7 +311,7 @@ const revokeSpacePermissionRoute = createRoute({
   request: {
     params: z.object({
       id: pathParam("id", EntityIdParam, "Space ULID"),
-      granteeId: pathParam("granteeId", EntityIdParam, "Grantee actor/group ULID"),
+      granteeId: pathParam("granteeId", EntityIdParam, "Grantee actor ULID"),
     }),
   },
   responses: {
@@ -360,7 +360,7 @@ type SpaceEntityAccessRecord = {
 
 const SpaceEntityAccessSchema = z.object({
   space_id: EntityIdParam,
-  grantee_type: z.enum(["actor", "group"]),
+  grantee_type: z.enum(["actor"]),
   grantee_id: EntityIdParam,
   role: z.enum(["editor", "admin"]),
   granted_by: EntityIdParam,
@@ -368,8 +368,8 @@ const SpaceEntityAccessSchema = z.object({
 });
 
 const SpaceEntityAccessGrantSchema = z.object({
-  grantee_type: z.enum(["actor", "group"]).default("actor").describe("Grantee type"),
-  grantee_id: z.string().describe("Actor or group ID"),
+  grantee_type: z.enum(["actor"]).default("actor").describe("Grantee type"),
+  grantee_id: z.string().describe("Actor ID"),
   role: z.enum(["editor", "admin"]).describe("Entity role to grant"),
 });
 
@@ -426,7 +426,7 @@ const revokeSpaceEntityAccessRoute = createRoute({
   request: {
     params: z.object({
       id: pathParam("id", EntityIdParam, "Space ULID"),
-      granteeId: pathParam("granteeId", EntityIdParam, "Grantee actor/group ULID"),
+      granteeId: pathParam("granteeId", EntityIdParam, "Grantee actor ULID"),
     }),
   },
   responses: {
@@ -781,7 +781,7 @@ spacesRouter.openapi(grantSpacePermissionRoute, async (c) => {
 
   // Validate each grant
   const validRoles = ["contributor", "editor", "admin"];
-  const validTypes = ["actor", "group"];
+  const validTypes = ["actor"];
   const grants = rawGrants.map((g, i) => {
     if (typeof g.grantee_id !== "string") {
       throw new ApiError(400, "missing_required_field", `grants[${i}]: missing grantee_id`);
@@ -905,7 +905,7 @@ spacesRouter.openapi(grantSpaceEntityAccessRoute, async (c) => {
 
   // Validate each grant
   const validRoles = ["editor", "admin"];
-  const validTypes = ["actor", "group"];
+  const validTypes = ["actor"];
   const grants = rawGrants.map((g, i) => {
     if (typeof g.grantee_id !== "string") {
       throw new ApiError(400, "missing_required_field", `grants[${i}]: missing grantee_id`);
@@ -991,4 +991,3 @@ spacesRouter.openapi(listSpaceEntityAccessRoute, async (c) => {
 
   return c.json({ grants: grants as SpaceEntityAccessRecord[] }, 200);
 });
-

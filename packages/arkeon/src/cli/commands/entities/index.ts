@@ -67,7 +67,7 @@ function requireEntitiesGroup(program: Command): Command {
 }
 
 async function getEntity(entityId: string): Promise<EntityResponse["entity"]> {
-  const result = await apiRequest<EntityResponse>(`/entities/${encodeURIComponent(entityId)}`, {
+  const result = await apiRequest<EntityResponse>(`/wiki/${encodeURIComponent(entityId)}`, {
     method: "GET",
     auth: "optional",
   });
@@ -98,7 +98,7 @@ async function uploadDirect(entityId: string, bytes: Uint8Array, options: { key:
     query.set("filename", options.filename);
   }
 
-  return apiRequest<UploadResult>(`/entities/${encodeURIComponent(entityId)}/content?${query.toString()}`, {
+  return apiRequest<UploadResult>(`/wiki/${encodeURIComponent(entityId)}/content?${query.toString()}`, {
     method: "POST",
     auth: true,
     headers: {
@@ -111,7 +111,7 @@ async function uploadDirect(entityId: string, bytes: Uint8Array, options: { key:
 
 async function uploadPresigned(entityId: string, bytes: Uint8Array, options: { key: string; ver: number; filename?: string; contentType: string }): Promise<UploadResult> {
   const cid = await computeCidFromBytes(bytes);
-  const presign = await apiRequest<UploadUrlResponse>(`/entities/${encodeURIComponent(entityId)}/content/upload-url`, {
+  const presign = await apiRequest<UploadUrlResponse>(`/wiki/${encodeURIComponent(entityId)}/content/upload-url`, {
     method: "POST",
     auth: true,
     body: JSON.stringify({
@@ -133,7 +133,7 @@ async function uploadPresigned(entityId: string, bytes: Uint8Array, options: { k
     throw new Error(`Presigned upload failed: ${uploadResponse.status} ${uploadResponse.statusText}`);
   }
 
-  return apiRequest<UploadResult>(`/entities/${encodeURIComponent(entityId)}/content/complete`, {
+  return apiRequest<UploadResult>(`/wiki/${encodeURIComponent(entityId)}/content/complete`, {
     method: "POST",
     auth: true,
     body: JSON.stringify({
@@ -219,7 +219,7 @@ export function registerEntityContentCommands(program: Command): void {
         }
 
         const response = await apiResponse(
-          `/entities/${encodeURIComponent(id)}/content${query.size ? `?${query.toString()}` : ""}`,
+          `/wiki/${encodeURIComponent(id)}/content${query.size ? `?${query.toString()}` : ""}`,
           {
             method: "GET",
             auth: "optional",
@@ -272,7 +272,7 @@ export function registerEntityContentCommands(program: Command): void {
           query.set("cid", options.cid);
         }
 
-        await apiRequest<void>(`/entities/${encodeURIComponent(id)}/content?${query.toString()}`, {
+        await apiRequest<void>(`/wiki/${encodeURIComponent(id)}/content?${query.toString()}`, {
           method: "DELETE",
           auth: true,
         });
@@ -302,7 +302,7 @@ export function registerEntityContentCommands(program: Command): void {
         credentials.requireApiKey();
         const ver = parseVersion(options.ver) ?? await getCurrentVersion(id);
 
-        const result = await apiRequest<{ ok: boolean; ver: number }>(`/entities/${encodeURIComponent(id)}/content`, {
+        const result = await apiRequest<{ ok: boolean; ver: number }>(`/wiki/${encodeURIComponent(id)}/content`, {
           method: "PATCH",
           auth: true,
           body: JSON.stringify({

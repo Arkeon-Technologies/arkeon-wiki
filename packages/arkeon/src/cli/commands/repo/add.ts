@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { extname, join, relative } from "node:path";
 
-import { apiGet, apiPost, apiPut } from "../../lib/api-client.js";
+import { apiGet, apiPut } from "../../lib/api-client.js";
 import { credentials } from "../../lib/credentials.js";
 import { output } from "../../lib/output.js";
 import { requireRepoState } from "../../lib/repo-state.js";
@@ -60,12 +60,6 @@ type ListResponse = {
   cursor: string | null;
 };
 
-type OpsResult = {
-  entities: Array<{ ref: string; id: string; action?: "created" | "updated" }>;
-  edges: Array<{ id: string }>;
-  stats: { entities: number; edges: number };
-};
-
 const TEXT_EXTENSIONS = new Set([".md", ".txt", ".tex", ".rst", ".adoc", ".org"]);
 
 function sha256(filePath: string): string {
@@ -97,7 +91,7 @@ async function findExistingDoc(
   const filter = `type:document,properties.source_file:${sourceFile}`;
   const resp = await apiGet<ListResponse>(
     apiUrl,
-    `/entities?filter=${encodeURIComponent(filter)}&space_id=${spaceId}&limit=1`,
+    `/wiki?filter=${encodeURIComponent(filter)}&space_id=${spaceId}&limit=1`,
     apiKey,
   );
   if (resp.entities.length === 0) return null;
@@ -190,7 +184,14 @@ export function registerAddCommand(program: Command): void {
           }
         }
 
-        // Update modified documents via PUT /entities/{id}
+        if (toCreate.length > 0) {
+          throw new Error(
+            "Creating new document entities is unavailable because the wiki-first API removed POST /ops. " +
+            "Existing registered documents can still be updated; new repo ingestion needs a wiki-native creation flow.",
+          );
+        }
+
+        // Update modified documents via PUT /wiki/{id}
         for (const file of toUpdate) {
           const properties: Record<string, unknown> = {
             source_hash: file.hash,
@@ -200,9 +201,9 @@ export function registerAddCommand(program: Command): void {
             properties.content = file.content;
           }
 
-          // PUT /entities/{id} shallow-merges properties — omitted keys
+          // PUT /wiki/{id} shallow-merges properties — omitted keys
           // (source_file, label) are preserved, only provided keys are updated.
-          await apiPut(state.api_url, `/entities/${file.entity_id}`, apiKey, {
+          await apiPut(state.api_url, `/wiki/${file.entity_id}`, apiKey, {
             ver: file.ver,
             properties,
           });
@@ -210,44 +211,6 @@ export function registerAddCommand(program: Command): void {
           documents.push({ path: file.relPath, entity_id: file.entity_id, action: "updated" });
           output.progress(`  ~ ${file.relPath} (${file.entity_id})`);
           updatedCount++;
-        }
-
-        // Batch create new document entities via POST /ops
-        const BATCH_SIZE = 50;
-        for (let i = 0; i < toCreate.length; i += BATCH_SIZE) {
-          const batch = toCreate.slice(i, i + BATCH_SIZE);
-          const ops = batch.map((file, idx) => {
-            const op: Record<string, unknown> = {
-              op: "entity",
-              ref: `@doc${i + idx}`,
-              type: "document",
-              label: file.relPath.split("/").pop() ?? file.relPath,
-              source_file: file.relPath,
-              source_hash: file.hash,
-              file_type: fileType(file.ext),
-            };
-            if (file.content !== null) {
-              op.content = file.content;
-            }
-            return op;
-          });
-
-          const result = await apiPost<OpsResult>(state.api_url, "/ops", apiKey, {
-            format: "arke.ops/v1",
-            defaults: { space_id: state.space_id },
-            ops,
-          });
-
-          // Match results by ref (not positional index) for robustness
-          const refToPath = new Map(batch.map((file, idx) => [`@doc${i + idx}`, file.relPath]));
-          for (const entity of result.entities) {
-            const path = refToPath.get(entity.ref);
-            if (path) {
-              documents.push({ path, entity_id: entity.id, action: "added" });
-              output.progress(`  + ${path} -> ${entity.id}`);
-              addedCount++;
-            }
-          }
         }
 
         output.result({

@@ -60,7 +60,7 @@ type VersionRow = {
 
 const PermissionGrantSchema = z.object({
   entity_id: EntityIdParam,
-  grantee_type: z.enum(["actor", "group"]),
+  grantee_type: z.enum(["actor"]),
   grantee_id: z.string(),
   role: z.enum(["admin", "editor"]),
   granted_by: EntityIdParam,
@@ -301,7 +301,7 @@ const grantPermissionRoute = createRoute({
       required: true,
       content: jsonContent(
         z.object({
-          grantee_type: z.enum(["actor", "group"]),
+          grantee_type: z.enum(["actor"]),
           grantee_id: z.string(),
           role: z.enum(["admin", "editor"]),
         }),
@@ -322,13 +322,13 @@ const revokePermissionRoute = createRoute({
   path: "/{id}/permissions/{granteeId}",
   operationId: "revokeWikiPermission",
   tags: ["Wiki"],
-  summary: "Revoke a role from a user or group",
+  summary: "Revoke a role from an actor",
   "x-arke-auth": "required",
   "x-arke-rules": ["Only the entity owner, an entity admin, or a system admin may revoke permissions"],
   request: {
     params: z.object({
       id: pathParam("id", EntityIdParam, "Entity ULID"),
-      granteeId: pathParam("granteeId", z.string(), "Grantee actor or group ID"),
+      granteeId: pathParam("granteeId", z.string(), "Grantee actor ID"),
     }),
   },
   responses: {
@@ -797,7 +797,7 @@ wikisRouter.openapi(bulkDeleteEntitiesRoute, async (c) => {
     throw new ApiError(400, "invalid_query", "At least one of filter or space_id is required");
   }
 
-  // Same implicit filter as GET /entities — exclude relationships unless explicitly filtered
+  // Same implicit filter as GET /wiki — exclude relationships unless explicitly filtered
   const hasKindFilter = userFilter?.split(",").some((expr) => /^kind(!:|!\?|>=|<=|>|<|:|\?)/.test(expr.trim()));
   const implicitFilter = hasKindFilter ? undefined : "kind!:relationship";
   const filter = implicitFilter ? mergeFilters(implicitFilter, userFilter) : userFilter;

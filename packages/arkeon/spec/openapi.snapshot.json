@@ -207,14 +207,14 @@
           {
             "properties": {
               "_relationships": {
-                "description": "Relationship summaries with counterpart labels. Capped by rel_limit — use GET /entities/{id}/relationships for the full set.",
+                "description": "Relationship summaries with counterpart labels. Capped by rel_limit — use GET /wiki/{id}/relationships for the full set.",
                 "items": {
                   "$ref": "#/components/schemas/RelationshipSummary"
                 },
                 "type": "array"
               },
               "_relationships_truncated": {
-                "description": "True if more relationships exist than were returned. Use GET /entities/{id}/relationships to paginate through all.",
+                "description": "True if more relationships exist than were returned. Use GET /wiki/{id}/relationships to paginate through all.",
                 "type": "boolean"
               }
             },
@@ -2023,7 +2023,7 @@
     },
     "/graph/data": {
       "get": {
-        "description": "Returns lightweight node and edge data suitable for rendering large graphs.\nNodes include only id, label, type, and space memberships.\nEdges include only id, source_id, target_id, and predicate.\nFull entity details should be loaded on-demand via GET /entities/{id}.",
+        "description": "Returns lightweight node and edge data suitable for rendering large graphs.\nNodes include only id, label, type, and space memberships.\nEdges include only id, source_id, target_id, and predicate.\nFull entity details should be loaded on-demand via GET /wiki/{id}.",
         "operationId": "getGraphData",
         "parameters": [
           {
@@ -2099,7 +2099,7 @@
         ],
         "x-arke-auth": "optional",
         "x-arke-related": [
-          "GET /entities/{id}",
+          "GET /wiki/{id}",
           "GET /graph/traverse"
         ],
         "x-arke-rules": [
@@ -2239,8 +2239,8 @@
         ],
         "x-arke-auth": "optional",
         "x-arke-related": [
-          "GET /entities/{id}",
-          "GET /entities/{id}/relationships",
+          "GET /wiki/{id}",
+          "GET /wiki/{id}/relationships",
           "GET /search"
         ],
         "x-arke-rules": [
@@ -3782,8 +3782,7 @@
                           },
                           "grantee_type": {
                             "enum": [
-                              "actor",
-                              "group"
+                              "actor"
                             ],
                             "type": "string"
                           },
@@ -3880,15 +3879,14 @@
                   {
                     "properties": {
                       "grantee_id": {
-                        "description": "Actor or group ID",
+                        "description": "Actor ID",
                         "type": "string"
                       },
                       "grantee_type": {
                         "default": "actor",
                         "description": "Grantee type",
                         "enum": [
-                          "actor",
-                          "group"
+                          "actor"
                         ],
                         "type": "string"
                       },
@@ -3914,15 +3912,14 @@
                         "items": {
                           "properties": {
                             "grantee_id": {
-                              "description": "Actor or group ID",
+                              "description": "Actor ID",
                               "type": "string"
                             },
                             "grantee_type": {
                               "default": "actor",
                               "description": "Grantee type",
                               "enum": [
-                                "actor",
-                                "group"
+                                "actor"
                               ],
                               "type": "string"
                             },
@@ -3986,8 +3983,7 @@
                             },
                             "grantee_type": {
                               "enum": [
-                                "actor",
-                                "group"
+                                "actor"
                               ],
                               "type": "string"
                             },
@@ -4045,8 +4041,7 @@
                               },
                               "grantee_type": {
                                 "enum": [
-                                  "actor",
-                                  "group"
+                                  "actor"
                                 ],
                                 "type": "string"
                               },
@@ -4164,12 +4159,12 @@
             }
           },
           {
-            "description": "Grantee actor/group ULID",
+            "description": "Grantee actor ULID",
             "in": "path",
             "name": "granteeId",
             "required": true,
             "schema": {
-              "description": "Grantee actor/group ULID",
+              "description": "Grantee actor ULID",
               "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
               "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
               "type": "string"
@@ -4351,15 +4346,14 @@
                   {
                     "properties": {
                       "grantee_id": {
-                        "description": "Actor or group ID",
+                        "description": "Actor ID",
                         "type": "string"
                       },
                       "grantee_type": {
                         "default": "actor",
                         "description": "Grantee type",
                         "enum": [
-                          "actor",
-                          "group"
+                          "actor"
                         ],
                         "type": "string"
                       },
@@ -4386,15 +4380,14 @@
                         "items": {
                           "properties": {
                             "grantee_id": {
-                              "description": "Actor or group ID",
+                              "description": "Actor ID",
                               "type": "string"
                             },
                             "grantee_type": {
                               "default": "actor",
                               "description": "Grantee type",
                               "enum": [
-                                "actor",
-                                "group"
+                                "actor"
                               ],
                               "type": "string"
                             },
@@ -4609,12 +4602,12 @@
             }
           },
           {
-            "description": "Grantee actor/group ULID",
+            "description": "Grantee actor ULID",
             "in": "path",
             "name": "granteeId",
             "required": true,
             "schema": {
-              "description": "Grantee actor/group ULID",
+              "description": "Grantee actor ULID",
               "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
               "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
               "type": "string"
@@ -4936,8 +4929,18 @@
             "application/json": {
               "schema": {
                 "properties": {
+                  "aliases": {
+                    "description": "Alternate titles or spellings for this wiki page. Used for duplicate detection and search metadata.",
+                    "items": {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 50,
+                    "type": "array"
+                  },
                   "content": {
-                    "description": "Markdown body. Typed [[links]] in the content are parsed and turned into relationships when the wiki is published.\n\nFour link forms — all wrapped in double square brackets:\n  [[entity:ULID]]                         Hard reference to an existing visible entity.\n  [[resolve:\"Label\"|\"Description\"]]       Let the server find a match via Meilisearch + LLM judge. Soft-degrades to placeholder on miss or when no LLM is configured; never fails the request.\n  [[placeholder:\"Label\"|\"Description\"]]   Unwritten stub. Not queued. Leave it, or fill it in later.\n  [[assign:\"Label\"|\"Description\"]]        Hand off to the background drafter. Queued for auto-drafting.\n\nLabels must be double-quoted. Description is optional for resolve/placeholder/assign but recommended — it gives the resolver and future drafters context. Entity IDs are unquoted ULIDs.\n\nEvery parsed link materializes as a `references` relationship from the published wiki to the target (or to a newly-minted placeholder). `primary_entities` materialize as `about` relationships.\n\nChoosing between resolve / placeholder / assign: use `resolve` when the thing probably already exists and you want the server to find it; use `placeholder` when you want a stub but don't want anything auto-drafted; use `assign` to hand off actual drafting to a background worker.\n\nCaveat: the parser scans every `[[...]]` pair in the content, including inside fenced code blocks. To discuss link syntax in prose, use alternative delimiters (e.g. `<<entity:id>>`). See GET /help/guide/wiki for a worked example.",
+                    "description": "Markdown body. Typed [[links]] in the content are parsed and turned into relationships when the wiki is published.\n\nFour link forms — all wrapped in double square brackets:\n  [[entity:ULID]]                         Hard reference to an existing visible entity.\n  [[resolve:\"Label\"|\"Description\"]]       Let the server find a match via Meilisearch + LLM judge. Soft-degrades to placeholder on miss or when no LLM is configured; never fails the request.\n  [[placeholder:\"Label\"|\"Description\"]]   Unwritten stub. Not queued. Leave it, or fill it in later.\n  [[assign:\"Label\"|\"Description\"]]        Hand off to the background drafter. Queued for auto-drafting.\n\nLabels must be double-quoted. Description is optional for resolve/placeholder/assign but recommended — it gives the resolver and future drafters context. Entity IDs are unquoted ULIDs.\n\nEvery parsed link materializes as a `references` relationship from the published wiki to the target (or to a newly-minted placeholder). The wiki page itself is the canonical graph entity for its subject.\n\nChoosing between resolve / placeholder / assign: use `resolve` when the thing probably already exists and you want the server to find it; use `placeholder` when you want a stub but don't want anything auto-drafted; use `assign` to hand off actual drafting to a background worker.\n\nCaveat: the parser scans every `[[...]]` pair in the content, including inside fenced code blocks. To discuss link syntax in prose, use alternative delimiters (e.g. `<<entity:id>>`). See GET /help/guide/wiki for a worked example.",
                     "minLength": 1,
                     "type": "string"
                   },
@@ -4964,17 +4967,6 @@
                     "minLength": 1,
                     "type": "string"
                   },
-                  "primary_entities": {
-                    "description": "Entity IDs this wiki is about. A wiki with overlapping primary_entities in the same space returns 409.",
-                    "items": {
-                      "description": "ULID string",
-                      "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                      "type": "string"
-                    },
-                    "minItems": 1,
-                    "type": "array"
-                  },
                   "read_level": {
                     "default": 1,
                     "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
@@ -4994,6 +4986,12 @@
                     "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
                     "type": "string"
                   },
+                  "type": {
+                    "description": "Semantic subject type for the page, e.g. person, concept, book, event. Stored as properties.subject_type; the internal entity type remains wiki.",
+                    "maxLength": 80,
+                    "minLength": 1,
+                    "type": "string"
+                  },
                   "write_level": {
                     "default": 1,
                     "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
@@ -5006,8 +5004,7 @@
                   "content",
                   "label",
                   "keywords",
-                  "short_description",
-                  "primary_entities"
+                  "short_description"
                 ],
                 "type": "object"
               }
@@ -5155,7 +5152,7 @@
           "Requires contributor role or above on the target space",
           "All [[entity:ULID]] links must reference existing visible entities — 404 otherwise",
           "[[resolve:...]] links soft-degrade to placeholders on LLM miss / no-match — the wiki still publishes with resolve_warnings",
-          "Returns 409 if a wiki with overlapping primary_entities already exists in the space",
+          "Returns 409 if a wiki with the same normalized label or alias already exists in the space",
           "If space_id is omitted, falls back to the only space the actor can contribute to; 400 if ambiguous or none"
         ]
       }
@@ -6370,8 +6367,7 @@
                           },
                           "grantee_type": {
                             "enum": [
-                              "actor",
-                              "group"
+                              "actor"
                             ],
                             "type": "string"
                           },
@@ -6462,8 +6458,7 @@
                   },
                   "grantee_type": {
                     "enum": [
-                      "actor",
-                      "group"
+                      "actor"
                     ],
                     "type": "string"
                   },
@@ -6516,8 +6511,7 @@
                         },
                         "grantee_type": {
                           "enum": [
-                            "actor",
-                            "group"
+                            "actor"
                           ],
                           "type": "string"
                         },
@@ -6617,12 +6611,12 @@
             }
           },
           {
-            "description": "Grantee actor or group ID",
+            "description": "Grantee actor ID",
             "in": "path",
             "name": "granteeId",
             "required": true,
             "schema": {
-              "description": "Grantee actor or group ID",
+              "description": "Grantee actor ID",
               "type": "string"
             }
           }
@@ -6662,7 +6656,7 @@
             "description": "Not found"
           }
         },
-        "summary": "Revoke a role from a user or group",
+        "summary": "Revoke a role from an actor",
         "tags": [
           "Wiki"
         ],
