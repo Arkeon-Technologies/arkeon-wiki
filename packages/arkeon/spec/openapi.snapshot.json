@@ -4,9 +4,6 @@
     "schemas": {
       "Actor": {
         "properties": {
-          "can_publish_public": {
-            "type": "boolean"
-          },
           "created_at": {
             "example": "2026-01-01T00:00:00.000Z",
             "format": "date-time",
@@ -17,26 +14,11 @@
             "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
             "type": "string"
           },
-          "is_admin": {
-            "type": "boolean"
-          },
           "kind": {
             "enum": [
               "agent"
             ],
             "type": "string"
-          },
-          "max_read_level": {
-            "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
-            "maximum": 4,
-            "minimum": 0,
-            "type": "integer"
-          },
-          "max_write_level": {
-            "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
-            "maximum": 4,
-            "minimum": 0,
-            "type": "integer"
           },
           "owner_id": {
             "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
@@ -66,10 +48,6 @@
         "required": [
           "id",
           "kind",
-          "max_read_level",
-          "max_write_level",
-          "is_admin",
-          "can_publish_public",
           "owner_id",
           "properties",
           "status",
@@ -116,12 +94,6 @@
           "properties": {
             "$ref": "#/components/schemas/JsonObject"
           },
-          "read_level": {
-            "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
-            "maximum": 4,
-            "minimum": 0,
-            "type": "integer"
-          },
           "type": {
             "type": "string"
           },
@@ -132,12 +104,6 @@
           },
           "ver": {
             "type": "integer"
-          },
-          "write_level": {
-            "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
-            "maximum": 4,
-            "minimum": 0,
-            "type": "integer"
           }
         },
         "required": [
@@ -147,8 +113,6 @@
           "ver",
           "properties",
           "owner_id",
-          "read_level",
-          "write_level",
           "edited_by",
           "note",
           "created_at",
@@ -388,12 +352,6 @@
           "properties": {
             "$ref": "#/components/schemas/JsonObject"
           },
-          "read_level": {
-            "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
-            "maximum": 4,
-            "minimum": 0,
-            "type": "integer"
-          },
           "source_id": {
             "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
             "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
@@ -403,12 +361,6 @@
             "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
             "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
             "type": "string"
-          },
-          "write_level": {
-            "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
-            "maximum": 4,
-            "minimum": 0,
-            "type": "integer"
           }
         },
         "required": [
@@ -418,8 +370,6 @@
           "target_id",
           "direction",
           "properties",
-          "read_level",
-          "write_level",
           "counterpart"
         ],
         "type": "object"
@@ -464,12 +414,6 @@
           "properties": {
             "$ref": "#/components/schemas/JsonObject"
           },
-          "read_level": {
-            "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
-            "maximum": 4,
-            "minimum": 0,
-            "type": "integer"
-          },
           "status": {
             "enum": [
               "active",
@@ -482,12 +426,6 @@
             "example": "2026-01-01T00:00:00.000Z",
             "format": "date-time",
             "type": "string"
-          },
-          "write_level": {
-            "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
-            "maximum": 4,
-            "minimum": 0,
-            "type": "integer"
           }
         },
         "required": [
@@ -495,8 +433,6 @@
           "name",
           "description",
           "owner_id",
-          "read_level",
-          "write_level",
           "status",
           "entity_count",
           "last_activity_at",
@@ -579,12 +515,6 @@
             ],
             "type": "object"
           },
-          "read_level": {
-            "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
-            "maximum": 4,
-            "minimum": 0,
-            "type": "integer"
-          },
           "score": {
             "description": "Ranking score (connectivity + recency + proximity + query relevance)",
             "type": "number"
@@ -614,7 +544,6 @@
           "kind",
           "type",
           "properties",
-          "read_level",
           "created_at",
           "updated_at",
           "source_depth",
@@ -814,18 +743,6 @@
                     ],
                     "type": "string"
                   },
-                  "max_read_level": {
-                    "description": "Max read level (0-4, default 1=INTERNAL)",
-                    "maximum": 4,
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "max_write_level": {
-                    "description": "Max write level (0-4, default 1=INTERNAL)",
-                    "maximum": 4,
-                    "minimum": 0,
-                    "type": "integer"
-                  },
                   "properties": {
                     "allOf": [
                       {
@@ -910,10 +827,7 @@
           "GET /actors/{id}",
           "GET /actors"
         ],
-        "x-arke-rules": [
-          "Cannot grant max_read_level higher than your own",
-          "Cannot grant max_write_level higher than your own"
-        ]
+        "x-arke-rules": []
       }
     },
     "/actors/{id}": {
@@ -983,14 +897,12 @@
             "description": "Not found"
           }
         },
-        "summary": "Deactivate an actor (admin only)",
+        "summary": "Deactivate an actor",
         "tags": [
           "Actors"
         ],
         "x-arke-auth": "required",
-        "x-arke-rules": [
-          "System admin only"
-        ]
+        "x-arke-rules": []
       },
       "get": {
         "operationId": "getActor",
@@ -1080,18 +992,6 @@
             "application/json": {
               "schema": {
                 "properties": {
-                  "max_read_level": {
-                    "description": "New max read level",
-                    "maximum": 4,
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "max_write_level": {
-                    "description": "New max write level",
-                    "maximum": 4,
-                    "minimum": 0,
-                    "type": "integer"
-                  },
                   "properties": {
                     "allOf": [
                       {
@@ -1169,7 +1069,7 @@
             "description": "Not found"
           }
         },
-        "summary": "Update an actor (admin or self)",
+        "summary": "Update an actor",
         "tags": [
           "Actors"
         ],
@@ -1177,10 +1077,7 @@
         "x-arke-related": [
           "GET /actors/{id}"
         ],
-        "x-arke-rules": [
-          "Only the actor themselves or a system admin may update",
-          "Cannot set clearance levels higher than your own"
-        ]
+        "x-arke-rules": []
       }
     },
     "/actors/{id}/keys": {
@@ -1283,7 +1180,7 @@
             "description": "Not found"
           }
         },
-        "summary": "Create an API key for a specific actor (admin only)",
+        "summary": "Create an API key for a specific actor",
         "tags": [
           "Actors"
         ],
@@ -1293,7 +1190,6 @@
           "POST /auth/keys"
         ],
         "x-arke-rules": [
-          "System admin only",
           "Target actor must be active"
         ]
       }
@@ -1320,26 +1216,6 @@
             "application/json": {
               "schema": {
                 "properties": {
-                  "can_publish_public": {
-                    "description": "Whether actor can publish public (read_level=0) content",
-                    "type": "boolean"
-                  },
-                  "is_admin": {
-                    "description": "System admin flag",
-                    "type": "boolean"
-                  },
-                  "max_read_level": {
-                    "description": "Max read level (0-4)",
-                    "maximum": 4,
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "max_write_level": {
-                    "description": "Max write level (0-4)",
-                    "maximum": 4,
-                    "minimum": 0,
-                    "type": "integer"
-                  },
                   "properties": {
                     "allOf": [
                       {
@@ -1426,7 +1302,7 @@
             "description": "Not found"
           }
         },
-        "summary": "Update actor admin-only fields (is_admin, status, can_publish_public)",
+        "summary": "Update actor fields (status, properties)",
         "tags": [
           "Admin"
         ],
@@ -1435,9 +1311,7 @@
           "GET /actors/{id}",
           "PUT /actors/{id}"
         ],
-        "x-arke-rules": [
-          "System admin only"
-        ]
+        "x-arke-rules": []
       }
     },
     "/admin/instance": {
@@ -1488,9 +1362,7 @@
           "Admin"
         ],
         "x-arke-auth": "required",
-        "x-arke-rules": [
-          "System admin only"
-        ]
+        "x-arke-rules": []
       }
     },
     "/admin/reindex": {
@@ -1551,9 +1423,7 @@
           "Admin"
         ],
         "x-arke-auth": "required",
-        "x-arke-rules": [
-          "System admin only"
-        ]
+        "x-arke-rules": []
       }
     },
     "/admin/stats": {
@@ -1624,9 +1494,7 @@
           "Admin"
         ],
         "x-arke-auth": "required",
-        "x-arke-rules": [
-          "System admin only"
-        ]
+        "x-arke-rules": []
       }
     },
     "/auth/keys": {
@@ -2102,11 +1970,7 @@
           "GET /wiki/{id}",
           "GET /graph/traverse"
         ],
-        "x-arke-rules": [
-          "Nodes filtered by your classification clearance",
-          "Edges only included when both endpoints are in the result set",
-          "Collection edges are excluded"
-        ]
+        "x-arke-rules": []
       }
     },
     "/graph/traverse": {
@@ -2243,14 +2107,7 @@
           "GET /wiki/{id}/relationships",
           "GET /search"
         ],
-        "x-arke-rules": [
-          "Source and target entities filtered by your classification clearance",
-          "Traversal follows edges in both directions",
-          "Limits are global, not per-hop",
-          "Results ranked by connectivity + recency + proximity + query relevance",
-          "If space_id is provided, traversal is constrained to entities within that space",
-          "Bridge mode uses bidirectional BFS for efficiency at higher hop counts"
-        ]
+        "x-arke-rules": []
       }
     },
     "/ops": {
@@ -2279,21 +2136,11 @@
                 "properties": {
                   "defaults": {
                     "properties": {
-                      "read_level": {
-                        "maximum": 4,
-                        "minimum": 0,
-                        "type": "integer"
-                      },
                       "space_id": {
                         "description": "ULID string",
                         "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
                         "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
                         "type": "string"
-                      },
-                      "write_level": {
-                        "maximum": 4,
-                        "minimum": 0,
-                        "type": "integer"
                       }
                     },
                     "type": "object"
@@ -2513,9 +2360,7 @@
         ],
         "x-arke-auth": "required",
         "x-arke-rules": [
-          "Requires write clearance for inserted entities and relationships",
-          "If defaults.space_id is provided, requires contributor role on that space",
-          "Relationship creation requires edit access on source and read access on target; RLS is the final authority",
+          "If defaults.space_id is provided, the space must exist",
           "source.entity_id creates extracted_from relationships from every created entity and relationship to the source entity"
         ]
       }
@@ -2556,12 +2401,6 @@
                       "additionalProperties": {},
                       "type": "object"
                     },
-                    "read_level": {
-                      "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
-                      "maximum": 4,
-                      "minimum": 0,
-                      "type": "integer"
-                    },
                     "source": {},
                     "source_id": {
                       "description": "ULID string",
@@ -2575,12 +2414,6 @@
                       "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
                       "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
                       "type": "string"
-                    },
-                    "write_level": {
-                      "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
-                      "maximum": 4,
-                      "minimum": 0,
-                      "type": "integer"
                     }
                   },
                   "required": [
@@ -2588,9 +2421,7 @@
                     "predicate",
                     "source_id",
                     "target_id",
-                    "properties",
-                    "read_level",
-                    "write_level"
+                    "properties"
                   ],
                   "type": "object"
                 }
@@ -2637,9 +2468,7 @@
         "x-arke-related": [
           "GET /wiki/{id}/relationships"
         ],
-        "x-arke-rules": [
-          "Requires read_level clearance >= relationship's read_level"
-        ]
+        "x-arke-rules": []
       }
     },
     "/resolve": {
@@ -2722,12 +2551,6 @@
               "application/json": {
                 "schema": {
                   "properties": {
-                    "actor_read_level": {
-                      "description": "The read_level the candidate pool was filtered against",
-                      "maximum": 4,
-                      "minimum": 0,
-                      "type": "integer"
-                    },
                     "matches": {
                       "items": {
                         "properties": {
@@ -2756,8 +2579,7 @@
                     }
                   },
                   "required": [
-                    "matches",
-                    "actor_read_level"
+                    "matches"
                   ],
                   "type": "object"
                 }
@@ -2816,14 +2638,13 @@
           "GET /search"
         ],
         "x-arke-rules": [
-          "Candidate pool is filtered to entities visible under the caller's max_read_level",
           "Returns 503 if no LLM provider is configured (see ~/.arkeon/llm.json)"
         ]
       }
     },
     "/search": {
       "get": {
-        "description": "Keyword search with typo tolerance, prefix matching, and relevance ranking. Results are automatically filtered by the caller's read clearance level. Use the read_level parameter to restrict results below your clearance. Use view=expanded to include each result's relationships with counterpart summaries.",
+        "description": "Keyword search with typo tolerance, prefix matching, and relevance ranking. Use view=expanded to include each result's relationships with counterpart summaries.",
         "operationId": "searchEntities",
         "parameters": [
           {
@@ -2890,21 +2711,6 @@
             "schema": {
               "description": "Scope search to a space ULID",
               "type": "string"
-            }
-          },
-          {
-            "description": "Restrict results to this read level or below (cannot exceed your clearance)",
-            "in": "query",
-            "name": "read_level",
-            "required": false,
-            "schema": {
-              "description": "Restrict results to this read level or below (cannot exceed your clearance)",
-              "maximum": 4,
-              "minimum": 0,
-              "type": [
-                "integer",
-                "null"
-              ]
             }
           },
           {
@@ -3013,9 +2819,7 @@
           "Search"
         ],
         "x-arke-auth": "optional",
-        "x-arke-rules": [
-          "Results filtered by your classification clearance"
-        ]
+        "x-arke-rules": []
       }
     },
     "/search/multi": {
@@ -3054,12 +2858,6 @@
                           "description": "Search query string",
                           "minLength": 1,
                           "type": "string"
-                        },
-                        "read_level": {
-                          "description": "Max read level for results",
-                          "maximum": 4,
-                          "minimum": 0,
-                          "type": "integer"
                         },
                         "space_id": {
                           "description": "Scope to a space ULID",
@@ -3188,9 +2986,7 @@
         "x-arke-related": [
           "GET /search"
         ],
-        "x-arke-rules": [
-          "Results filtered by your classification clearance"
-        ]
+        "x-arke-rules": []
       }
     },
     "/spaces": {
@@ -3272,7 +3068,7 @@
             "description": "Bad request"
           }
         },
-        "summary": "List spaces (paginated, RLS filters by read_level)",
+        "summary": "List spaces (paginated)",
         "tags": [
           "Spaces"
         ],
@@ -3281,9 +3077,7 @@
           "POST /spaces",
           "GET /spaces/{id}"
         ],
-        "x-arke-rules": [
-          "Results filtered by your classification clearance"
-        ]
+        "x-arke-rules": []
       },
       "post": {
         "operationId": "createSpace",
@@ -3313,18 +3107,6 @@
                         "description": "Arbitrary properties"
                       }
                     ]
-                  },
-                  "read_level": {
-                    "description": "Read classification level (0-4)",
-                    "maximum": 4,
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "write_level": {
-                    "description": "Write classification level (0-4)",
-                    "maximum": 4,
-                    "minimum": 0,
-                    "type": "integer"
                   }
                 },
                 "required": [
@@ -3467,14 +3249,12 @@
             "description": "Not found"
           }
         },
-        "summary": "Soft-delete a space (set status=deleted, RLS: owner/admin)",
+        "summary": "Soft-delete a space",
         "tags": [
           "Spaces"
         ],
         "x-arke-auth": "required",
-        "x-arke-rules": [
-          "Only the space owner or a system admin may delete"
-        ]
+        "x-arke-rules": []
       },
       "get": {
         "operationId": "getSpace",
@@ -3541,9 +3321,7 @@
           "PUT /spaces/{id}",
           "GET /spaces/{id}/entities"
         ],
-        "x-arke-rules": [
-          "Requires read_level clearance >= space's read_level"
-        ]
+        "x-arke-rules": []
       },
       "put": {
         "operationId": "updateSpace",
@@ -3587,18 +3365,6 @@
                         "description": "New properties"
                       }
                     ]
-                  },
-                  "read_level": {
-                    "description": "New read level",
-                    "maximum": 4,
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "write_level": {
-                    "description": "New write level",
-                    "maximum": 4,
-                    "minimum": 0,
-                    "type": "integer"
                   }
                 },
                 "type": "object"
@@ -3667,7 +3433,7 @@
             "description": "Not found"
           }
         },
-        "summary": "Update a space (RLS: owner/editor/admin)",
+        "summary": "Update a space",
         "tags": [
           "Spaces"
         ],
@@ -3675,10 +3441,7 @@
         "x-arke-related": [
           "GET /spaces/{id}"
         ],
-        "x-arke-rules": [
-          "Requires space role: editor or above",
-          "Owner and system admins bypass role checks"
-        ]
+        "x-arke-rules": []
       }
     },
     "/spaces/{id}/entities": {
@@ -3791,10 +3554,7 @@
           "POST /spaces/{id}/entities",
           "GET /spaces/{id}"
         ],
-        "x-arke-rules": [
-          "Requires read_level clearance >= space's read_level",
-          "Entity results further filtered by your classification clearance"
-        ]
+        "x-arke-rules": []
       },
       "post": {
         "operationId": "addSpaceEntity",
@@ -3916,7 +3676,7 @@
             "description": "Not found"
           }
         },
-        "summary": "Add an entity to a space (RLS: contributor+)",
+        "summary": "Add an entity to a space",
         "tags": [
           "Spaces"
         ],
@@ -3924,9 +3684,7 @@
         "x-arke-related": [
           "DELETE /spaces/{id}/entities/{entityId}"
         ],
-        "x-arke-rules": [
-          "Requires space role: contributor or above"
-        ]
+        "x-arke-rules": []
       }
     },
     "/spaces/{id}/entities/{entityId}": {
@@ -3993,937 +3751,12 @@
             "description": "Not found"
           }
         },
-        "summary": "Remove an entity from a space (RLS: editor+ or added_by)",
+        "summary": "Remove an entity from a space",
         "tags": [
           "Spaces"
         ],
         "x-arke-auth": "required",
-        "x-arke-rules": [
-          "You can remove entities you added yourself",
-          "Otherwise requires space role: editor or above"
-        ]
-      }
-    },
-    "/spaces/{id}/entity-access": {
-      "get": {
-        "operationId": "listSpaceEntityAccess",
-        "parameters": [
-          {
-            "description": "Space ULID",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "description": "Space ULID",
-              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "grants": {
-                      "items": {
-                        "properties": {
-                          "granted_at": {
-                            "example": "2026-01-01T00:00:00.000Z",
-                            "format": "date-time",
-                            "type": "string"
-                          },
-                          "granted_by": {
-                            "description": "ULID string",
-                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                            "type": "string"
-                          },
-                          "grantee_id": {
-                            "description": "ULID string",
-                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                            "type": "string"
-                          },
-                          "grantee_type": {
-                            "enum": [
-                              "actor"
-                            ],
-                            "type": "string"
-                          },
-                          "role": {
-                            "enum": [
-                              "editor",
-                              "admin"
-                            ],
-                            "type": "string"
-                          },
-                          "space_id": {
-                            "description": "ULID string",
-                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "space_id",
-                          "grantee_type",
-                          "grantee_id",
-                          "role",
-                          "granted_by",
-                          "granted_at"
-                        ],
-                        "type": "object"
-                      },
-                      "type": "array"
-                    }
-                  },
-                  "required": [
-                    "grants"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Entity-access grants"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Forbidden"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not found"
-          }
-        },
-        "summary": "List entity-access grants on a space",
-        "tags": [
-          "Spaces"
-        ],
-        "x-arke-auth": "required",
-        "x-arke-related": [
-          "POST /spaces/{id}/entity-access"
-        ],
-        "x-arke-rules": [
-          "Requires read_level clearance >= space's read_level"
-        ]
-      },
-      "post": {
-        "operationId": "grantSpaceEntityAccess",
-        "parameters": [
-          {
-            "description": "Space ULID",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "description": "Space ULID",
-              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "properties": {
-                      "grantee_id": {
-                        "description": "Actor ID",
-                        "type": "string"
-                      },
-                      "grantee_type": {
-                        "default": "actor",
-                        "description": "Grantee type",
-                        "enum": [
-                          "actor"
-                        ],
-                        "type": "string"
-                      },
-                      "role": {
-                        "description": "Entity role to grant",
-                        "enum": [
-                          "editor",
-                          "admin"
-                        ],
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "grantee_id",
-                      "role"
-                    ],
-                    "type": "object"
-                  },
-                  {
-                    "properties": {
-                      "grants": {
-                        "description": "Array of entity-access grants (max 100)",
-                        "items": {
-                          "properties": {
-                            "grantee_id": {
-                              "description": "Actor ID",
-                              "type": "string"
-                            },
-                            "grantee_type": {
-                              "default": "actor",
-                              "description": "Grantee type",
-                              "enum": [
-                                "actor"
-                              ],
-                              "type": "string"
-                            },
-                            "role": {
-                              "description": "Entity role to grant",
-                              "enum": [
-                                "editor",
-                                "admin"
-                              ],
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "grantee_id",
-                            "role"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 100,
-                        "minItems": 1,
-                        "type": "array"
-                      }
-                    },
-                    "required": [
-                      "grants"
-                    ],
-                    "type": "object"
-                  }
-                ]
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "properties": {
-                        "grant": {
-                          "properties": {
-                            "granted_at": {
-                              "example": "2026-01-01T00:00:00.000Z",
-                              "format": "date-time",
-                              "type": "string"
-                            },
-                            "granted_by": {
-                              "description": "ULID string",
-                              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                              "type": "string"
-                            },
-                            "grantee_id": {
-                              "description": "ULID string",
-                              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                              "type": "string"
-                            },
-                            "grantee_type": {
-                              "enum": [
-                                "actor"
-                              ],
-                              "type": "string"
-                            },
-                            "role": {
-                              "enum": [
-                                "editor",
-                                "admin"
-                              ],
-                              "type": "string"
-                            },
-                            "space_id": {
-                              "description": "ULID string",
-                              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "space_id",
-                            "grantee_type",
-                            "grantee_id",
-                            "role",
-                            "granted_by",
-                            "granted_at"
-                          ],
-                          "type": "object"
-                        }
-                      },
-                      "required": [
-                        "grant"
-                      ],
-                      "type": "object"
-                    },
-                    {
-                      "properties": {
-                        "grants": {
-                          "items": {
-                            "properties": {
-                              "granted_at": {
-                                "example": "2026-01-01T00:00:00.000Z",
-                                "format": "date-time",
-                                "type": "string"
-                              },
-                              "granted_by": {
-                                "description": "ULID string",
-                                "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                                "type": "string"
-                              },
-                              "grantee_id": {
-                                "description": "ULID string",
-                                "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                                "type": "string"
-                              },
-                              "grantee_type": {
-                                "enum": [
-                                  "actor"
-                                ],
-                                "type": "string"
-                              },
-                              "role": {
-                                "enum": [
-                                  "editor",
-                                  "admin"
-                                ],
-                                "type": "string"
-                              },
-                              "space_id": {
-                                "description": "ULID string",
-                                "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "space_id",
-                              "grantee_type",
-                              "grantee_id",
-                              "role",
-                              "granted_by",
-                              "granted_at"
-                            ],
-                            "type": "object"
-                          },
-                          "type": "array"
-                        }
-                      },
-                      "required": [
-                        "grants"
-                      ],
-                      "type": "object"
-                    }
-                  ]
-                }
-              }
-            },
-            "description": "Entity access granted"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Bad request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Forbidden"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not found"
-          }
-        },
-        "summary": "Grant entity-level access to all entities in a space. Accepts a single grant or bulk grants array",
-        "tags": [
-          "Spaces"
-        ],
-        "x-arke-auth": "required",
-        "x-arke-related": [
-          "DELETE /spaces/{id}/entity-access/{granteeId}",
-          "GET /spaces/{id}/entity-access"
-        ],
-        "x-arke-rules": [
-          "Requires space role: admin",
-          "Valid roles: editor, admin",
-          "Grantees can edit/admin any entity currently in the space",
-          "Removing an entity from the space revokes this access",
-          "Maximum 100 grants per request"
-        ]
-      }
-    },
-    "/spaces/{id}/entity-access/{granteeId}": {
-      "delete": {
-        "operationId": "revokeSpaceEntityAccess",
-        "parameters": [
-          {
-            "description": "Space ULID",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "description": "Space ULID",
-              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Grantee actor ULID",
-            "in": "path",
-            "name": "granteeId",
-            "required": true,
-            "schema": {
-              "description": "Grantee actor ULID",
-              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Entity access revoked"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Forbidden"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not found"
-          }
-        },
-        "summary": "Revoke entity-level access on a space",
-        "tags": [
-          "Spaces"
-        ],
-        "x-arke-auth": "required",
-        "x-arke-rules": [
-          "Requires space role: admin"
-        ]
-      }
-    },
-    "/spaces/{id}/permissions": {
-      "get": {
-        "operationId": "listSpacePermissions",
-        "parameters": [
-          {
-            "description": "Space ULID",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "description": "Space ULID",
-              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "permissions": {
-                      "items": {
-                        "properties": {
-                          "granted_at": {
-                            "example": "2026-01-01T00:00:00.000Z",
-                            "format": "date-time",
-                            "type": "string"
-                          },
-                          "grantee_id": {
-                            "description": "ULID string",
-                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                            "type": "string"
-                          },
-                          "role": {
-                            "enum": [
-                              "viewer",
-                              "contributor",
-                              "editor",
-                              "admin"
-                            ],
-                            "type": "string"
-                          },
-                          "space_id": {
-                            "description": "ULID string",
-                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "space_id",
-                          "grantee_id",
-                          "role",
-                          "granted_at"
-                        ],
-                        "type": "object"
-                      },
-                      "type": "array"
-                    }
-                  },
-                  "required": [
-                    "permissions"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Space permissions"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Forbidden"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not found"
-          }
-        },
-        "summary": "List permissions on a space",
-        "tags": [
-          "Spaces"
-        ],
-        "x-arke-auth": "optional",
-        "x-arke-related": [
-          "POST /spaces/{id}/permissions"
-        ],
-        "x-arke-rules": [
-          "Requires read_level clearance >= space's read_level"
-        ]
-      },
-      "post": {
-        "operationId": "grantSpacePermission",
-        "parameters": [
-          {
-            "description": "Space ULID",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "description": "Space ULID",
-              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "properties": {
-                      "grantee_id": {
-                        "description": "Actor ID",
-                        "type": "string"
-                      },
-                      "grantee_type": {
-                        "default": "actor",
-                        "description": "Grantee type",
-                        "enum": [
-                          "actor"
-                        ],
-                        "type": "string"
-                      },
-                      "role": {
-                        "description": "Role to grant",
-                        "enum": [
-                          "contributor",
-                          "editor",
-                          "admin"
-                        ],
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "grantee_id",
-                      "role"
-                    ],
-                    "type": "object"
-                  },
-                  {
-                    "properties": {
-                      "grants": {
-                        "description": "Array of permission grants (max 100)",
-                        "items": {
-                          "properties": {
-                            "grantee_id": {
-                              "description": "Actor ID",
-                              "type": "string"
-                            },
-                            "grantee_type": {
-                              "default": "actor",
-                              "description": "Grantee type",
-                              "enum": [
-                                "actor"
-                              ],
-                              "type": "string"
-                            },
-                            "role": {
-                              "description": "Role to grant",
-                              "enum": [
-                                "contributor",
-                                "editor",
-                                "admin"
-                              ],
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "grantee_id",
-                            "role"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 100,
-                        "minItems": 1,
-                        "type": "array"
-                      }
-                    },
-                    "required": [
-                      "grants"
-                    ],
-                    "type": "object"
-                  }
-                ]
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "properties": {
-                        "permission": {
-                          "properties": {
-                            "granted_at": {
-                              "example": "2026-01-01T00:00:00.000Z",
-                              "format": "date-time",
-                              "type": "string"
-                            },
-                            "grantee_id": {
-                              "description": "ULID string",
-                              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                              "type": "string"
-                            },
-                            "role": {
-                              "enum": [
-                                "viewer",
-                                "contributor",
-                                "editor",
-                                "admin"
-                              ],
-                              "type": "string"
-                            },
-                            "space_id": {
-                              "description": "ULID string",
-                              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "space_id",
-                            "grantee_id",
-                            "role",
-                            "granted_at"
-                          ],
-                          "type": "object"
-                        }
-                      },
-                      "required": [
-                        "permission"
-                      ],
-                      "type": "object"
-                    },
-                    {
-                      "properties": {
-                        "permissions": {
-                          "items": {
-                            "properties": {
-                              "granted_at": {
-                                "example": "2026-01-01T00:00:00.000Z",
-                                "format": "date-time",
-                                "type": "string"
-                              },
-                              "grantee_id": {
-                                "description": "ULID string",
-                                "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                                "type": "string"
-                              },
-                              "role": {
-                                "enum": [
-                                  "viewer",
-                                  "contributor",
-                                  "editor",
-                                  "admin"
-                                ],
-                                "type": "string"
-                              },
-                              "space_id": {
-                                "description": "ULID string",
-                                "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                                "type": "string"
-                              }
-                            },
-                            "required": [
-                              "space_id",
-                              "grantee_id",
-                              "role",
-                              "granted_at"
-                            ],
-                            "type": "object"
-                          },
-                          "type": "array"
-                        }
-                      },
-                      "required": [
-                        "permissions"
-                      ],
-                      "type": "object"
-                    }
-                  ]
-                }
-              }
-            },
-            "description": "Permission(s) granted"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Bad request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Forbidden"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not found"
-          }
-        },
-        "summary": "Grant role(s) on a space. Accepts a single grant or a bulk grants array (RLS: owner/admin)",
-        "tags": [
-          "Spaces"
-        ],
-        "x-arke-auth": "required",
-        "x-arke-related": [
-          "DELETE /spaces/{id}/permissions/{granteeId}",
-          "GET /spaces/{id}/permissions"
-        ],
-        "x-arke-rules": [
-          "Only the space owner or a system admin may grant permissions",
-          "Valid roles: contributor, editor, admin",
-          "Maximum 100 grants per request"
-        ]
-      }
-    },
-    "/spaces/{id}/permissions/{granteeId}": {
-      "delete": {
-        "operationId": "revokeSpacePermission",
-        "parameters": [
-          {
-            "description": "Space ULID",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "description": "Space ULID",
-              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Grantee actor ULID",
-            "in": "path",
-            "name": "granteeId",
-            "required": true,
-            "schema": {
-              "description": "Grantee actor ULID",
-              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Permission revoked"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Forbidden"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not found"
-          }
-        },
-        "summary": "Revoke a role on a space (RLS: owner/admin)",
-        "tags": [
-          "Spaces"
-        ],
-        "x-arke-auth": "required",
-        "x-arke-rules": [
-          "Only the space owner or a system admin may revoke permissions"
-        ]
+        "x-arke-rules": []
       }
     },
     "/wiki": {
@@ -5185,7 +4018,6 @@
           "GET /wiki/{id}"
         ],
         "x-arke-rules": [
-          "Results filtered by your classification clearance",
           "If space_id is provided, only entities belonging to that space are returned"
         ]
       },
@@ -5239,13 +4071,6 @@
                     "description": "Additional JSON properties to store on the wiki entity. Reserved wiki metadata keys from this request take precedence.",
                     "type": "object"
                   },
-                  "read_level": {
-                    "default": 1,
-                    "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
-                    "maximum": 4,
-                    "minimum": 0,
-                    "type": "integer"
-                  },
                   "short_description": {
                     "description": "One to two sentences of framing, used in search previews and multi-choice disambiguation",
                     "maxLength": 400,
@@ -5269,13 +4094,6 @@
                     "maxLength": 80,
                     "minLength": 1,
                     "type": "string"
-                  },
-                  "write_level": {
-                    "default": 1,
-                    "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
-                    "maximum": 4,
-                    "minimum": 0,
-                    "type": "integer"
                   }
                 },
                 "required": [
@@ -5427,7 +4245,6 @@
           "GET /help/guide/wiki"
         ],
         "x-arke-rules": [
-          "Requires contributor role or above on the target space",
           "All [[entity:ULID]] links must reference existing visible entities — 404 otherwise",
           "[[resolve:...]] links soft-degrade to placeholders on LLM miss / no-match — the wiki still publishes with resolve_warnings",
           "Returns 409 if a wiki with the same normalized label or alias already exists in the space",
@@ -5493,8 +4310,7 @@
         ],
         "x-arke-auth": "required",
         "x-arke-rules": [
-          "Only the owner, an entity admin, or a system admin may delete",
-          "Requires write_level clearance >= entity's write_level"
+          "Only the owner or an admin may delete"
         ]
       },
       "get": {
@@ -5613,8 +4429,7 @@
           "GET /wiki/{id}/versions"
         ],
         "x-arke-rules": [
-          "Requires read_level clearance >= entity's read_level",
-          "Returns 404 if entity is not visible to you"
+          "Returns 404 if entity does not exist"
         ]
       },
       "put": {
@@ -5738,8 +4553,7 @@
           "GET /wiki/{id}/versions"
         ],
         "x-arke-rules": [
-          "Only the owner, an entity editor, or an entity admin may update",
-          "Requires write_level clearance >= entity's write_level",
+          "Only the owner or an admin may update",
           "Optimistic concurrency: must pass current ver to update",
           "Properties are shallow-merged: only provided keys are updated, omitted keys are preserved",
           "remove_properties deletes keys by name after the merge, so removals take precedence over additions"
@@ -5951,9 +4765,7 @@
           "POST /wiki/{id}/content",
           "DELETE /wiki/{id}/content"
         ],
-        "x-arke-rules": [
-          "Requires read_level clearance >= entity's read_level"
-        ]
+        "x-arke-rules": []
       },
       "patch": {
         "operationId": "renameEntityContent",
@@ -6247,112 +5059,6 @@
         ]
       }
     },
-    "/wiki/{id}/level": {
-      "put": {
-        "operationId": "changeWikiLevel",
-        "parameters": [
-          {
-            "description": "Entity ULID",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "description": "Entity ULID",
-              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "read_level": {
-                    "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
-                    "maximum": 4,
-                    "minimum": 0,
-                    "type": "integer"
-                  },
-                  "write_level": {
-                    "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
-                    "maximum": 4,
-                    "minimum": 0,
-                    "type": "integer"
-                  }
-                },
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EntityResponse"
-                }
-              }
-            },
-            "description": "Classification updated"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Bad request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Forbidden"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not found"
-          }
-        },
-        "summary": "Change entity classification levels",
-        "tags": [
-          "Wiki"
-        ],
-        "x-arke-auth": "required",
-        "x-arke-rules": [
-          "Only the owner, an entity editor, or an entity admin may change levels",
-          "Cannot set read_level above your own max_read_level",
-          "Cannot set write_level above your own max_write_level",
-          "Setting read_level to PUBLIC (0) requires can_publish_public flag"
-        ]
-      }
-    },
     "/wiki/{id}/merge": {
       "post": {
         "operationId": "mergeWiki",
@@ -6483,464 +5189,9 @@
           "DELETE /wiki/{id}"
         ],
         "x-arke-rules": [
-          "Requires admin access on both source and target entities",
           "Both entities must have the same kind (entity or relationship)",
           "If merging relationships, both must connect the same source and target entities",
           "Source entity is deleted after merge; a redirect is created from source ID to target ID"
-        ]
-      }
-    },
-    "/wiki/{id}/owner": {
-      "put": {
-        "operationId": "transferWikiOwner",
-        "parameters": [
-          {
-            "description": "Entity ULID",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "description": "Entity ULID",
-              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "owner_id": {
-                    "description": "New owner actor ULID",
-                    "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "owner_id"
-                ],
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EntityResponse"
-                }
-              }
-            },
-            "description": "Ownership transferred"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Bad request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Forbidden"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not found"
-          }
-        },
-        "summary": "Transfer entity ownership",
-        "tags": [
-          "Wiki"
-        ],
-        "x-arke-auth": "required",
-        "x-arke-rules": [
-          "Only the current owner or a system admin may transfer ownership",
-          "Previous owner loses all access unless they have a separate permission grant"
-        ]
-      }
-    },
-    "/wiki/{id}/permissions": {
-      "get": {
-        "operationId": "getWikiPermissions",
-        "parameters": [
-          {
-            "description": "Entity ULID",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "description": "Entity ULID",
-              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "owner_id": {
-                      "description": "ULID string",
-                      "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                      "type": "string"
-                    },
-                    "permissions": {
-                      "items": {
-                        "properties": {
-                          "entity_id": {
-                            "description": "ULID string",
-                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                            "type": "string"
-                          },
-                          "granted_at": {
-                            "example": "2026-01-01T00:00:00.000Z",
-                            "format": "date-time",
-                            "type": "string"
-                          },
-                          "granted_by": {
-                            "description": "ULID string",
-                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                            "type": "string"
-                          },
-                          "grantee_id": {
-                            "type": "string"
-                          },
-                          "grantee_type": {
-                            "enum": [
-                              "actor"
-                            ],
-                            "type": "string"
-                          },
-                          "role": {
-                            "enum": [
-                              "admin",
-                              "editor"
-                            ],
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "entity_id",
-                          "grantee_type",
-                          "grantee_id",
-                          "role",
-                          "granted_by",
-                          "granted_at"
-                        ],
-                        "type": "object"
-                      },
-                      "type": "array"
-                    }
-                  },
-                  "required": [
-                    "owner_id",
-                    "permissions"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Entity permissions"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not found"
-          }
-        },
-        "summary": "List permission grants on an entity",
-        "tags": [
-          "Wiki"
-        ],
-        "x-arke-auth": "required",
-        "x-arke-rules": [
-          "Requires read_level clearance >= entity's read_level"
-        ]
-      },
-      "post": {
-        "operationId": "grantWikiPermission",
-        "parameters": [
-          {
-            "description": "Entity ULID",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "description": "Entity ULID",
-              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "grantee_id": {
-                    "type": "string"
-                  },
-                  "grantee_type": {
-                    "enum": [
-                      "actor"
-                    ],
-                    "type": "string"
-                  },
-                  "role": {
-                    "enum": [
-                      "admin",
-                      "editor"
-                    ],
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "grantee_type",
-                  "grantee_id",
-                  "role"
-                ],
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "permission": {
-                      "properties": {
-                        "entity_id": {
-                          "description": "ULID string",
-                          "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                          "type": "string"
-                        },
-                        "granted_at": {
-                          "example": "2026-01-01T00:00:00.000Z",
-                          "format": "date-time",
-                          "type": "string"
-                        },
-                        "granted_by": {
-                          "description": "ULID string",
-                          "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                          "type": "string"
-                        },
-                        "grantee_id": {
-                          "type": "string"
-                        },
-                        "grantee_type": {
-                          "enum": [
-                            "actor"
-                          ],
-                          "type": "string"
-                        },
-                        "role": {
-                          "enum": [
-                            "admin",
-                            "editor"
-                          ],
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "entity_id",
-                        "grantee_type",
-                        "grantee_id",
-                        "role",
-                        "granted_by",
-                        "granted_at"
-                      ],
-                      "type": "object"
-                    }
-                  },
-                  "required": [
-                    "permission"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Permission granted"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Bad request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Forbidden"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not found"
-          }
-        },
-        "summary": "Grant a role on an entity (owner/admin only, enforced by RLS)",
-        "tags": [
-          "Wiki"
-        ],
-        "x-arke-auth": "required",
-        "x-arke-rules": [
-          "Only the entity owner, an entity admin, or a system admin may grant permissions"
-        ]
-      }
-    },
-    "/wiki/{id}/permissions/{granteeId}": {
-      "delete": {
-        "operationId": "revokeWikiPermission",
-        "parameters": [
-          {
-            "description": "Entity ULID",
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "description": "Entity ULID",
-              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Grantee actor ID",
-            "in": "path",
-            "name": "granteeId",
-            "required": true,
-            "schema": {
-              "description": "Grantee actor ID",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Permission revoked"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Forbidden"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not found"
-          }
-        },
-        "summary": "Revoke a role from an actor",
-        "tags": [
-          "Wiki"
-        ],
-        "x-arke-auth": "required",
-        "x-arke-rules": [
-          "Only the entity owner, an entity admin, or a system admin may revoke permissions"
         ]
       }
     },
@@ -7057,12 +5308,6 @@
                             "additionalProperties": {},
                             "type": "object"
                           },
-                          "read_level": {
-                            "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
-                            "maximum": 4,
-                            "minimum": 0,
-                            "type": "integer"
-                          },
                           "source": {},
                           "source_id": {
                             "description": "ULID string",
@@ -7076,12 +5321,6 @@
                             "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
                             "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
                             "type": "string"
-                          },
-                          "write_level": {
-                            "description": "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED",
-                            "maximum": 4,
-                            "minimum": 0,
-                            "type": "integer"
                           }
                         },
                         "required": [
@@ -7090,9 +5329,7 @@
                           "source_id",
                           "target_id",
                           "direction",
-                          "properties",
-                          "read_level",
-                          "write_level"
+                          "properties"
                         ],
                         "type": "object"
                       },
@@ -7149,10 +5386,7 @@
           "GET /wiki/{id}",
           "GET /relationships/{relId}"
         ],
-        "x-arke-rules": [
-          "Results filtered by your classification clearance",
-          "Only shows relationships where you can read the relationship entity"
-        ]
+        "x-arke-rules": []
       }
     },
     "/wiki/{id}/versions": {
@@ -7289,9 +5523,7 @@
           "Wiki"
         ],
         "x-arke-auth": "optional",
-        "x-arke-rules": [
-          "Requires read_level clearance >= entity's read_level"
-        ]
+        "x-arke-rules": []
       }
     },
     "/wiki/{id}/versions/{ver}": {
@@ -7398,9 +5630,7 @@
           "Wiki"
         ],
         "x-arke-auth": "optional",
-        "x-arke-rules": [
-          "Requires read_level clearance >= entity's read_level"
-        ]
+        "x-arke-rules": []
       }
     },
     "/wiki/bulk": {
@@ -7520,9 +5750,7 @@
           "GET /wiki/{id}",
           "GET /search"
         ],
-        "x-arke-rules": [
-          "Results filtered by your classification clearance"
-        ]
+        "x-arke-rules": []
       }
     },
     "/wiki/merge-batch": {
@@ -7683,7 +5911,6 @@
           "POST /wiki/bulk"
         ],
         "x-arke-rules": [
-          "Requires admin access on all entities in every group",
           "All entities in a group must have the same kind (entity or relationship)",
           "Entity with richest properties is auto-selected as merge target",
           "Maximum 100 groups per request, 500 entities per group",
