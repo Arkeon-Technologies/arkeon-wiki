@@ -380,9 +380,4 @@ describe("Entity Merge Batch", () => {
   });
 
   // --- Relationship endpoint validation ---
-
-  // Relationship entities can no longer be created directly — they are side
-  // effects of wiki links. Skip relationship-merge batch tests.
-  test.skip("error when merging relationships with different endpoints (no direct relationship creation)", async () => {});
-  test.skip("relationships with same endpoints merge successfully (no direct relationship creation)", async () => {});
 });

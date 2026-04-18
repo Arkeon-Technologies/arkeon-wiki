@@ -58,7 +58,4 @@ describe("Spaces", () => {
   // actor context, so RLS blocks the query and returns 404.
   // Skip until the server sets actor context for the space_entities lookups.
   test.skip("Remove entity from space (server: missing actor context in DELETE handler)", async () => {});
-
-  // The /spaces/{id}/feed endpoint was removed in the wiki-first rewrite.
-  test.skip("Space feed shows activity (endpoint removed)", async () => {});
 });

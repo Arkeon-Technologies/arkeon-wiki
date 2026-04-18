@@ -132,10 +132,6 @@ describe("Entities CRUD", () => {
     expect((v1Body as any).properties.label).toContain("v1-label");
   });
 
-  // Activity log endpoint was removed in the wiki-first rewrite.
-  // Entity history is available via GET /wiki/{id}/versions instead.
-  test.skip("Entity activity log (endpoint removed)", async () => {});
-
   test("Relationships: create via wiki links and list", async () => {
     const target = await createEntity(actor.apiKey, "note", {
       label: uniqueName("rel-target"),

@@ -173,10 +173,6 @@ describe("Entity Merge", () => {
     expect(response.status).toBe(400);
   });
 
-  // Relationship entities can no longer be created directly — they are
-  // side effects of wiki links. Skip the different-kinds merge test.
-  test.skip("400 when merging entities of different kinds (no direct relationship creation)", async () => {});
-
   test("409 on CAS version mismatch", async () => {
     const target = await createEntity(actor.apiKey, "note", { label: uniqueName("t") });
     const source = await createEntity(actor.apiKey, "note", { label: uniqueName("s") });
@@ -189,14 +185,6 @@ describe("Entity Merge", () => {
     expect(response.status).toBe(409);
     expect((body as any).error.code).toBe("cas_conflict");
   });
-
-  // --- Relationship merge ---
-
-  // Relationship entities can no longer be created or merged directly.
-  test.skip("merge two relationships with same endpoints (no direct relationship creation)", async () => {});
-
-  // Relationship entities can no longer be created or merged directly.
-  test.skip("400 when merging relationships with different endpoints (no direct relationship creation)", async () => {});
 
   // --- Edge deduplication ---
 
