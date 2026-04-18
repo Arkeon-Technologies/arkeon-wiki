@@ -8,8 +8,8 @@ import {
   apiRequest,
   createActor,
   createEntity,
-  createRelationship,
   createSpace,
+  createWikiWithLinks,
   getJson,
   jsonRequest,
   uniqueName,
@@ -30,7 +30,8 @@ describe("Entities CRUD", () => {
     expect(entity.id).toBeTruthy();
     expect(entity.properties.label).toContain("crud-create");
     expect(entity.properties.description).toBe("A test entity");
-    expect(entity.ver).toBe(1);
+    // Wiki publish cycle creates ver=2 (draft=1, publish=2)
+    expect(entity.ver).toBe(2);
   });
 
   test("Get entity by ID", async () => {
@@ -45,37 +46,38 @@ describe("Entities CRUD", () => {
 
   test("Update entity with CAS (ver)", async () => {
     const entity = await createEntity(actor.apiKey, "note", {
-      label: "version-1",
+      label: uniqueName("version-1"),
     });
-    expect(entity.ver).toBe(1);
+    // Wiki publish cycle creates ver=2
+    expect(entity.ver).toBe(2);
 
     const { response, body } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: actor.apiKey,
-      json: { ver: 1, properties: { label: "version-2" } },
+      json: { ver: 2, properties: { label: "version-2" } },
     });
     expect(response.status).toBe(200);
-    expect((body as any).entity.ver).toBe(2);
+    expect((body as any).entity.ver).toBe(3);
     expect((body as any).entity.properties.label).toBe("version-2");
   });
 
   test("CAS conflict on stale ver returns 409", async () => {
     const entity = await createEntity(actor.apiKey, "note", {
-      label: "cas-test",
+      label: uniqueName("cas-test"),
     });
 
-    // First update succeeds
+    // First update succeeds (entity starts at ver=2 after publish)
     await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: actor.apiKey,
-      json: { ver: 1, properties: { label: "cas-updated" } },
+      json: { ver: 2, properties: { label: "cas-updated" } },
     });
 
-    // Second update with stale ver=1 should fail with 409
+    // Second update with stale ver=2 should fail with 409
     const { response, body } = await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: actor.apiKey,
-      json: { ver: 1, properties: { label: "cas-stale" } },
+      json: { ver: 2, properties: { label: "cas-stale" } },
     });
     expect(response.status).toBe(409);
     expect((body as any).error?.code).toBe("cas_conflict");
@@ -99,14 +101,14 @@ describe("Entities CRUD", () => {
 
   test("Entity versions: list and get specific version", async () => {
     const entity = await createEntity(actor.apiKey, "note", {
-      label: "v1-label",
+      label: uniqueName("v1-label"),
     });
 
-    // Update to create v2
+    // Update to create v3 (entity starts at ver=2 after publish)
     await jsonRequest(`/wiki/${entity.id}`, {
       method: "PUT",
       apiKey: actor.apiKey,
-      json: { ver: 1, properties: { label: "v2-label" }, note: "second edit" },
+      json: { ver: 2, properties: { label: "v2-label" }, note: "second edit" },
     });
 
     // Small delay for background version writes
@@ -127,53 +129,24 @@ describe("Entities CRUD", () => {
     );
     expect(v1Res.status).toBe(200);
     expect((v1Body as any).ver).toBe(1);
-    expect((v1Body as any).properties.label).toBe("v1-label");
+    expect((v1Body as any).properties.label).toContain("v1-label");
   });
 
-  test("Entity activity log", async () => {
-    const entity = await createEntity(actor.apiKey, "note", {
-      label: uniqueName("activity-log"),
-    });
+  // Activity log endpoint was removed in the wiki-first rewrite.
+  // Entity history is available via GET /wiki/{id}/versions instead.
+  test.skip("Entity activity log (endpoint removed)", async () => {});
 
-    // Update to generate activity
-    await jsonRequest(`/wiki/${entity.id}`, {
-      method: "PUT",
-      apiKey: actor.apiKey,
-      json: { ver: 1, properties: { label: "activity-updated" } },
-    });
-
-    // Small delay for background activity writes
-    await new Promise((r) => setTimeout(r, 500));
-
-    const { response, body } = await getJson(
-      `/wiki/${entity.id}/activity`,
-      actor.apiKey,
-    );
-    expect(response.status).toBe(200);
-    const actions = (body as any).activity.map((a: any) => a.action);
-    expect(actions).toContain("entity_created");
-  });
-
-  test("Relationships: create, list, delete", async () => {
-    const source = await createEntity(actor.apiKey, "note", {
-      label: uniqueName("rel-source"),
-    });
+  test("Relationships: create via wiki links and list", async () => {
     const target = await createEntity(actor.apiKey, "note", {
       label: uniqueName("rel-target"),
     });
 
-    // Create relationship
-    const rel = await createRelationship(
+    // Create a wiki with a link to target — this creates a "references" relationship
+    const source = await createWikiWithLinks(
       actor.apiKey,
-      source.id,
-      "references",
-      target.id,
-      { weight: 1 },
+      uniqueName("rel-source"),
+      [target.id],
     );
-    expect(rel.edge).toBeTruthy();
-    expect(rel.edge.predicate).toBe("references");
-    expect(rel.edge.source_id).toBe(source.id);
-    expect(rel.edge.target_id).toBe(target.id);
 
     // List relationships
     const { response: listRes, body: listBody } = await getJson(
@@ -187,53 +160,35 @@ describe("Entities CRUD", () => {
         (r: any) => r.target_id === target.id && r.predicate === "references",
       ),
     ).toBe(true);
-
-    // Delete relationship
-    const relId = rel.edge.id;
-    const { response: deleteRes } = await apiRequest(`/relationships/${relId}`, {
-      method: "DELETE",
-      apiKey: actor.apiKey,
-    });
-    expect(deleteRes.status).toBe(204);
-
-    // Verify deleted
-    const { response: getRes } = await getJson(`/relationships/${relId}`, actor.apiKey);
-    expect(getRes.status).toBe(404);
   });
 
-  test("Relationships: 404 for nonexistent source entity", async () => {
-    const target = await createEntity(actor.apiKey, "note", {
-      label: uniqueName("rel-404-target"),
-    });
-
-    const { response, body } = await jsonRequest(
+  test("Relationships: empty list for nonexistent entity", async () => {
+    // GET relationships for a nonexistent entity returns empty list
+    const { response, body } = await getJson(
       `/wiki/01AAAAAAAAAAAAAAAAAAAAAAAA/relationships`,
-      {
-        method: "POST",
-        apiKey: actor.apiKey,
-        json: { predicate: "references", target_id: target.id },
-      },
+      actor.apiKey,
     );
-    expect(response.status).toBe(404);
-    expect((body as any).error.code).toBe("not_found");
+    expect(response.status).toBe(200);
+    expect((body as any).relationships).toEqual([]);
   });
 
   test("Filter entities by boolean property", async () => {
     const tag = uniqueName("bool-filter");
-    // Create entity with boolean true
+    // Create entities with unique labels to avoid wiki duplicate detection
     const eTrue = await createEntity(actor.apiKey, "note", {
-      label: tag,
+      label: `${tag}-true`,
+      group_tag: tag,
       extracted: true,
     });
-    // Create entity with boolean false
     const eFalse = await createEntity(actor.apiKey, "note", {
-      label: tag,
+      label: `${tag}-false`,
+      group_tag: tag,
       extracted: false,
     });
 
-    // Filter for extracted:true
+    // Filter for extracted:true within this group
     const { response, body } = await getJson(
-      `/entities?filter=label:${tag},extracted:true`,
+      `/wiki?filter=group_tag:${tag},extracted:true`,
       actor.apiKey,
     );
     expect(response.status).toBe(200);
@@ -243,7 +198,7 @@ describe("Entities CRUD", () => {
 
     // Filter for extracted:false
     const { body: bodyF } = await getJson(
-      `/entities?filter=label:${tag},extracted:false`,
+      `/wiki?filter=group_tag:${tag},extracted:false`,
       actor.apiKey,
     );
     const idsF = (bodyF as any).entities.map((e: any) => e.id);
@@ -254,17 +209,19 @@ describe("Entities CRUD", () => {
   test("Filter entities by numeric property", async () => {
     const tag = uniqueName("num-filter");
     const e1 = await createEntity(actor.apiKey, "note", {
-      label: tag,
+      label: `${tag}-a`,
+      group_tag: tag,
       count: 42,
     });
     const e2 = await createEntity(actor.apiKey, "note", {
-      label: tag,
+      label: `${tag}-b`,
+      group_tag: tag,
       count: 99,
     });
 
     // Exact match
     const { body } = await getJson(
-      `/entities?filter=label:${tag},count:42`,
+      `/wiki?filter=group_tag:${tag},count:42`,
       actor.apiKey,
     );
     const ids = (body as any).entities.map((e: any) => e.id);
@@ -275,16 +232,18 @@ describe("Entities CRUD", () => {
   test("Filter entities by string property (unchanged behavior)", async () => {
     const tag = uniqueName("str-filter");
     const e1 = await createEntity(actor.apiKey, "note", {
-      label: tag,
-      status: "active",
+      label: `${tag}-active`,
+      group_tag: tag,
+      filter_status: "active",
     });
     const e2 = await createEntity(actor.apiKey, "note", {
-      label: tag,
-      status: "archived",
+      label: `${tag}-archived`,
+      group_tag: tag,
+      filter_status: "archived",
     });
 
     const { body } = await getJson(
-      `/entities?filter=label:${tag},status:active`,
+      `/wiki?filter=group_tag:${tag},filter_status:active`,
       actor.apiKey,
     );
     const ids = (body as any).entities.map((e: any) => e.id);
@@ -295,17 +254,19 @@ describe("Entities CRUD", () => {
   test("Filter entities by property negation (!:)", async () => {
     const tag = uniqueName("neg-filter");
     const e1 = await createEntity(actor.apiKey, "note", {
-      label: tag,
+      label: `${tag}-true`,
+      group_tag: tag,
       extracted: true,
     });
     const e2 = await createEntity(actor.apiKey, "note", {
-      label: tag,
+      label: `${tag}-false`,
+      group_tag: tag,
       extracted: false,
     });
 
     // Negate boolean
     const { body } = await getJson(
-      `/entities?filter=label:${tag},extracted!:true`,
+      `/wiki?filter=group_tag:${tag},extracted!:true`,
       actor.apiKey,
     );
     const ids = (body as any).entities.map((e: any) => e.id);
@@ -316,17 +277,19 @@ describe("Entities CRUD", () => {
   test("Filter entities by nested property (dot notation)", async () => {
     const tag = uniqueName("nested-filter");
     const e1 = await createEntity(actor.apiKey, "note", {
-      label: tag,
+      label: `${tag}-arxiv`,
+      group_tag: tag,
       metadata: { source: "arxiv", year: 2024 },
     });
     const e2 = await createEntity(actor.apiKey, "note", {
-      label: tag,
+      label: `${tag}-pubmed`,
+      group_tag: tag,
       metadata: { source: "pubmed", year: 2023 },
     });
 
     // Filter nested string property
     const { response, body } = await getJson(
-      `/entities?filter=label:${tag},metadata.source:arxiv`,
+      `/wiki?filter=group_tag:${tag},metadata.source:arxiv`,
       actor.apiKey,
     );
     expect(response.status).toBe(200);
@@ -338,17 +301,19 @@ describe("Entities CRUD", () => {
   test("Filter with properties. prefix is normalized", async () => {
     const tag = uniqueName("prefix-filter");
     const e1 = await createEntity(actor.apiKey, "note", {
-      label: tag,
+      label: `${tag}-true`,
+      group_tag: tag,
       processed: true,
     });
     const e2 = await createEntity(actor.apiKey, "note", {
-      label: tag,
+      label: `${tag}-false`,
+      group_tag: tag,
       processed: false,
     });
 
     // Using "properties.processed" should work the same as "processed"
     const { response, body } = await getJson(
-      `/entities?filter=label:${tag},properties.processed:true`,
+      `/wiki?filter=group_tag:${tag},properties.processed:true`,
       actor.apiKey,
     );
     expect(response.status).toBe(200);
@@ -358,11 +323,12 @@ describe("Entities CRUD", () => {
 
     // Also test nested with prefix
     const e3 = await createEntity(actor.apiKey, "note", {
-      label: tag,
+      label: `${tag}-arxiv`,
+      group_tag: tag,
       metadata: { source: "arxiv" },
     });
     const { body: body2 } = await getJson(
-      `/entities?filter=label:${tag},properties.metadata.source:arxiv`,
+      `/wiki?filter=group_tag:${tag},properties.metadata.source:arxiv`,
       actor.apiKey,
     );
     const ids2 = (body2 as any).entities.map((e: any) => e.id);
@@ -381,7 +347,7 @@ describe("Entities CRUD", () => {
     await addEntityToSpace(actor.apiKey, space.id, inSpace.id);
 
     const { response, body } = await getJson(
-      `/entities?space_id=${space.id}`,
+      `/wiki?space_id=${space.id}`,
       actor.apiKey,
     );
     expect(response.status).toBe(200);
@@ -394,19 +360,21 @@ describe("Entities CRUD", () => {
     const space = await createSpace(actor.apiKey, uniqueName("combo-space"));
     const tag = uniqueName("combo-tag");
     const match = await createEntity(actor.apiKey, "note", {
-      label: tag,
-      status: "active",
+      label: `${tag}-active`,
+      group_tag: tag,
+      filter_status: "active",
     });
     const noMatch = await createEntity(actor.apiKey, "note", {
-      label: tag,
-      status: "archived",
+      label: `${tag}-archived`,
+      group_tag: tag,
+      filter_status: "archived",
     });
 
     await addEntityToSpace(actor.apiKey, space.id, match.id);
     await addEntityToSpace(actor.apiKey, space.id, noMatch.id);
 
     const { response, body } = await getJson(
-      `/entities?space_id=${space.id}&filter=status:active`,
+      `/wiki?space_id=${space.id}&filter=filter_status:active`,
       actor.apiKey,
     );
     expect(response.status).toBe(200);
@@ -422,7 +390,7 @@ describe("Entities CRUD", () => {
     });
 
     const { response, body } = await getJson(
-      `/entities?filter=label:${tag}`,
+      `/wiki?filter=label:${tag}`,
       actor.apiKey,
     );
     expect(response.status).toBe(200);

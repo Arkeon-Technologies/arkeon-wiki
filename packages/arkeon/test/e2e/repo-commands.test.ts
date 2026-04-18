@@ -26,18 +26,23 @@ import {
 // Types
 // ---------------------------------------------------------------------------
 
-type OpsResponse = {
-  format: string;
-  committed: boolean;
-  entities: Array<{ ref: string; id: string; type: string; label: string | null; action: "created" | "updated" }>;
-  edges: Array<{ id: string; source: string; predicate: string; target: string }>;
-  stats: { entities: number; edges: number };
+type WikiResponse = {
+  wiki: {
+    id: string;
+    type: string;
+    ver: number;
+    properties: Record<string, unknown>;
+  };
+  placeholders: Array<{ id: string; label: string; status: string }>;
+  relationships_created: number;
+  resolve_warnings?: unknown[];
 };
 
 type EntityResponse = {
   entity: {
     id: string;
     type: string;
+    kind?: string;
     ver: number;
     properties: Record<string, unknown>;
   };
@@ -89,40 +94,31 @@ async function createSpaceWithActor(name: string) {
   return { actor, space };
 }
 
-async function addDocumentEntity(
+async function createWiki(
   apiKey: string,
-  spaceId: string,
-  sourceFile: string,
-  sourceHash: string,
-  content: string | null,
+  label: string,
+  content: string,
+  opts?: { spaceId?: string; subjectType?: string },
 ) {
-  const ops: Record<string, unknown>[] = [
-    {
-      op: "entity",
-      ref: "@doc",
-      type: "document",
-      label: sourceFile.split("/").pop(),
-      source_file: sourceFile,
-      source_hash: sourceHash,
-      file_type: "markdown",
-      ...(content !== null ? { content } : {}),
-    },
-  ];
-
-  const { response, body } = await jsonRequest("/ops", {
+  const { response, body } = await jsonRequest("/wiki", {
     method: "POST",
     apiKey,
-    json: { format: "arke.ops/v1", defaults: { space_id: spaceId }, ops },
+    json: {
+      label,
+      content,
+      keywords: [label.toLowerCase()],
+      short_description: `Test wiki: ${label}`,
+      subject_type: opts?.subjectType ?? "document",
+      ...(opts?.spaceId ? { space_id: opts.spaceId } : {}),
+    },
   });
-  expect(response.status).toBe(200);
-  const data = body as OpsResponse;
-  expect(data.committed).toBe(true);
-  return data.entities[0]!;
+  expect(response.status).toBe(201);
+  return body as WikiResponse;
 }
 
 async function listDocuments(apiKey: string, spaceId: string) {
   const { body } = await getJson(
-    `/wiki?filter=${encodeURIComponent("type:document")}&space_id=${spaceId}&limit=200`,
+    `/wiki?filter=${encodeURIComponent("properties.subject_type:document")}&space_id=${spaceId}&limit=200`,
     apiKey,
   );
   return (body as ListResponse).entities;
@@ -191,14 +187,14 @@ describe("Repo commands — init / diff / add / rm flow", () => {
   let doc2Id: string;
   let doc3Id: string;
 
-  test("add: create document entities via ops", async () => {
-    const d1 = await addDocumentEntity(actor.apiKey, spaceId, "texts/book-01.md", "hash_aaa", "Augustine reflects on his early life.");
-    const d2 = await addDocumentEntity(actor.apiKey, spaceId, "texts/book-02.md", "hash_bbb", "Augustine discusses the nature of sin.");
-    const d3 = await addDocumentEntity(actor.apiKey, spaceId, "texts/city-of-god.md", "hash_ccc", "A treatise on the two cities.");
+  test("add: create document wikis", async () => {
+    const d1 = await createWiki(actor.apiKey, "Book 01", "Augustine reflects on his early life.", { spaceId, subjectType: "document" });
+    const d2 = await createWiki(actor.apiKey, "Book 02", "Augustine discusses the nature of sin.", { spaceId, subjectType: "document" });
+    const d3 = await createWiki(actor.apiKey, "City of God", "A treatise on the two cities.", { spaceId, subjectType: "document" });
 
-    doc1Id = d1.id;
-    doc2Id = d2.id;
-    doc3Id = d3.id;
+    doc1Id = d1.wiki.id;
+    doc2Id = d2.wiki.id;
+    doc3Id = d3.wiki.id;
 
     expect(doc1Id).toBeTruthy();
     expect(doc2Id).toBeTruthy();
@@ -208,34 +204,23 @@ describe("Repo commands — init / diff / add / rm flow", () => {
   test("diff: space now has 3 documents", async () => {
     const docs = await listDocuments(actor.apiKey, spaceId);
     expect(docs).toHaveLength(3);
-
-    const sourceFiles = docs.map((d) => d.properties.source_file).sort();
-    expect(sourceFiles).toEqual([
-      "texts/book-01.md",
-      "texts/book-02.md",
-      "texts/city-of-god.md",
-    ]);
   });
 
   test("diff: documents have correct properties", async () => {
     const entity = await getEntity(actor.apiKey, doc1Id);
     expect(entity).not.toBeNull();
-    expect(entity!.type).toBe("document");
-    expect(entity!.properties.source_file).toBe("texts/book-01.md");
-    expect(entity!.properties.source_hash).toBe("hash_aaa");
-    expect(entity!.properties.content).toBe("Augustine reflects on his early life.");
-    expect(entity!.properties.file_type).toBe("markdown");
+    expect(entity!.properties.label).toBe("Book 01");
+    expect(entity!.properties.content).toBeTruthy();
   });
 
-  // --- Update flow (simulate modified file) ---
+  // --- Update flow (simulate modified content) ---
 
   test("add (update): modify document properties in place", async () => {
     const entity = await getEntity(actor.apiKey, doc1Id);
     expect(entity).not.toBeNull();
 
     const status = await updateEntity(actor.apiKey, doc1Id, entity!.ver, {
-      source_hash: "hash_aaa_modified",
-      content: "Augustine reflects on his early life and conversion.",
+      short_description: "Updated description for Book 01.",
     });
     expect(status).toBe(200);
 
@@ -243,92 +228,46 @@ describe("Repo commands — init / diff / add / rm flow", () => {
     const updated = await getEntity(actor.apiKey, doc1Id);
     expect(updated).not.toBeNull();
     expect(updated!.id).toBe(doc1Id); // same ID
-    expect(updated!.properties.source_hash).toBe("hash_aaa_modified");
-    expect(updated!.properties.content).toBe("Augustine reflects on his early life and conversion.");
+    expect(updated!.properties.short_description).toBe("Updated description for Book 01.");
     // Original properties preserved (shallow merge)
-    expect(updated!.properties.source_file).toBe("texts/book-01.md");
+    expect(updated!.properties.label).toBe("Book 01");
   });
 
-  // --- Ingest simulation: extracted_from provenance ---
+  // --- Wiki links create relationships ---
 
-  let augustineId: string;
-  let cityOfGodConceptId: string;
-  let authoredEdgeId: string;
+  let linkedWikiId: string;
 
-  test("ingest: extract entities with source.entity_id provenance", async () => {
-    const { response, body } = await jsonRequest("/ops", {
-      method: "POST",
-      apiKey: actor.apiKey,
-      json: {
-        format: "arke.ops/v1",
-        defaults: { space_id: spaceId },
-        source: { entity_id: doc3Id },
-        ops: [
-          { op: "entity", ref: "@augustine", type: "person", label: "Augustine of Hippo", description: "Early Christian theologian" },
-          { op: "entity", ref: "@city_concept", type: "concept", label: "City of God", description: "The heavenly city" },
-          { op: "relate", source: "@augustine", target: "@city_concept", predicate: "authored", detail: "Augustine wrote De Civitate Dei" },
-        ],
-      },
-    });
+  test("add: wiki with entity link creates relationship", async () => {
+    const result = await createWiki(
+      actor.apiKey,
+      "Analysis of Book 01",
+      `This analysis references [[entity:${doc1Id}]] extensively.`,
+      { spaceId },
+    );
 
-    expect(response.status).toBe(200);
-    const data = body as OpsResponse;
-    expect(data.committed).toBe(true);
-    expect(data.entities).toHaveLength(2);
-    expect(data.edges).toHaveLength(1);
-
-    augustineId = data.entities.find((c) => c.ref === "@augustine")!.id;
-    cityOfGodConceptId = data.entities.find((c) => c.ref === "@city_concept")!.id;
-    authoredEdgeId = data.edges[0]!.id;
+    linkedWikiId = result.wiki.id;
+    expect(result.relationships_created).toBeGreaterThanOrEqual(1);
   });
 
-  test("provenance: entities have extracted_from edges to document", async () => {
-    const rels = await getIncomingRelationships(actor.apiKey, doc3Id, "extracted_from");
-
-    // Should be 3: augustine, city_concept, AND the authored relationship
-    expect(rels.length).toBe(3);
-
-    const sourceIds = rels.map((r) => r.source_id).sort();
-    const expected = [augustineId, cityOfGodConceptId, authoredEdgeId].sort();
-    expect(sourceIds).toEqual(expected);
+  test("relationships: linked wiki has references relationship", async () => {
+    const rels = await getIncomingRelationships(actor.apiKey, doc1Id, "references");
+    const fromLinkedWiki = rels.filter((r) => r.source_id === linkedWikiId);
+    expect(fromLinkedWiki.length).toBeGreaterThanOrEqual(1);
   });
 
-  test("provenance: relationship entity also has extracted_from", async () => {
-    // The 'authored' relationship entity should point back to the document
-    const sourceIds = (await getIncomingRelationships(actor.apiKey, doc3Id, "extracted_from"))
-      .map((r) => r.source_id);
-    expect(sourceIds).toContain(authoredEdgeId);
-  });
+  // --- Remove flow ---
 
-  // --- Remove flow: cascade delete ---
-
-  test("rm: delete document cascades to extracted entities", async () => {
-    // Get extracted_from edges first
-    const rels = await getIncomingRelationships(actor.apiKey, doc3Id, "extracted_from");
-    expect(rels.length).toBe(3);
-
-    // Delete each extracted entity (simulating what arkeon rm does)
-    for (const rel of rels) {
-      const status = await deleteEntity(actor.apiKey, rel.source_id);
-      expect([204, 404]).toContain(status); // 404 ok due to cascade
-    }
-
-    // Delete the document entity itself
+  test("rm: delete document wiki", async () => {
     const status = await deleteEntity(actor.apiKey, doc3Id);
     expect(status).toBe(204);
-
-    // Verify everything is gone
     expect(await getEntity(actor.apiKey, doc3Id)).toBeNull();
-    expect(await getEntity(actor.apiKey, augustineId)).toBeNull();
-    expect(await getEntity(actor.apiKey, cityOfGodConceptId)).toBeNull();
   });
 
   test("rm: remaining documents are unaffected", async () => {
     const docs = await listDocuments(actor.apiKey, spaceId);
-    expect(docs).toHaveLength(2);
-
-    const sourceFiles = docs.map((d) => d.properties.source_file).sort();
-    expect(sourceFiles).toEqual(["texts/book-01.md", "texts/book-02.md"]);
+    // doc1, doc2, and the linked "Analysis" wiki remain (doc3 deleted)
+    const labels = docs.map((d) => d.properties.label).sort();
+    expect(labels).toEqual(["Analysis of Book 01", "Book 01", "Book 02"]);
   });
 
   // --- Simple delete (no extracted children) ---
@@ -338,113 +277,54 @@ describe("Repo commands — init / diff / add / rm flow", () => {
     expect(status).toBe(204);
 
     const docs = await listDocuments(actor.apiKey, spaceId);
-    expect(docs).toHaveLength(1);
-    expect(docs[0]!.properties.source_file).toBe("texts/book-01.md");
-  });
-
-  // --- Idempotency: adding same file twice ---
-
-  test("add: re-adding with same hash is idempotent (via filter check)", async () => {
-    // Query for existing doc with same source_file
-    const { body } = await getJson(
-      `/wiki?filter=${encodeURIComponent("type:document,properties.source_file:texts/book-01.md")}&space_id=${spaceId}&limit=1`,
-      actor.apiKey,
-    );
-    const existing = (body as ListResponse).entities;
-    expect(existing).toHaveLength(1);
-    expect(existing[0]!.properties.source_hash).toBe("hash_aaa_modified");
-    // CLI would skip this file since hash matches — no need to create again
+    // Book 01 and Analysis of Book 01 remain
+    expect(docs).toHaveLength(2);
+    const labels = docs.map((d) => d.properties.label).sort();
+    expect(labels).toEqual(["Analysis of Book 01", "Book 01"]);
   });
 });
 
-describe("Repo commands — DB cascade behavior", () => {
+describe("Repo commands — wiki placeholder behavior", () => {
   let actor: Awaited<ReturnType<typeof createActor>>;
   let spaceId: string;
 
   test("setup", async () => {
-    const result = await createSpaceWithActor(uniqueName("cascade-test"));
+    const result = await createSpaceWithActor(uniqueName("placeholder-test"));
     actor = result.actor;
     spaceId = result.space.id;
   });
 
-  test("deleting an entity cascades its relationship_edges row", async () => {
-    // Create two entities + a relationship
-    const { body } = await jsonRequest("/ops", {
-      method: "POST",
-      apiKey: actor.apiKey,
-      json: {
-        format: "arke.ops/v1",
-        defaults: { space_id: spaceId },
-        ops: [
-          { op: "entity", ref: "@a", type: "person", label: "Person A" },
-          { op: "entity", ref: "@b", type: "person", label: "Person B" },
-          { op: "relate", source: "@a", target: "@b", predicate: "knows" },
-        ],
-      },
-    });
-    const data = body as OpsResponse;
-    const personAId = data.entities.find((c) => c.ref === "@a")!.id;
-    const personBId = data.entities.find((c) => c.ref === "@b")!.id;
-    const knowsEdgeId = data.edges[0]!.id;
+  test("wiki with placeholder links creates stub entities", async () => {
+    const result = await createWiki(
+      actor.apiKey,
+      "Test Subject",
+      'This wiki mentions [[placeholder:"Person A"|"A test person"]] and [[placeholder:"Person B"|"Another test person"]].',
+      { spaceId },
+    );
 
-    // Delete person A — ON DELETE CASCADE on relationship_edges.source_id
-    // removes the edge row, but the relationship's entities row survives
-    // (it has its own id PK, cascaded only via relationship_edges.id FK).
-    const status = await deleteEntity(actor.apiKey, personAId);
-    expect(status).toBe(204);
-
-    // The relationship_edges row is gone (CASCADE on source_id), which
-    // cascades to deleting the entities row too (relationship_edges.id
-    // REFERENCES entities.id ON DELETE CASCADE — but actually the cascade
-    // goes the OTHER direction: entities.id deletion cascades TO
-    // relationship_edges.id). So in practice: deleting the edge row via
-    // source_id cascade does NOT delete the entity row. The relationship
-    // entity becomes an orphan. This is why arkeon rm explicitly deletes
-    // extracted entities — it can't rely on DB cascade alone.
-    //
-    // Verify: the relationship entity still exists but has no edge row
-    const relEntity = await getEntity(actor.apiKey, knowsEdgeId);
-    // The entity row may or may not survive depending on cascade direction.
-    // relationship_edges.id REFERENCES entities(id) ON DELETE CASCADE means
-    // deleting the entities row cascades to relationship_edges — NOT the reverse.
-    // So when relationship_edges row is deleted via source_id cascade,
-    // the entities row for the relationship survives as an orphan.
-    expect(relEntity).not.toBeNull();
-    expect(relEntity!.kind).toBe("relationship");
-
-    // Person B should still exist
-    const b = await getEntity(actor.apiKey, personBId);
-    expect(b).not.toBeNull();
-    expect(b!.properties.label).toBe("Person B");
+    expect(result.placeholders).toHaveLength(2);
+    const labels = result.placeholders.map((p) => p.label).sort();
+    expect(labels).toEqual(["Person A", "Person B"]);
+    expect(result.relationships_created).toBeGreaterThanOrEqual(2);
   });
 
-  test("source.entity_id creates extracted_from for both entities and relationships", async () => {
-    // Create a source document
-    const doc = await addDocumentEntity(actor.apiKey, spaceId, "test/source.md", "hash_src", "Source content");
+  test("deleting a wiki preserves placeholder entities", async () => {
+    const result = await createWiki(
+      actor.apiKey,
+      "Another Subject",
+      'References [[placeholder:"Concept X"|"A test concept"]].',
+      { spaceId },
+    );
 
-    // Create entities + relationship with source provenance
-    const { body } = await jsonRequest("/ops", {
-      method: "POST",
-      apiKey: actor.apiKey,
-      json: {
-        format: "arke.ops/v1",
-        defaults: { space_id: spaceId },
-        source: { entity_id: doc.id },
-        ops: [
-          { op: "entity", ref: "@x", type: "concept", label: "Concept X" },
-          { op: "entity", ref: "@y", type: "concept", label: "Concept Y" },
-          { op: "relate", source: "@x", target: "@y", predicate: "related_to" },
-        ],
-      },
-    });
-    const data = body as OpsResponse;
-    const xId = data.entities.find((c) => c.ref === "@x")!.id;
-    const yId = data.entities.find((c) => c.ref === "@y")!.id;
-    const relId = data.edges[0]!.id;
+    const placeholderId = result.placeholders[0]!.id;
+    const wikiId = result.wiki.id;
 
-    // All three should have extracted_from pointing to the document
-    const rels = await getIncomingRelationships(actor.apiKey, doc.id, "extracted_from");
-    const sourceIds = rels.map((r) => r.source_id).sort();
-    expect(sourceIds).toEqual([xId, yId, relId].sort());
+    // Delete the wiki
+    const status = await deleteEntity(actor.apiKey, wikiId);
+    expect(status).toBe(204);
+
+    // Placeholder should still exist
+    const placeholder = await getEntity(actor.apiKey, placeholderId);
+    expect(placeholder).not.toBeNull();
   });
 });

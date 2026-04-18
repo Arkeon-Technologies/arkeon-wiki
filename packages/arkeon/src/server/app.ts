@@ -23,7 +23,6 @@ import { authRouter } from "./routes/auth";
 import { contentRouter } from "./routes/content";
 import { wikisRouter } from "./routes/entities";
 import { createHelpRouter } from "./routes/help";
-import { opsRouter } from "./routes/ops";
 import { wikiRelationshipsRouter, relationshipDirectRouter } from "./routes/relationships";
 import { resolveRouter } from "./routes/resolve";
 import { graphRouter } from "./routes/traverse";
@@ -141,7 +140,6 @@ export function createApp(options?: { adminKey?: string }) {
   app.route("/admin", adminRouter);
   app.route("/auth", authRouter);
   app.route("/graph", graphRouter);
-  app.route("/ops", opsRouter);
   app.route("/relationships", relationshipDirectRouter);
   app.route("/resolve", resolveRouter);
   app.route("/search", searchRouter);

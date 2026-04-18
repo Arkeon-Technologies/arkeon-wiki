@@ -7,7 +7,8 @@ import {
   apiRequest,
   createActor,
   createEntity,
-  createRelationship,
+  createWiki,
+  createWikiWithLinks,
   getJson,
   jsonRequest,
   uniqueName,
@@ -25,15 +26,7 @@ describe("Context-rich retrieval", () => {
   test("setup: create actor and test entities with relationships", async () => {
     actor = await createActor(adminApiKey);
 
-    // Create entities
-    personA = await createEntity(actor.apiKey, "person", {
-      label: uniqueName("ctx-person-a"),
-      description: "Intelligence analyst",
-    });
-    personB = await createEntity(actor.apiKey, "person", {
-      label: uniqueName("ctx-person-b"),
-      description: "Field operative",
-    });
+    // Create target entities first (no outbound links)
     orgEntity = await createEntity(actor.apiKey, "organization", {
       label: uniqueName("ctx-org"),
       description: "Defense contractor",
@@ -43,11 +36,22 @@ describe("Context-rich retrieval", () => {
       description: "Quarterly assessment",
     });
 
-    // Create relationships
-    await createRelationship(actor.apiKey, personA.id, "works_at", orgEntity.id);
-    await createRelationship(actor.apiKey, personB.id, "works_at", orgEntity.id);
-    await createRelationship(actor.apiKey, personA.id, "authored", reportEntity.id);
-    await createRelationship(actor.apiKey, personA.id, "knows", personB.id);
+    // Create personB with a link to orgEntity (1 outbound relationship)
+    personB = await createWiki(
+      actor.apiKey,
+      uniqueName("ctx-person-b"),
+      `Field operative. Works at [[entity:${orgEntity.id}]].`,
+      { type: "person", properties: { description: "Field operative" } },
+    );
+
+    // Create personA with links to orgEntity, reportEntity, and personB
+    // (3 outbound "references" relationships via the wiki pipeline)
+    personA = await createWiki(
+      actor.apiKey,
+      uniqueName("ctx-person-a"),
+      `Intelligence analyst. Works at [[entity:${orgEntity.id}]], authored [[entity:${reportEntity.id}]], knows [[entity:${personB.id}]].`,
+      { type: "person", properties: { description: "Intelligence analyst" } },
+    );
 
     // Wait for Meilisearch to index (async background task)
     await new Promise((r) => setTimeout(r, 1500));

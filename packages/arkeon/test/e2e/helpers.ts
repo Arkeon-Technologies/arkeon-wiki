@@ -102,6 +102,20 @@ export async function createActor(
 // --- Entity helpers ---
 
 /**
+ * Lazily create a shared test space. POST /wiki requires a space —
+ * most e2e tests don't care which space they're in, so we create one
+ * on first use and reuse it.
+ */
+let _testSpaceId: string | null = null;
+
+export async function ensureTestSpace(apiKey: string): Promise<string> {
+  if (_testSpaceId) return _testSpaceId;
+  const space = await createSpace(apiKey, "e2e-default-space");
+  _testSpaceId = space.id;
+  return _testSpaceId;
+}
+
+/**
  * Create a wiki entity via POST /wiki. This is the only public write
  * path for entities — the old POST /entities was removed in the
  * wiki-first rewrite.
@@ -112,6 +126,10 @@ export async function createWiki(
   content: string,
   extra: Record<string, unknown> = {},
 ) {
+  // Ensure a space exists — POST /wiki requires one
+  if (!extra.space_id) {
+    extra = { ...extra, space_id: await ensureTestSpace(apiKey) };
+  }
   const { response, body } = await jsonRequest("/wiki", {
     method: "POST",
     apiKey,
@@ -149,6 +167,9 @@ export async function createRelationship(
 /**
  * Legacy helper for tests that need a plain entity. Calls POST /wiki
  * with a minimal body. Prefer createWiki() for new tests.
+ *
+ * Extra properties (description, extracted, count, metadata, etc.)
+ * are passed through to the wiki endpoint via the `properties` bag.
  */
 export async function createEntity(
   apiKey: string,
@@ -157,10 +178,31 @@ export async function createEntity(
   extra: Record<string, unknown> = {},
 ) {
   const label = (properties.label as string) ?? type;
+  // Separate reserved wiki fields from extra entity properties
+  const { label: _l, ...extraProps } = properties;
   return createWiki(apiKey, label, `Test wiki for ${label}`, {
     type,
+    properties: extraProps,
     ...extra,
   });
+}
+
+/**
+ * Create a wiki whose content contains [[entity:ID]] links, causing
+ * the wiki pipeline to create `references` relationships as a side
+ * effect. Returns the created wiki entity.
+ */
+export async function createWikiWithLinks(
+  apiKey: string,
+  label: string,
+  targetIds: string[],
+  extra: Record<string, unknown> = {},
+) {
+  const linkText = targetIds
+    .map((id) => `[[entity:${id}]]`)
+    .join(" ");
+  const content = `Wiki page for ${label}. References: ${linkText}`;
+  return createWiki(apiKey, label, content, extra);
 }
 
 // --- Space helpers ---
