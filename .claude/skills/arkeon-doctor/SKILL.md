@@ -43,11 +43,10 @@ Report the published version and the commits that will be included. If there are
 Build in the correct order:
 
 ```bash
-npm run build -w packages/sdk-ts
 npm run build -w packages/arkeon
 ```
 
-Both must succeed. If either fails, report the error and stop.
+This must succeed. If it fails, report the error and stop.
 
 ## 4. Typecheck
 

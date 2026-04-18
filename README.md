@@ -66,7 +66,6 @@ search across everything you've registered.
 - **Full-text search** — powered by Meilisearch with typo tolerance and prefix matching
 - **Spaces** — each repo gets its own space; `/arkeon-connect` links them together
 - **REST API** — full CRUD for entities, relationships, spaces, and more
-- **TypeScript SDK** — lightweight HTTP client ([`@arkeon-technologies/sdk`](packages/sdk-ts/))
 - **Classification levels** — 5-tier access control (PUBLIC through RESTRICTED) enforced via Postgres RLS
 - **Embedded infrastructure** — Postgres and Meilisearch managed automatically
 
@@ -125,8 +124,7 @@ the [quickstart](docs/user/QUICKSTART.md).
 git clone https://github.com/Arkeon-Technologies/arkeon
 cd arkeon
 npm install
-npm run build -w packages/sdk-ts                # SDK must be built first
-npm run build -w @arkeon-technologies/explorer  # Explorer assets
+npm run build -w packages/explorer               # Explorer assets
 npx tsx packages/arkeon/src/index.ts start       # Foreground-attached stack
 ```
 

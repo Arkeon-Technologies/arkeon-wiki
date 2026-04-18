@@ -395,63 +395,6 @@ function renderExplorerReference(): string {
   ].join("\n");
 }
 
-function renderSdkReference(): string {
-  return [
-    "# SDK Reference — @arkeon-technologies/sdk",
-    "",
-    "Lightweight TypeScript SDK for the Arkeon API. Zero dependencies, native fetch (Node 18+).",
-    "",
-    "## Install",
-    "",
-    "  npm install @arkeon-technologies/sdk",
-    "",
-    "## Configuration",
-    "",
-    "  export ARKE_API_URL=\"https://my-instance.arkeon.tech\"  # default: http://localhost:8000",
-    "  export ARKE_API_KEY=\"uk_...\"",
-    "",
-    "## Usage",
-    "",
-    "  import * as arkeon from '@arkeon-technologies/sdk';",
-    "",
-    "  // HTTP methods — paths and body fields match the API reference above",
-    "  await arkeon.get('/wiki', { params: { limit: '10', filter: 'type:wiki' } });",
-    "  await arkeon.post('/wiki', { label: 'Hello', type: 'note', keywords: ['hello'], short_description: 'A short description.', content: 'Hello' });",
-    "  await arkeon.put(`/wiki/${id}`, { ver: 1, properties: { label: 'Updated' } });",
-    "  await arkeon.del(`/wiki/${id}`);",
-    "",
-    "  // Relationships are created from typed [[links]] in POST /wiki content.",
-    "",
-    "  // Pagination — async generator, yields items across all pages",
-    "  for await (const e of arkeon.paginate('/wiki', { limit: '50' })) { ... }",
-    "",
-    "  // Space scoping",
-    "  arkeon.setSpaceId('01XYZ...');  // or ARKE_SPACE_ID env var",
-    "",
-    "  // Error handling",
-    "  import { ArkeError } from '@arkeon-technologies/sdk';",
-    "  // ArkeError { status, code, requestId, details }",
-    "",
-    "## Exports",
-    "",
-    "  get(path, opts?)      GET request. opts.params for query string.",
-    "  post(path, json?)     POST with JSON body.",
-    "  put(path, json?)      PUT with JSON body.",
-    "  patch(path, json?)    PATCH with JSON body.",
-    "  del(path)             DELETE request.",
-    "  paginate(path, p?)    Async generator over paginated list endpoints.",
-    "  setSpaceId(id)        Set default space ID for all requests.",
-    "  getSpaceId()          Get current default space ID.",
-    "  ArkeError             Error class with status, code, requestId, details.",
-    "",
-    "## API Discovery",
-    "",
-    "  const docs = await arkeon.get('/llms.txt');           // Full route index",
-    "  const help = await arkeon.get('/help/GET/wiki/{id}');  // Per-route detail",
-    "",
-  ].join("\n");
-}
-
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
@@ -459,13 +402,13 @@ function renderSdkReference(): string {
 export function registerDocsCommand(program: Command): void {
   program
     .command("docs")
-    .description("Auto-generated reference for the CLI, API, and SDK")
-    .option("--format <format>", "Output section: cli, api, sdk, explorer (default: all)")
+    .description("Auto-generated reference for the CLI, API, and explorer")
+    .option("--format <format>", "Output section: cli, api, explorer (default: all)")
     .action((options: { format?: string }) => {
       const format = options.format?.toLowerCase();
 
-      if (format && !["cli", "api", "sdk", "explorer"].includes(format)) {
-        process.stderr.write(`Unknown format "${format}". Use: cli, api, sdk, explorer\n`);
+      if (format && !["cli", "api", "explorer"].includes(format)) {
+        process.stderr.write(`Unknown format "${format}". Use: cli, api, explorer\n`);
         process.exitCode = 1;
         return;
       }
@@ -489,10 +432,6 @@ export function registerDocsCommand(program: Command): void {
 
       if (!format || format === "api") {
         parts.push(renderApiReference());
-      }
-
-      if (!format || format === "sdk") {
-        parts.push(renderSdkReference());
       }
 
       if (!format || format === "explorer") {

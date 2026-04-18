@@ -1,15 +1,15 @@
 {
-  "name": "arkeon",
-  "version": "0.3.10",
+  "name": "arkeon-wiki",
+  "version": "0.1.0",
   "description": "Self-contained wiki + knowledge-graph platform: Hono API server, embedded Postgres + Meilisearch, CLI. One package, one process, no Docker.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Arkeon-Technologies/arkeon.git",
+    "url": "git+https://github.com/Arkeon-Technologies/arkeon-wiki.git",
     "directory": "packages/arkeon"
   },
   "type": "module",
   "bin": {
-    "arkeon": "dist/index.js"
+    "arkeon-wiki": "dist/index.js"
   },
   "main": "dist/index.js",
   "files": [
@@ -19,7 +19,7 @@
     "fetch-spec": "tsx scripts/fetch-openapi.ts",
     "generate": "tsx scripts/generate-commands.ts",
     "bundle-assets": "tsx scripts/bundle-assets.ts",
-    "bundle-explorer": "npm run build -w @arkeon-technologies/explorer && tsx scripts/copy-explorer.ts",
+    "bundle-explorer": "npm run build -w @arkeon-wiki/explorer && tsx scripts/copy-explorer.ts",
     "bundle-schema": "tsx scripts/copy-schema.ts",
     "bundle-spec": "tsx scripts/copy-spec.ts",
     "prepack": "npm run build",
@@ -34,7 +34,6 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@arkeon-technologies/sdk": "^0.1.10",
     "@aws-sdk/client-s3": "^3.1018.0",
     "@hono/node-server": "^1.19.11",
     "@hono/zod-openapi": "^1.2.3",

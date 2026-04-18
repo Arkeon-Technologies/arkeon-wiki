@@ -106,8 +106,7 @@ export function createApp(options?: { adminKey?: string }) {
         openapi: "/openapi.json",
       },
       tools: {
-        cli: "npm install -g arkeon",
-        sdk: "npm install @arkeon-technologies/sdk",
+        cli: "npm install -g arkeon-wiki",
       },
       explorer: "/explore",
     }),
