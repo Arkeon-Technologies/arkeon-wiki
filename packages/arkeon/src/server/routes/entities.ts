@@ -26,6 +26,7 @@ import { fetchRelationshipContext } from "../lib/relationship-context";
 import { createRouter } from "../lib/openapi";
 import {
   ExpandedEntitySchema,
+  PageEntitySchema,
   DateTimeSchema,
   EntityIdParam,
   EntityResponse,
@@ -101,9 +102,10 @@ const getEntityRoute = createRoute({
   tags: ["Wiki"],
   summary: "Fetch a single entity by ID",
   description:
-    "Use view=expanded to include the entity's relationships with counterpart summaries. " +
-    "Control the number of relationships with rel_limit (default 20, max 100). " +
-    "Check _relationships_truncated to know if more exist; use GET /wiki/{id}/relationships for the full paginated set.",
+    "Defaults to view=page, which returns a structured response with links_to, linked_from, and sources — everything needed to render a wiki page. " +
+    "Use view=expanded for a flat _relationships array, or view=full for the entity without relationships. " +
+    "Control the number of relationships with rel_limit (default 20 for expanded, 50 for page, max 200). " +
+    "Check relationships_truncated to know if more exist; use GET /wiki/{id}/relationships for the full paginated set.",
   "x-arke-auth": "optional",
   "x-arke-related": [
     "PUT /wiki/{id}",
@@ -115,23 +117,24 @@ const getEntityRoute = createRoute({
     query: z.object({
       view: queryParam(
         "view",
-        z.enum(["summary", "expanded"]).optional(),
-        "Projection: summary | expanded. Default returns all fields. expanded adds _relationships.",
+        z.enum(["summary", "expanded", "page"]).optional(),
+        "Projection (default: page). page returns structured links_to/linked_from/sources. expanded adds flat _relationships. full returns entity only. summary returns label + short_description.",
       ),
       fields: queryParam("fields", z.string().optional(), "Comma-separated field list"),
       rel_limit: queryParam(
         "rel_limit",
-        z.coerce.number().int().min(1).max(100).optional(),
-        "Max relationships when view=expanded (default 20, max 100)",
+        z.coerce.number().int().min(1).max(200).optional(),
+        "Max relationships when view=expanded (default 20) or view=page (default 50). Max 200.",
       ),
     }),
   },
   responses: {
     200: {
-      description: "Entity details. When view=expanded, includes _relationships and _relationships_truncated.",
-      content: jsonContent(z.object({
-        entity: z.union([EntitySchema, ExpandedEntitySchema]),
-      })),
+      description: "Entity details. When view=expanded, includes _relationships and _relationships_truncated. When view=page, returns structured links_to/linked_from/sources.",
+      content: jsonContent(z.union([
+        z.object({ entity: z.union([EntitySchema, ExpandedEntitySchema]) }),
+        PageEntitySchema,
+      ])),
     },
     304: { description: "Not modified" },
     ...errorResponses([400, 404]),
@@ -444,7 +447,7 @@ wikisRouter.openapi(listEntitiesRoute, async (c) => {
 
 wikisRouter.openapi(getEntityRoute, async (c) => {
   const actor = c.get("actor");
-  const projection = parseProjection(c.req.query("view"), c.req.query("fields"));
+  const projection = parseProjection(c.req.query("view") ?? "page", c.req.query("fields"));
   const entityId = c.req.param("id");
   const sql = createSql();
 
@@ -481,7 +484,7 @@ wikisRouter.openapi(getEntityRoute, async (c) => {
   c.header("etag", `"${entity.ver}"`);
 
   if (projection.view === "expanded") {
-    const relLimit = Math.min(Number(c.req.query("rel_limit")) || 20, 100);
+    const relLimit = Math.min(Number(c.req.query("rel_limit")) || 20, 200);
     const relMap = await fetchRelationshipContext(sql, actor, [entityId], relLimit);
     const ctx = relMap.get(entityId);
     return c.json({
@@ -490,6 +493,49 @@ wikisRouter.openapi(getEntityRoute, async (c) => {
         _relationships: ctx?.items ?? [],
         _relationships_truncated: ctx?.truncated ?? false,
       },
+    }, 200);
+  }
+
+  if (projection.view === "page") {
+    const relLimit = Math.min(Number(c.req.query("rel_limit")) || 50, 200);
+    const relMap = await fetchRelationshipContext(sql, actor, [entityId], relLimit);
+    const ctx = relMap.get(entityId);
+    const items = ctx?.items ?? [];
+
+    const links_to: Array<{ id: string; label: string | null; type: string; predicate: string; span_text: string | null }> = [];
+    const linked_from: typeof links_to = [];
+    const sources: Array<{ id: string; label: string | null }> = [];
+
+    for (const rel of items) {
+      if (rel.counterpart.type === "source") {
+        sources.push({
+          id: rel.counterpart.id,
+          label: rel.counterpart.properties.label,
+        });
+        continue;
+      }
+
+      const entry = {
+        id: rel.counterpart.id,
+        label: rel.counterpart.properties.label,
+        type: rel.counterpart.type,
+        predicate: rel.predicate,
+        span_text: (rel.properties.span_text as string) ?? null,
+      };
+
+      if (rel.direction === "out") {
+        links_to.push(entry);
+      } else {
+        linked_from.push(entry);
+      }
+    }
+
+    return c.json({
+      wiki: projectEntity(entity, { view: "full", fields: null }),
+      links_to,
+      linked_from,
+      sources,
+      relationships_truncated: ctx?.truncated ?? false,
     }, 200);
   }
 

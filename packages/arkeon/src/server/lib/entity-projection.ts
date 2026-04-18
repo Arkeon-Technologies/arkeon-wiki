@@ -3,7 +3,7 @@
 
 import { ApiError } from "./errors";
 
-export type EntityView = "full" | "summary" | "expanded";
+export type EntityView = "full" | "summary" | "expanded" | "page";
 
 export interface Projection {
   view: EntityView;
@@ -39,6 +39,10 @@ export function parseProjection(viewRaw: string | undefined, fieldsRaw: string |
     return { view: "expanded", fields: null };
   }
 
+  if (viewRaw === "page") {
+    return { view: "page", fields: null };
+  }
+
   throw new ApiError(400, "invalid_query", "Invalid view", {
     view: viewRaw,
   });
@@ -70,6 +74,7 @@ export function projectEntity<T extends Record<string, unknown>>(entity: T, proj
       owner_id: entity.owner_id,
       properties: {
         label: properties.label,
+        short_description: properties.short_description ?? null,
       },
       updated_at: entity.updated_at,
     };
