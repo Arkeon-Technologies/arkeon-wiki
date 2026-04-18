@@ -148,8 +148,8 @@ export const PaginationQuery = z.object({
 export const ProjectionQuery = z.object({
   view: queryParam(
     "view",
-    z.enum(["summary", "expanded"]).optional(),
-    "Projection: summary | expanded. Default returns all fields. expanded adds _relationships.",
+    z.enum(["full", "summary", "expanded"]).optional(),
+    "Projection: full (all fields, no relationships) | summary (label + short_description) | expanded (all fields + _relationships).",
   ),
   fields: queryParam(
     "fields",
@@ -240,6 +240,35 @@ export const GraphDataResponseSchema = z
     cursor: z.string().nullable().describe("Pagination cursor for next page, null if no more results"),
   })
   .openapi("GraphDataResponse");
+
+// --- Page view (view=page) ---
+
+export const PageLinkSchema = z
+  .object({
+    id: UlidSchema,
+    label: z.string().nullable(),
+    type: z.string(),
+    predicate: z.string(),
+    span_text: z.string().nullable(),
+  })
+  .openapi("PageLink");
+
+export const PageSourceSchema = z
+  .object({
+    id: UlidSchema,
+    label: z.string().nullable(),
+  })
+  .openapi("PageSource");
+
+export const PageEntitySchema = z
+  .object({
+    entity: EntitySchema,
+    links_to: z.array(PageLinkSchema).describe("Outgoing relationships from this entity"),
+    linked_from: z.array(PageLinkSchema).describe("Incoming relationships to this entity"),
+    sources: z.array(PageSourceSchema).describe("Source documents linked to this entity"),
+    relationships_truncated: z.boolean().describe("True if more relationships exist than were returned"),
+  })
+  .openapi("PageEntity");
 
 // --- Expanded entity (view=expanded) ---
 

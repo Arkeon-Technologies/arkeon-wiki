@@ -285,6 +285,101 @@
         "additionalProperties": {},
         "type": "object"
       },
+      "PageEntity": {
+        "properties": {
+          "entity": {
+            "$ref": "#/components/schemas/Entity"
+          },
+          "linked_from": {
+            "description": "Incoming relationships to this entity",
+            "items": {
+              "$ref": "#/components/schemas/PageLink"
+            },
+            "type": "array"
+          },
+          "links_to": {
+            "description": "Outgoing relationships from this entity",
+            "items": {
+              "$ref": "#/components/schemas/PageLink"
+            },
+            "type": "array"
+          },
+          "relationships_truncated": {
+            "description": "True if more relationships exist than were returned",
+            "type": "boolean"
+          },
+          "sources": {
+            "description": "Source documents linked to this entity",
+            "items": {
+              "$ref": "#/components/schemas/PageSource"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "entity",
+          "links_to",
+          "linked_from",
+          "sources",
+          "relationships_truncated"
+        ],
+        "type": "object"
+      },
+      "PageLink": {
+        "properties": {
+          "id": {
+            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+            "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "predicate": {
+            "type": "string"
+          },
+          "span_text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "type",
+          "predicate",
+          "span_text"
+        ],
+        "type": "object"
+      },
+      "PageSource": {
+        "properties": {
+          "id": {
+            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+            "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ],
+        "type": "object"
+      },
       "RelationshipSummary": {
         "properties": {
           "counterpart": {
@@ -2648,13 +2743,14 @@
         "operationId": "searchEntities",
         "parameters": [
           {
-            "description": "Projection: summary | expanded. Default returns all fields. expanded adds _relationships.",
+            "description": "Projection: full (all fields, no relationships) | summary (label + short_description) | expanded (all fields + _relationships).",
             "in": "query",
             "name": "view",
             "required": false,
             "schema": {
-              "description": "Projection: summary | expanded. Default returns all fields. expanded adds _relationships.",
+              "description": "Projection: full (all fields, no relationships) | summary (label + short_description) | expanded (all fields + _relationships).",
               "enum": [
+                "full",
                 "summary",
                 "expanded"
               ],
@@ -3899,13 +3995,14 @@
             }
           },
           {
-            "description": "Projection: summary | expanded. Default returns all fields. expanded adds _relationships.",
+            "description": "Projection: full (all fields, no relationships) | summary (label + short_description) | expanded (all fields + _relationships).",
             "in": "query",
             "name": "view",
             "required": false,
             "schema": {
-              "description": "Projection: summary | expanded. Default returns all fields. expanded adds _relationships.",
+              "description": "Projection: full (all fields, no relationships) | summary (label + short_description) | expanded (all fields + _relationships).",
               "enum": [
+                "full",
                 "summary",
                 "expanded"
               ],
@@ -4314,7 +4411,7 @@
         ]
       },
       "get": {
-        "description": "Use view=expanded to include the entity's relationships with counterpart summaries. Control the number of relationships with rel_limit (default 20, max 100). Check _relationships_truncated to know if more exist; use GET /wiki/{id}/relationships for the full paginated set.",
+        "description": "Defaults to view=page, which returns a structured response with links_to, linked_from, and sources — everything needed to render a wiki page. Use view=expanded for a flat _relationships array, or view=full for the entity without relationships. Control the number of relationships with rel_limit (default 20 for expanded, 50 for page, max 200). Check relationships_truncated to know if more exist; use GET /wiki/{id}/relationships for the full paginated set.",
         "operationId": "getWiki",
         "parameters": [
           {
@@ -4330,15 +4427,17 @@
             }
           },
           {
-            "description": "Projection: summary | expanded. Default returns all fields. expanded adds _relationships.",
+            "description": "Projection (default: page). page returns structured links_to/linked_from/sources. expanded adds flat _relationships. full returns entity only. summary returns label + short_description.",
             "in": "query",
             "name": "view",
             "required": false,
             "schema": {
-              "description": "Projection: summary | expanded. Default returns all fields. expanded adds _relationships.",
+              "description": "Projection (default: page). page returns structured links_to/linked_from/sources. expanded adds flat _relationships. full returns entity only. summary returns label + short_description.",
               "enum": [
+                "full",
                 "summary",
-                "expanded"
+                "expanded",
+                "page"
               ],
               "type": "string"
             }
@@ -4354,13 +4453,13 @@
             }
           },
           {
-            "description": "Max relationships when view=expanded (default 20, max 100)",
+            "description": "Max relationships when view=expanded (default 20) or view=page (default 50). Max 200.",
             "in": "query",
             "name": "rel_limit",
             "required": false,
             "schema": {
-              "description": "Max relationships when view=expanded (default 20, max 100)",
-              "maximum": 100,
+              "description": "Max relationships when view=expanded (default 20) or view=page (default 50). Max 200.",
+              "maximum": 200,
               "minimum": 1,
               "type": "integer"
             }
@@ -4371,26 +4470,33 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "properties": {
-                    "entity": {
-                      "anyOf": [
-                        {
-                          "$ref": "#/components/schemas/Entity"
-                        },
-                        {
-                          "$ref": "#/components/schemas/ExpandedEntity"
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "entity": {
+                          "anyOf": [
+                            {
+                              "$ref": "#/components/schemas/Entity"
+                            },
+                            {
+                              "$ref": "#/components/schemas/ExpandedEntity"
+                            }
+                          ]
                         }
-                      ]
+                      },
+                      "required": [
+                        "entity"
+                      ],
+                      "type": "object"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PageEntity"
                     }
-                  },
-                  "required": [
-                    "entity"
-                  ],
-                  "type": "object"
+                  ]
                 }
               }
             },
-            "description": "Entity details. When view=expanded, includes _relationships and _relationships_truncated."
+            "description": "Entity details. When view=expanded, includes _relationships and _relationships_truncated. When view=page, returns structured links_to/linked_from/sources."
           },
           "304": {
             "description": "Not modified"
@@ -5639,13 +5745,14 @@
         "operationId": "bulkGetWikis",
         "parameters": [
           {
-            "description": "Projection: summary | expanded. Default returns all fields. expanded adds _relationships.",
+            "description": "Projection: full (default, all fields) | summary (label + short_description) | expanded (all fields + _relationships).",
             "in": "query",
             "name": "view",
             "required": false,
             "schema": {
-              "description": "Projection: summary | expanded. Default returns all fields. expanded adds _relationships.",
+              "description": "Projection: full (default, all fields) | summary (label + short_description) | expanded (all fields + _relationships).",
               "enum": [
+                "full",
                 "summary",
                 "expanded"
               ],
