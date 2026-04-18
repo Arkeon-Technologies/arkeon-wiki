@@ -9,17 +9,13 @@ of the architecture, not the rules for working in it.
 
 ```
 packages/
-  arkeon/       Main package (published as `arkeon` on npm)
+  arkeon/       Main package (published as `arkeon-wiki` on npm)
                 CLI, API server, schema, shared types
-  sdk-ts/       TypeScript SDK (published as `@arkeon-technologies/sdk`)
-                Lightweight HTTP client, zero dependencies
   explorer/     Browser SPA (private, not published)
-                Vite + React + Tailwind, built into arkeon dist
+                Vite + React + Tailwind, built into arkeon-wiki dist
 ```
 
-Everything ships inside the `arkeon` npm tarball. The SDK is the only
-separately published package — it exists because external consumers
-want the HTTP client without the full server.
+Everything ships inside the `arkeon-wiki` npm tarball.
 
 ## Source layout (`packages/arkeon/src/`)
 

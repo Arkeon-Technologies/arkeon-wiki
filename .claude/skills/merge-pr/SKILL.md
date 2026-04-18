@@ -63,17 +63,14 @@ Each publishable package has its own tag prefix (see `.github/workflows/publish.
 
 ```bash
 # CLI: last release and changes since
-LAST_CLI_TAG=$(git tag -l 'arkeon-v*' --sort=-v:refname | head -1)
+LAST_CLI_TAG=$(git tag -l 'arkeon-wiki-v*' --sort=-v:refname | head -1)
 CLI_CHANGES=$(git diff --name-only "$LAST_CLI_TAG"..HEAD -- packages/arkeon/src/cli/ packages/arkeon/package.json | head -5)
 
-# SDK: last release and changes since
-LAST_SDK_TAG=$(git tag -l 'sdk-v*' --sort=-v:refname | head -1)
-SDK_CHANGES=$(git diff --name-only "$LAST_SDK_TAG"..HEAD -- packages/sdk-ts/src/ packages/sdk-ts/package.json | head -5)
 ```
 
-If any of these have changes, tell the user:
-- Which packages changed since their last release
-- Suggest: "When you're ready to release, draft a GitHub Release with tag `arkeon-v0.X.X` or `sdk-v0.X.X`"
+If there are changes, tell the user:
+- What changed since the last release
+- Suggest: "When you're ready to release, draft a GitHub Release with tag `arkeon-wiki-v0.X.X`"
 - Note: the `publish.yml` workflow fires on `release.published` and handles the rest automatically
 
 If nothing changed, skip this step silently.

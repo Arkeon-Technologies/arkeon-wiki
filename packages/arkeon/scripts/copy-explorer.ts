@@ -25,7 +25,7 @@ const target = join(cliRoot, "dist", "explorer");
 if (!existsSync(explorerDist)) {
   console.error(
     `[copy-explorer] explorer dist not found at ${explorerDist}. ` +
-    `Did the \`npm run build -w @arkeon-technologies/explorer\` step run?`,
+    `Did the \`npm run build -w packages/explorer\` step run?`,
   );
   process.exit(1);
 }

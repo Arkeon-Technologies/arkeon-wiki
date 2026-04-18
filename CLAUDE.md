@@ -4,17 +4,16 @@ Forked from `Arkeon-Technologies/arkeon` at the `wiki-rewrite` branch. Wiki-cent
 
 **Repo**: `Arkeon-Technologies/arkeon-wiki`
 
-Three npm workspaces. Only two are published to npm.
+Two npm workspaces. Only one is published to npm.
 
-- `packages/arkeon` — the main package (npm name TBD for this fork). Contains the CLI binary, the Hono API server, the database schema migrations, and shared TypeScript types. Single source tree under `src/`:
+- `packages/arkeon` — the main package, published as `arkeon-wiki` on npm. Contains the CLI binary (`arkeon-wiki`), the Hono API server, the database schema migrations, and shared TypeScript types. Single source tree under `src/`:
   - `src/index.ts` — CLI entry (commander wiring)
   - `src/cli/commands/**` + `src/cli/lib/**` — CLI commands and helpers
   - `src/server/**` — Hono API server (routes, middleware, wiki pipeline)
   - `src/schema/*.sql` + `src/schema/migrate.ts` — migrations and the in-process runner
   - `src/shared/**` — concept text and OpenAPI helpers shared between CLI codegen and the server
   - `src/generated/**` — checked-in codegen outputs (OpenAPI snapshot → CLI commands + bundled Genesis seed)
-- `packages/sdk-ts` — published as `@arkeon-technologies/sdk`, a lightweight HTTP client for the API. Separate because external consumers want the client without the full server.
-- `packages/explorer` — browser SPA built with Vite, not published. Built as part of the `arkeon` build (via `bundle-explorer`); the static output is copied into `packages/arkeon/dist/explorer/` so it ships inside the `arkeon` tarball.
+- `packages/explorer` — browser SPA built with Vite, not published. Built as part of the `arkeon-wiki` build (via `bundle-explorer`); the static output is copied into `packages/arkeon/dist/explorer/` so it ships inside the `arkeon-wiki` tarball.
 
 ## Quick Start
 
@@ -22,15 +21,14 @@ Arkeon runs as a single Node process that manages its own Postgres and Meilisear
 
 ```bash
 npm install
-npm run build -w packages/sdk-ts              # prebuilt SDK is required
 npx tsx packages/arkeon/src/index.ts start    # bring up the full stack
 ```
 
 First run downloads a Meilisearch binary into `~/.arkeon/bin/` (one-time, ~100MB), initializes an embedded Postgres cluster in `~/.arkeon/data/postgres/`, runs migrations in-process, and starts the API on `http://localhost:8000`. The admin API key is generated on first start and printed to the console (and persisted in `~/.arkeon/secrets.json` for subsequent starts).
 
-`Ctrl+C` drains gracefully. From another terminal: `arkeon status`, `arkeon stop`, `arkeon reset`.
+`Ctrl+C` drains gracefully. From another terminal: `arkeon-wiki status`, `arkeon-wiki stop`, `arkeon-wiki reset`.
 
-State lives in `~/.arkeon/` by default (override with `ARKEON_HOME`). `arkeon reset` wipes data but keeps secrets + binary; `arkeon reset --hard` wipes everything.
+State lives in `~/.arkeon/` by default (override with `ARKEON_HOME`). `arkeon-wiki reset` wipes data but keeps secrets + binary; `arkeon-wiki reset --hard` wipes everything.
 
 ## Workspace Commands
 
@@ -86,13 +84,13 @@ cd packages/arkeon && npm pack
 cd /tmp && mkdir smoke && cd smoke
 npm init -y
 npm install /path/to/arkeon-<version>.tgz
-ARKEON_HOME=./state npx arkeon init
-ARKEON_HOME=./state npx arkeon up
-ARKEON_HOME=./state npx arkeon seed
-ARKEON_HOME=./state npx arkeon status
+ARKEON_HOME=./state npx arkeon-wiki init
+ARKEON_HOME=./state npx arkeon-wiki up
+ARKEON_HOME=./state npx arkeon-wiki seed
+ARKEON_HOME=./state npx arkeon-wiki status
 curl http://localhost:8000/health
 curl http://localhost:8000/explore
-ARKEON_HOME=./state npx arkeon down
+ARKEON_HOME=./state npx arkeon-wiki down
 ```
 
 Do not skip this step.
@@ -106,7 +104,7 @@ rm -rf node_modules packages/*/node_modules package-lock.json
 npm install
 ```
 
-Do NOT run `npm install` on top of an existing `node_modules` — npm will preserve the old hoist layout in the lockfile even when the new package.json would resolve differently. A stale lockfile can cause CI to place deps per-package instead of hoisted-to-root, breaking builds that depend on cross-workspace resolution (e.g., the SDK's `tsc --emitDeclarationOnly` step needs `typescript` hoisted to root where tsup can find it).
+Do NOT run `npm install` on top of an existing `node_modules` — npm will preserve the old hoist layout in the lockfile even when the new package.json would resolve differently. A stale lockfile can cause CI to place deps per-package instead of hoisted-to-root, breaking builds that depend on cross-workspace resolution.
 
 ## Do NOT add in-process rate limiting
 
@@ -156,14 +154,14 @@ Rules:
 - `ALTER TABLE DROP COLUMN` / `DROP CONSTRAINT` — always use `IF EXISTS`
 - `DROP TABLE` / `DROP INDEX` — always use `IF EXISTS`
 - Never assume a previous migration's intermediate state still exists (e.g., a constraint created in migration N may already be dropped by migration N+3)
-- Test migrations by running `arkeon migrate` twice in a row — the second run must succeed cleanly
+- Test migrations by running `arkeon-wiki migrate` twice in a row — the second run must succeed cleanly
 - Do not use loadable extensions (`CREATE EXTENSION`). The local stack uses embedded Postgres which does not ship extensions beyond what's built-in. Retention jobs that used to live in `pg_cron` now run in-process via `packages/arkeon/src/server/lib/retention.ts` — follow that pattern for new periodic tasks.
 
-The migration runner itself lives at `packages/arkeon/src/schema/migrate.ts`. It exports `runMigrations({ databaseUrl, arkeAppPassword })` and is imported directly by `arkeon start` — no child process, no spawn, no top-level-await script.
+The migration runner itself lives at `packages/arkeon/src/schema/migrate.ts`. It exports `runMigrations({ databaseUrl, arkeAppPassword })` and is imported directly by `arkeon-wiki start` — no child process, no spawn, no top-level-await script.
 
 ## Agent Experience (AX) Surfaces
 
-Arkeon has multiple self-documenting surfaces that agents and users rely on to discover and use the API. Every feature an agent might use **must be discoverable** via at least one of: `/llms.txt`, `arkeon docs`, or a skill body. If you ship a feature and no AX surface knows about it, it doesn't exist to agents.
+Arkeon has multiple self-documenting surfaces that agents and users rely on to discover and use the API. Every feature an agent might use **must be discoverable** via at least one of: `/llms.txt`, `arkeon-wiki docs`, or a skill body. If you ship a feature and no AX surface knows about it, it doesn't exist to agents.
 
 Full architecture and data flow: `docs/dev/CONTEXT_MANAGEMENT.md`.
 
@@ -171,11 +169,10 @@ Full architecture and data flow: `docs/dev/CONTEXT_MANAGEMENT.md`.
 
 | What changed | AX surfaces affected | Action needed |
 |---|---|---|
-| **Route added/modified/removed** | `/llms.txt`, `/help`, `/openapi.json`, CLI commands, `arkeon docs` | Update `createRoute()` + Zod schemas, then rebuild (see checklist below) |
+| **Route added/modified/removed** | `/llms.txt`, `/help`, `/openapi.json`, CLI commands, `arkeon-wiki docs` | Update `createRoute()` + Zod schemas, then rebuild (see checklist below) |
 | **Concept changed** (core definitions, classification, best practices) | API guide, CLI guide | Edit `src/shared/concepts.ts` — propagates automatically |
 | **Skill changed** (connect, doctor protocols) | Claude Code skills | Edit `assets/skills/meta.yaml` or `body/*.md`, rebuild to regenerate `src/generated/assets.ts` |
-| **SDK examples or response patterns** | `/llms.txt` | Edit `openapi-help.ts`, then rebuild |
-| **Guide content** (getting-started, admin) | `/help/guide`, `arkeon guide` | Edit `help.ts` (API) or `guide/index.ts` (CLI) |
+| **Guide content** (getting-started, admin) | `/help/guide`, `arkeon-wiki guide` | Edit `help.ts` (API) or `guide/index.ts` (CLI) |
 | **Explorer** | `/explore` browser SPA | Edit `packages/explorer/`, rebuild |
 
 ### Checklist for route changes
@@ -184,7 +181,7 @@ Full architecture and data flow: `docs/dev/CONTEXT_MANAGEMENT.md`.
 - `/openapi.json`
 - `/llms.txt`
 - `/help/:method/:path`
-- `arkeon docs --format api`
+- `arkeon-wiki docs --format api`
 - Auto-generated CLI commands
 
 Steps:
@@ -199,7 +196,7 @@ Steps:
 - Use OpenAPI path params like `/{id}` in route metadata
 - Keep summaries concise; put detail in parameter descriptions and schema descriptions
 - Make request and response schemas accurate enough for CLI codegen and `/help` rendering
-- **Regenerate CLI commands**: after any route change, run `npm run build -w packages/sdk-ts && npm run build -w packages/arkeon` and commit the updated `spec/openapi.snapshot.json`, `src/generated/index.ts`, and `src/generated/assets.ts`. This works offline — `fetch-spec` imports `app.ts` directly, no running server needed. CI (`check-cli-spec-drift`) will fail if these files are stale.
+- **Regenerate CLI commands**: after any route change, run `npm run build -w packages/arkeon` and commit the updated `spec/openapi.snapshot.json`, `src/generated/index.ts`, and `src/generated/assets.ts`. This works offline — `fetch-spec` imports `app.ts` directly, no running server needed. CI (`check-cli-spec-drift`) will fail if these files are stale.
 
 ### AX review habit
 
@@ -207,16 +204,26 @@ After any feature work, ask: "Can an agent discover and use this?" Specifically:
 1. If it's an API operation — is it in the OpenAPI spec with good descriptions and `x-arke-rules`?
 2. If it's a workflow — is it in a skill body or guide?
 3. If it's a concept — is it in `concepts.ts`?
-4. If it's a CLI-only feature — does `arkeon docs --format cli` show it?
-5. Rebuild and verify: `npm run build -w packages/sdk-ts && npm run build -w packages/arkeon`
+4. If it's a CLI-only feature — does `arkeon-wiki docs --format cli` show it?
+5. Rebuild and verify: `npm run build -w packages/arkeon`
 
 ## Publishing to npm
 
-**Not yet configured for this repo.** The CI workflows were carried over from the original arkeon repo but npm trusted publishing (OIDC) is scoped per-repo. Before publishing from arkeon-wiki:
+Publishing is automated via GitHub Actions (`.github/workflows/publish.yml`) and triggered by **GitHub Releases with a specific tag prefix**:
 
-1. Decide on a package name (the original `arkeon` name belongs to the upstream repo)
-2. Configure OIDC trusted publishing on npmjs.com for `Arkeon-Technologies/arkeon-wiki`
-3. Update `packages/arkeon/package.json` with the new package name
-4. Update `.github/workflows/publish.yml` tag prefixes if needed
+- `arkeon-wiki-v<version>` → publishes `arkeon-wiki` to npm (e.g., `arkeon-wiki-v0.1.0`)
 
-Until then, `npm pack` locally for testing.
+Tags like `v0.1.0` (without the `arkeon-wiki-` prefix) will NOT trigger a publish. The workflow uses npm trusted publishing (OIDC) — no token needed.
+
+### Release checklist
+
+1. Bump `version` in `packages/arkeon/package.json`
+2. Commit and push to main
+3. Create a GitHub release with the correct tag prefix:
+   ```bash
+   gh release create arkeon-wiki-v0.1.0 --title "arkeon-wiki v0.1.0" --generate-notes
+   ```
+4. The publish workflow runs automatically — check Actions to confirm
+5. Verify on npm: `npm view arkeon-wiki version`
+
+Do NOT create releases with bare `v*` tags — they won't publish.

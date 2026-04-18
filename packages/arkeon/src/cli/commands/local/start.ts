@@ -261,7 +261,7 @@ async function runStart(options: StartOptions): Promise<void> {
       "[arkeon] Explorer assets not found — /explore will 404.",
     );
     console.warn(
-      "         Run `npm run build -w @arkeon-technologies/explorer` then retry.",
+      "         Run `npm run build -w packages/explorer` then retry.",
     );
   }
 

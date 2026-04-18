@@ -5,7 +5,6 @@
   "author": "Arkeon Technologies, Inc.",
   "workspaces": [
     "packages/arkeon",
-    "packages/sdk-ts",
     "packages/explorer"
   ]
 }

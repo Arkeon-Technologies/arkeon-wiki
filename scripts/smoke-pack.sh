@@ -52,7 +52,7 @@ cleanup() {
   step "Cleanup"
   # Stop Arkeon if running in the scratch env (HOME override for Conf isolation)
   if [ -f "$SCRATCH/state/pids/api.pid" ] 2>/dev/null; then
-    HOME="$SCRATCH" ARKEON_HOME="$SCRATCH/state" npx arkeon down 2>/dev/null || true
+    HOME="$SCRATCH" ARKEON_HOME="$SCRATCH/state" npx arkeon-wiki down 2>/dev/null || true
   fi
   # Also try killing by port in case graceful shutdown fails
   lsof -ti :$PORT 2>/dev/null | xargs kill -9 2>/dev/null || true
@@ -74,28 +74,9 @@ lsof -ti :$PG_PORT 2>/dev/null | xargs kill -9 2>/dev/null || true
 lsof -ti :$MEILI_PORT 2>/dev/null | xargs kill -9 2>/dev/null || true
 
 # ---------------------------------------------------------------
-# Phase 1: Build SDK (required before arkeon build/pack)
+# Phase 1: Pack tarball
 # ---------------------------------------------------------------
-step "Phase 1: Build prerequisites"
-cd "$ROOT"
-
-if [ "$SKIP_BUILD" = false ]; then
-  echo "Building SDK..."
-  npm run build -w packages/sdk-ts || fail "SDK build"
-  pass "SDK built"
-else
-  echo "Skipping build (--skip-build)"
-  # SDK must still exist even with --skip-build
-  if [ ! -d "$ROOT/packages/sdk-ts/dist" ]; then
-    fail "SDK dist/ not found — run 'npm run build -w packages/sdk-ts' first or drop --skip-build"
-  fi
-  pass "SDK dist/ exists"
-fi
-
-# ---------------------------------------------------------------
-# Phase 2: Pack tarball
-# ---------------------------------------------------------------
-step "Phase 2: Pack tarball"
+step "Phase 1: Pack tarball"
 cd "$ROOT/packages/arkeon"
 
 if [ "$SKIP_BUILD" = true ]; then
@@ -118,7 +99,7 @@ pass "Tarball created"
 # ---------------------------------------------------------------
 # Phase 3: Validate tarball contents
 # ---------------------------------------------------------------
-step "Phase 3: Validate tarball contents"
+step "Phase 2: Validate tarball contents"
 
 TARBALL_LISTING=$(tar tzf "$TARBALL_PATH")
 
@@ -147,19 +128,19 @@ fi
 # ---------------------------------------------------------------
 # Phase 4: Install in clean scratch directory
 # ---------------------------------------------------------------
-step "Phase 4: Install in scratch directory"
+step "Phase 3: Install in scratch directory"
 cd "$SCRATCH"
 npm init -y > /dev/null 2>&1
 npm install "$TARBALL_PATH" || fail "npm install from tarball"
 
 # Verify the binary is resolvable
-npx arkeon --help > /dev/null 2>&1 || fail "arkeon binary not resolvable after install"
-pass "arkeon installed and binary resolves"
+npx arkeon-wiki --help > /dev/null 2>&1 || fail "arkeon-wiki binary not resolvable after install"
+pass "arkeon-wiki installed and binary resolves"
 
 # ---------------------------------------------------------------
 # Phase 5: Run the full lifecycle
 # ---------------------------------------------------------------
-step "Phase 5: Lifecycle test"
+step "Phase 4: Lifecycle test"
 export ARKEON_HOME="$SCRATCH/state"
 
 # Pre-populate Meilisearch binary cache if available
@@ -169,8 +150,8 @@ if [ -d "$MEILI_CACHE_DIR" ] && [ "$(ls -A "$MEILI_CACHE_DIR" 2>/dev/null)" ]; t
   echo "Pre-populated Meilisearch binary from cache"
 fi
 
-echo "arkeon up (logging to $LOGFILE)..."
-npx arkeon up --port $PORT --pg-port $PG_PORT --meili-port $MEILI_PORT > "$LOGFILE" 2>&1 &
+echo "arkeon-wiki up (logging to $LOGFILE)..."
+npx arkeon-wiki up --port $PORT --pg-port $PG_PORT --meili-port $MEILI_PORT > "$LOGFILE" 2>&1 &
 UP_PID=$!
 
 echo "Waiting for API health (up to 120s)..."
@@ -182,7 +163,7 @@ for i in $(seq 1 60); do
   if ! kill -0 $UP_PID 2>/dev/null; then
     echo "Process died. Last 50 lines of log:"
     tail -50 "$LOGFILE"
-    fail "arkeon up process exited unexpectedly"
+    fail "arkeon-wiki up process exited unexpectedly"
   fi
   if [ $i -eq 60 ]; then
     echo "Last 50 lines of log:"
@@ -195,7 +176,7 @@ done
 # ---------------------------------------------------------------
 # Phase 6: HTTP endpoint checks
 # ---------------------------------------------------------------
-step "Phase 6: HTTP endpoint checks"
+step "Phase 5: HTTP endpoint checks"
 
 echo "Testing /health..."
 HEALTH=$(curl -sf "http://localhost:$PORT/health")
@@ -241,7 +222,7 @@ fi
 # ---------------------------------------------------------------
 # Phase 7: CLI command tests
 # ---------------------------------------------------------------
-step "Phase 7: CLI command tests"
+step "Phase 6: CLI command tests"
 
 # Extract admin key for authenticated commands
 ADMIN_KEY=$(grep "Admin API key" "$LOGFILE" | tail -1 | awk '{print $NF}')
@@ -262,20 +243,20 @@ export ARKE_API_URL="http://localhost:$PORT"
 export ARKE_API_KEY="$ADMIN_KEY"
 export HOME="$SCRATCH"
 
-echo "arkeon status..."
-npx arkeon status --port $PORT || fail "arkeon status"
+echo "arkeon-wiki status..."
+npx arkeon-wiki status --port $PORT || fail "arkeon-wiki status"
 pass "status"
 
-echo "arkeon seed..."
-npx arkeon seed || fail "arkeon seed"
+echo "arkeon-wiki seed..."
+npx arkeon-wiki seed || fail "arkeon-wiki seed"
 pass "seed"
 
-echo "arkeon seed (idempotent)..."
-npx arkeon seed || fail "arkeon seed (second run)"
+echo "arkeon-wiki seed (idempotent)..."
+npx arkeon-wiki seed || fail "arkeon-wiki seed (second run)"
 pass "seed idempotent"
 
-echo "arkeon entities list..."
-ENTITIES_OUT=$(npx arkeon entities list --raw 2>&1) || fail "arkeon entities list"
+echo "arkeon-wiki entities list..."
+ENTITIES_OUT=$(npx arkeon-wiki entities list --raw 2>&1) || fail "arkeon-wiki entities list"
 if echo "$ENTITIES_OUT" | grep -q '"entities"'; then
   # Count entities in the response (non-empty array means seed data is visible)
   # Use `|| true` because grep returns exit 1 when no matches, which kills set -eo pipefail
@@ -289,8 +270,8 @@ else
   fail "entities list output missing 'entities' key"
 fi
 
-echo "arkeon actors list..."
-ACTORS_OUT=$(npx arkeon actors list --raw 2>&1) || fail "arkeon actors list"
+echo "arkeon-wiki actors list..."
+ACTORS_OUT=$(npx arkeon-wiki actors list --raw 2>&1) || fail "arkeon-wiki actors list"
 if echo "$ACTORS_OUT" | grep -q '"actors"'; then
   pass "actors list returns actors array"
 elif echo "$ACTORS_OUT" | grep -q '"data"'; then
@@ -299,16 +280,16 @@ else
   warn "actors list output unexpected: $(echo "$ACTORS_OUT" | head -3)"
 fi
 
-echo "arkeon entities create..."
-CREATE_OUT=$(npx arkeon entities create --type person --properties '{"label":"Smoke Test Entity"}' --raw 2>&1) || fail "arkeon entities create"
+echo "arkeon-wiki entities create..."
+CREATE_OUT=$(npx arkeon-wiki entities create --type person --properties '{"label":"Smoke Test Entity"}' --raw 2>&1) || fail "arkeon-wiki entities create"
 # grep returns exit 1 when no match — use || true to prevent set -eo pipefail from killing the script
 # --raw output uses "id": "..." (with spaces), so match both formats
 ENTITY_ID=$(echo "$CREATE_OUT" | grep -oE '"id"\s*:\s*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/' || true)
 if [ -n "$ENTITY_ID" ]; then
   pass "entities create returned id: $ENTITY_ID"
 
-  echo "arkeon entities get $ENTITY_ID..."
-  GET_OUT=$(npx arkeon entities get "$ENTITY_ID" --raw 2>&1) || fail "arkeon entities get"
+  echo "arkeon-wiki entities get $ENTITY_ID..."
+  GET_OUT=$(npx arkeon-wiki entities get "$ENTITY_ID" --raw 2>&1) || fail "arkeon-wiki entities get"
   if echo "$GET_OUT" | grep -q "Smoke Test Entity"; then
     pass "entities get returns correct entity"
   else
@@ -318,17 +299,17 @@ else
   fail "entities create — could not extract entity id. Output: $(echo "$CREATE_OUT" | head -5)"
 fi
 
-echo "arkeon docs..."
-npx arkeon docs > /dev/null 2>&1 || fail "arkeon docs"
+echo "arkeon-wiki docs..."
+npx arkeon-wiki docs > /dev/null 2>&1 || fail "arkeon-wiki docs"
 pass "docs"
 
 # ---------------------------------------------------------------
 # Phase 8: Clean shutdown
 # ---------------------------------------------------------------
-step "Phase 8: Clean shutdown"
+step "Phase 7: Clean shutdown"
 
-echo "arkeon down..."
-npx arkeon down || fail "arkeon down"
+echo "arkeon-wiki down..."
+npx arkeon-wiki down || fail "arkeon-wiki down"
 pass "Clean shutdown"
 
 # Verify ports are freed

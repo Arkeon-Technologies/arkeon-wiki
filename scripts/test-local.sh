@@ -28,12 +28,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Build SDK (required by arkeon imports — the arkeon package imports
-# @arkeon-technologies/sdk from its built dist).
-step "Build: SDK"
-npm run build -w packages/sdk-ts || fail "SDK build"
-pass "SDK build"
-
 # Typecheck the single arkeon package
 step "Typecheck: arkeon"
 npm run typecheck -w packages/arkeon || fail "arkeon typecheck"
@@ -49,7 +43,7 @@ pass "arkeon unit tests"
 # but here we run via tsx against src/, so the CLI falls back to
 # packages/explorer/dist — build it first.
 step "Build: Explorer"
-npm run build -w @arkeon-technologies/explorer || fail "Explorer build"
+npm run build -w packages/explorer || fail "Explorer build"
 pass "Explorer build"
 
 step "Starting Arkeon stack"

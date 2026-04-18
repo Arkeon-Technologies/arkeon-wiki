@@ -1,15 +1,14 @@
 name: Publish
 
-# Triggered by publishing a GitHub Release. The tag prefix selects which
-# package is published:
-#   arkeon-v<version>  → publishes `arkeon` (CLI) to npm
-#   sdk-v<version>     → publishes `@arkeon-technologies/sdk` to npm
+# Triggered by publishing a GitHub Release. The tag prefix selects the
+# package to publish:
+#   arkeon-wiki-v<version>  → publishes `arkeon-wiki` (CLI) to npm
 #
-# Releases via UI: https://github.com/Arkeon-Technologies/arkeon/releases/new
-# Releases via CLI: gh release create arkeon-v0.0.2 --generate-notes
+# Releases via UI: https://github.com/Arkeon-Technologies/arkeon-wiki/releases/new
+# Releases via CLI: gh release create arkeon-wiki-v0.1.0 --generate-notes
 #
-# Both packages are trusted publishers of this workflow file on npm (OIDC),
-# so no npm token is needed — the jobs publish with `--provenance` to
+# The package is a trusted publisher of this workflow file on npm (OIDC),
+# so no npm token is needed — the job publishes with `--provenance` to
 # attach a verifiable supply-chain attestation.
 
 on:
@@ -18,7 +17,7 @@ on:
 
 jobs:
   publish-cli:
-    if: startsWith(github.ref, 'refs/tags/arkeon-v')
+    if: startsWith(github.ref, 'refs/tags/arkeon-wiki-v')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -30,8 +29,7 @@ jobs:
       # needs npm >= 11.5.1, and Node 22 ships with npm 10.x. With the old
       # npm, the handshake silently fails and the registry treats the
       # publish as anonymous — surfacing as a misleading `404 Not Found` on
-      # the PUT. See https://github.com/npm/cli/issues/8730 and the failed
-      # run for arkeon-v0.0.1 (GH Actions run 24284553520).
+      # the PUT. See https://github.com/npm/cli/issues/8730.
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -39,19 +37,12 @@ jobs:
 
       - name: Extract version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#arkeon-v}" >> "$GITHUB_OUTPUT"
+        run: echo "VERSION=${GITHUB_REF_NAME#arkeon-wiki-v}" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
         run: npm ci
 
-      # arkeon's `fetch-spec` step imports src/server/app.ts to render
-      # the OpenAPI snapshot, and the server's knowledge service imports
-      # `@arkeon-technologies/sdk` from its built dist. Build the SDK
-      # first so the import resolves.
-      - name: Build SDK (required by arkeon fetch-spec via server import)
-        run: npm run build -w packages/sdk-ts
-
-      - name: Build arkeon
+      - name: Build arkeon-wiki
         run: npm run build -w packages/arkeon
 
       - name: Set package version from tag
@@ -59,39 +50,3 @@ jobs:
 
       - name: Publish to npm
         run: npm publish -w packages/arkeon --access public --provenance
-
-  publish-sdk-ts:
-    if: startsWith(github.ref, 'refs/tags/sdk-v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-
-      # Node 24 (not 22) is required: npm's trusted-publishing OIDC handshake
-      # needs npm >= 11.5.1, and Node 22 ships with npm 10.x. With the old
-      # npm, the handshake silently fails and the registry treats the
-      # publish as anonymous — surfacing as a misleading `404 Not Found` on
-      # the PUT. See https://github.com/npm/cli/issues/8730 and the failed
-      # run for arkeon-v0.0.1 (GH Actions run 24284553520).
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org
-
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#sdk-v}" >> "$GITHUB_OUTPUT"
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build SDK
-        run: npm run build -w packages/sdk-ts
-
-      - name: Set package version from tag
-        run: npm version ${{ steps.version.outputs.VERSION }} --no-git-tag-version --allow-same-version -w packages/sdk-ts
-
-      - name: Publish to npm
-        run: npm publish -w packages/sdk-ts --access public --provenance

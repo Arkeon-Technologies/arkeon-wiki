@@ -68,12 +68,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-step "Build: SDK (required by arkeon imports)"
-npm run build -w packages/sdk-ts > /dev/null || fail "SDK build"
-pass "SDK build"
-
 step "Build: Explorer"
-npm run build -w @arkeon-technologies/explorer > /dev/null || fail "Explorer build"
+npm run build -w packages/explorer > /dev/null || fail "Explorer build"
 pass "Explorer build"
 
 step "Starting scratch Arkeon stack on ports ${API_PORT}/${PG_PORT}/${MEILI_PORT}"

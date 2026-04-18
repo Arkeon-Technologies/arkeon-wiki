@@ -100,16 +100,6 @@ Usage:    arkeon entities list
 The CLI is auto-generated from the API's OpenAPI spec, so every route is
 available as a command. Use --help on any command for full options.
 
-### SDK
-
-Install:    npm install @arkeon-technologies/sdk
-Usage:      import { ArkeonClient } from '@arkeon-technologies/sdk';
-            const client = new ArkeonClient();
-            await client.get('/wiki');
-
-The SDK reads ARKE_API_URL and ARKE_API_KEY from the environment and handles
-authentication, pagination, and error handling automatically.
-
 ## Getting More Help
 
 GET /help                         Full route index with auth & summary

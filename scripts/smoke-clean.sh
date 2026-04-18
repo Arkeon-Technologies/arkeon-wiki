@@ -97,9 +97,6 @@ echo "Clean install of monorepo dependencies..."
 rm -rf node_modules packages/*/node_modules package-lock.json
 npm install
 
-echo "Building SDK..."
-npm run build -w packages/sdk-ts || fail "SDK build"
-
 echo "Building arkeon..."
 npm run build -w packages/arkeon || fail "arkeon build"
 

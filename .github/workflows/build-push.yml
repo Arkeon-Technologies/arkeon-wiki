@@ -6,7 +6,6 @@ on:
     branches: [main]
     paths:
       - 'packages/arkeon/**'
-      - 'packages/sdk-ts/**'
       - 'packages/explorer/**'
       - 'package.json'
       - 'package-lock.json'
@@ -15,7 +14,6 @@ on:
     branches: [main]
     paths:
       - 'packages/arkeon/**'
-      - 'packages/sdk-ts/**'
       - 'packages/explorer/**'
       - 'package.json'
       - 'package-lock.json'
@@ -37,12 +35,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      # Build SDK BEFORE typecheck. packages/arkeon imports
-      # @arkeon-technologies/sdk from its built dist, so typechecking
-      # the arkeon package requires packages/sdk-ts/dist to exist.
-      - name: Build SDK
-        run: npm run build -w packages/sdk-ts
 
       - name: Typecheck arkeon
         run: npm run typecheck -w packages/arkeon
@@ -125,11 +117,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # SDK must be built before arkeon — npm pack triggers prepack which
-      # runs the full arkeon build, and that build imports the SDK.
-      - name: Build SDK
-        run: npm run build -w packages/sdk-ts
-
       - name: Cache Meilisearch binary
         uses: actions/cache@v4
         with:
@@ -173,13 +160,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      # `fetch-spec` imports src/server/app.ts to render the OpenAPI
-      # snapshot, and the server's knowledge service imports
-      # `@arkeon-technologies/sdk` from its built dist. Build the SDK
-      # first so the import resolves.
-      - name: Build SDK (required by arkeon fetch-spec via server import)
-        run: npm run build -w packages/sdk-ts
 
       - name: Regenerate arkeon spec + generated commands + bundled assets
         run: npm run build -w packages/arkeon
