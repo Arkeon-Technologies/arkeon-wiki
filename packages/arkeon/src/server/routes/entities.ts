@@ -43,6 +43,12 @@ import {
 } from "../lib/schemas";
 import { setActorContext } from "../lib/actor-context";
 import { createSql } from "../lib/sql";
+import {
+  processWikiContent,
+  fetchWikiReferences,
+  diffWikiReferences,
+  applyRelationshipDiff,
+} from "../lib/wiki-pipeline";
 
 type VersionRow = {
   entity_id?: string;
@@ -147,7 +153,7 @@ const updateEntityRoute = createRoute({
   summary: "Update entity properties",
   "x-arke-auth": "required",
   "x-arke-related": ["GET /wiki/{id}", "GET /wiki/{id}/versions"],
-  "x-arke-rules": ["Only the owner or an admin may update", "Optimistic concurrency: must pass current ver to update", "Properties are shallow-merged: only provided keys are updated, omitted keys are preserved", "remove_properties deletes keys by name after the merge, so removals take precedence over additions"],
+  "x-arke-rules": ["Only the owner or an admin may update", "Optimistic concurrency: must pass current ver to update", "Properties are shallow-merged: only provided keys are updated, omitted keys are preserved", "remove_properties deletes keys by name after the merge, so removals take precedence over additions", "When properties.content is updated on a wiki, typed [[links]] are parsed and resolved — new placeholders are minted, relationships are created/updated/removed, and [[assign:...]] links are queued for background drafting"],
   request: {
     params: entityIdParams(),
     body: {
@@ -164,8 +170,26 @@ const updateEntityRoute = createRoute({
   },
   responses: {
     200: {
-      description: "Entity updated",
-      content: jsonContent(EntityResponse),
+      description: "Entity updated. When content contains wiki links that were processed, includes placeholders, relationships_created, and resolve_warnings.",
+      content: jsonContent(z.object({
+        entity: EntitySchema,
+        placeholders: z.array(
+          z.object({
+            id: EntityIdParam,
+            label: z.string(),
+            status: z.enum(["placeholder", "assigned"]),
+          }),
+        ).optional().describe("Placeholders minted from wiki links in updated content. Only present when content was processed through the wiki link pipeline."),
+        relationships_created: z.number().int().optional().describe("Number of new reference relationships created. Only present when content was processed."),
+        relationships_updated: z.number().int().optional().describe("Number of existing reference relationships updated (span_text changed). Only present when content was processed."),
+        relationships_removed: z.number().int().optional().describe("Number of reference relationships removed (target no longer in content). Only present when content was processed."),
+        resolve_warnings: z.array(
+          z.object({
+            label: z.string(),
+            reason: z.enum(["llm_not_configured", "no_match"]),
+          }),
+        ).optional().describe("Emitted when [[resolve:...]] links soft-degrade to placeholders."),
+      })),
     },
     ...errorResponses([400, 401, 403, 404, 409]),
   },
@@ -520,11 +544,54 @@ wikisRouter.openapi(updateEntityRoute, async (c) => {
   const sql = createSql();
   const now = new Date().toISOString();
 
+  // Detect if content is being updated — triggers the wiki link pipeline
+  const newContent = properties?.content;
+  const hasContentUpdate = typeof newContent === "string" && newContent.length > 0;
+
+  let pipelineResult: Awaited<ReturnType<typeof processWikiContent>> | null = null;
+  let mergeProperties = properties;
+  let pipelineSpaceId: string | null = null;
+
+  if (hasContentUpdate) {
+    // Fetch current entity to check if content actually changed and get space_id
+    const currentRows = await sql.transaction([
+      ...setActorContext(sql, actor),
+      sql`SELECT properties FROM entities WHERE id = ${entityId} AND type = 'wiki' LIMIT 1`,
+    ]);
+    const currentEntity = (currentRows[currentRows.length - 1] as Array<{ properties: Record<string, unknown> }>)[0];
+    const currentContent = currentEntity?.properties?.content;
+
+    if (currentContent !== newContent) {
+      // Look up which space this wiki belongs to
+      const spaceRows = await sql`SELECT space_id FROM space_entities WHERE entity_id = ${entityId} LIMIT 1`;
+      pipelineSpaceId = (spaceRows[0]?.space_id as string) ?? null;
+      if (!pipelineSpaceId) {
+        throw new ApiError(500, "internal_error", "Wiki has no space assignment");
+      }
+
+      // Run the wiki link pipeline on the new content
+      pipelineResult = await processWikiContent({
+        actor,
+        spaceId: pipelineSpaceId,
+        content: newContent,
+        depth: 0,
+        maxDepth: 2,
+      });
+
+      // Rewrite the properties to use resolved content + store submitted_content
+      mergeProperties = {
+        ...properties,
+        submitted_content: newContent,
+        content: pipelineResult.resolvedContent,
+      };
+    }
+  }
+
   // Build the properties expression:
   //   merge only:  properties || $merge
   //   remove only: properties - $keys
   //   both:        (properties || $merge) - $keys  (removals win)
-  const hasMerge = properties && Object.keys(properties).length > 0;
+  const hasMerge = mergeProperties && Object.keys(mergeProperties).length > 0;
   const hasRemove = removeProperties.length > 0;
   let propsExpr: string;
   const params: unknown[] = [];
@@ -532,11 +599,11 @@ wikisRouter.openapi(updateEntityRoute, async (c) => {
 
   if (hasMerge && hasRemove) {
     propsExpr = `(properties || $${paramIdx}::jsonb) - $${paramIdx + 1}::text[]`;
-    params.push(JSON.stringify(properties), removeProperties);
+    params.push(JSON.stringify(mergeProperties), removeProperties);
     paramIdx += 2;
   } else if (hasMerge) {
     propsExpr = `properties || $${paramIdx}::jsonb`;
-    params.push(JSON.stringify(properties));
+    params.push(JSON.stringify(mergeProperties));
     paramIdx += 1;
   } else {
     propsExpr = `properties - $${paramIdx}::text[]`;
@@ -600,6 +667,35 @@ wikisRouter.openapi(updateEntityRoute, async (c) => {
     ]).then(() => undefined).catch(console.error),
   );
   backgroundTask(indexEntity(updated));
+
+  // If content was processed through the pipeline, diff and apply relationship changes
+  if (pipelineResult && pipelineSpaceId) {
+    const existingRefs = await fetchWikiReferences(actor, entityId);
+    const diff = diffWikiReferences(existingRefs, pipelineResult.targets);
+    const relResult = await applyRelationshipDiff({
+      actor,
+      wikiId: entityId,
+      spaceId: pipelineSpaceId,
+      diff,
+      now,
+    });
+
+    // Remove deleted relationship entities from Meilisearch
+    if (relResult.deleted.length > 0) {
+      backgroundTask(removeEntities(relResult.deleted));
+    }
+
+    return c.json({
+      entity: updated,
+      placeholders: pipelineResult.placeholders,
+      relationships_created: relResult.created,
+      relationships_updated: relResult.updated,
+      relationships_removed: relResult.deleted.length,
+      ...(pipelineResult.resolveWarnings.length > 0
+        ? { resolve_warnings: pipelineResult.resolveWarnings }
+        : {}),
+    }, 200);
+  }
 
   return c.json({ entity: updated }, 200);
 });
