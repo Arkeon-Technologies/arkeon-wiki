@@ -1,9 +1,0 @@
--- =============================================================================
--- Entity Permissions — REMOVED
--- =============================================================================
---
--- Per-entity ACL grants were removed in the single-tenant simplification.
--- All authenticated actors have full access. This file is kept as a no-op
--- placeholder for migration sort order.
---
--- =============================================================================

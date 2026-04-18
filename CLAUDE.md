@@ -74,7 +74,7 @@ A healthy build produces:
 - `dist/server-*.js` — ~500 KB lazy-loaded server chunk (split via dynamic import)
 - `dist/chunk-*.js` — ~15 KB shared chunk
 - `dist/explorer/` — ~500 KB Vite SPA
-- `dist/schema/*.sql` — ~200 KB, all 38 migration files
+- `dist/schema/*.sql` — ~20 KB, 3 migration files
 - Total: ~2.5-3 MB
 
 ## Fresh-install smoke testing
