@@ -550,6 +550,7 @@ wikisRouter.openapi(updateEntityRoute, async (c) => {
 
   let pipelineResult: Awaited<ReturnType<typeof processWikiContent>> | null = null;
   let mergeProperties = properties;
+  let pipelineSpaceId: string | null = null;
 
   if (hasContentUpdate) {
     // Fetch current entity to check if content actually changed and get space_id
@@ -563,15 +564,15 @@ wikisRouter.openapi(updateEntityRoute, async (c) => {
     if (currentContent !== newContent) {
       // Look up which space this wiki belongs to
       const spaceRows = await sql`SELECT space_id FROM space_entities WHERE entity_id = ${entityId} LIMIT 1`;
-      const spaceId = spaceRows[0]?.space_id as string | undefined;
-      if (!spaceId) {
+      pipelineSpaceId = (spaceRows[0]?.space_id as string) ?? null;
+      if (!pipelineSpaceId) {
         throw new ApiError(500, "internal_error", "Wiki has no space assignment");
       }
 
       // Run the wiki link pipeline on the new content
       pipelineResult = await processWikiContent({
         actor,
-        spaceId,
+        spaceId: pipelineSpaceId,
         content: newContent,
         depth: 0,
         maxDepth: 2,
@@ -668,16 +669,13 @@ wikisRouter.openapi(updateEntityRoute, async (c) => {
   backgroundTask(indexEntity(updated));
 
   // If content was processed through the pipeline, diff and apply relationship changes
-  if (pipelineResult) {
-    const spaceRows = await sql`SELECT space_id FROM space_entities WHERE entity_id = ${entityId} LIMIT 1`;
-    const spaceId = spaceRows[0]!.space_id as string;
-
+  if (pipelineResult && pipelineSpaceId) {
     const existingRefs = await fetchWikiReferences(actor, entityId);
     const diff = diffWikiReferences(existingRefs, pipelineResult.targets);
     const relResult = await applyRelationshipDiff({
       actor,
       wikiId: entityId,
-      spaceId,
+      spaceId: pipelineSpaceId,
       diff,
       now,
     });

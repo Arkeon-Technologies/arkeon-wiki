@@ -22,7 +22,12 @@ import { withTransaction } from "../lib/sql";
 import { setActorContext } from "../lib/actor-context";
 import { indexEntity } from "../lib/meilisearch";
 import { backgroundTask } from "../lib/background";
-import { processWikiContent, createWikiReferences } from "../lib/wiki-pipeline";
+import {
+  processWikiContent,
+  createWikiReferences,
+  mintPlaceholders,
+  applyLinkReplacements,
+} from "../lib/wiki-pipeline";
 import {
   EntityIdParam,
   EntitySchema,
@@ -46,6 +51,8 @@ const WIKI_CONTENT_DESCRIPTION = [
   "Every parsed link materializes as a `references` relationship from the published wiki to the target (or to a newly-minted placeholder). The wiki page itself is the canonical graph entity for its subject.",
   "",
   "Choosing between resolve / placeholder / assign: use `resolve` when the thing probably already exists and you want the server to find it; use `placeholder` when you want a stub but don't want anything auto-drafted; use `assign` to hand off actual drafting to a background worker.",
+  "",
+  "After processing, the stored entity has two content fields: `properties.content` (resolved — all links rewritten to `[[entity:ULID]]`) and `properties.submitted_content` (the original input with unresolved link syntax preserved). The same applies when updating content via PUT.",
   "",
   "Caveat: the parser scans every `[[...]]` pair in the content, including inside fenced code blocks. To discuss link syntax in prose, use alternative delimiters (e.g. `<<entity:id>>`). See GET /help/guide/wiki for a worked example.",
 ].join("\n");
@@ -222,13 +229,19 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   const wikiId = generateUlid();
 
   // --- Process content through the wiki link pipeline ---
-  const { resolvedContent, placeholders, targets, resolveWarnings } = await processWikiContent({
+  // Use mintInTransaction=false so we can mint placeholders atomically
+  // with the wiki insert (if the insert fails, placeholders roll back).
+  const pipelineResult = await processWikiContent({
     actor,
     spaceId: space_id,
     content,
     depth,
     maxDepth: MAX_DEPTH,
+    mintInTransaction: false,
   });
+  const { targets, resolveWarnings, pendingMints, _replacements } = pipelineResult;
+  let { placeholders } = pipelineResult;
+
   const wikiProperties = {
     ...extraProperties,
     label,
@@ -241,7 +254,10 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
     status: "draft",
   };
 
-  // Persist wiki as draft (Stage 1)
+  // Collect all replacements — entity/resolve from pipeline + mint from below
+  const allReplacements = [...(_replacements ?? [])];
+
+  // Persist wiki as draft + mint placeholders atomically (Stage 1)
   await withTransaction(async (tx) => {
     for (const q of setActorContext(tx, actor)) await q;
 
@@ -293,7 +309,27 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
       VALUES (${space_id}, ${wikiId}, ${actor.id}, ${now}::timestamptz)
       ON CONFLICT (space_id, entity_id) DO NOTHING
     `;
+
+    // Mint placeholders inside the same transaction — if the wiki insert
+    // fails (e.g. 409 duplicate), placeholders roll back with it.
+    if (pendingMints && pendingMints.length > 0) {
+      const mintResult = await mintPlaceholders(tx, {
+        actor, spaceId: space_id, depth, mints: pendingMints,
+      });
+      placeholders = mintResult.placeholders;
+      allReplacements.push(...mintResult.replacements);
+      for (const pl of mintResult.placeholderLinks) {
+        targets.push({
+          targetId: pl.id,
+          predicate: "references",
+          spanText: pl.link.spanText,
+        });
+      }
+    }
   });
+
+  // Apply all replacements in a single pass over original content
+  const resolvedContent = applyLinkReplacements(content, allReplacements);
 
   // Create relationships (Stage 2)
   const relationshipsCreated = await createWikiReferences({

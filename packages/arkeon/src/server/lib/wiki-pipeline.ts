@@ -9,7 +9,7 @@
 
 import type { Actor } from "../types";
 import type { SqlClient } from "./sql";
-import { withTransaction } from "./sql";
+import { createSql, withTransaction } from "./sql";
 import { setActorContext } from "./actor-context";
 import { generateUlid } from "./ids";
 import { isLlmConfigured } from "./llm";
@@ -22,14 +22,22 @@ import { resolveLinks } from "./wiki-resolve";
 type PlaceholderStatus = "placeholder" | "assigned";
 
 export interface WikiContentResult {
-  /** Content with all links replaced by [[entity:ULID]] */
+  /** Content with all links replaced by [[entity:ULID]]. When mintInTransaction=false,
+   *  this only includes entity/resolve replacements — call applyLinkReplacements with
+   *  pendingReplacements + mintResult.replacements to get the final content. */
   resolvedContent: string;
-  /** Placeholders minted during this run */
+  /** Placeholders minted during this run (empty when mintInTransaction=false) */
   placeholders: Array<{ id: string; label: string; status: PlaceholderStatus }>;
-  /** Relationship targets to create */
+  /** Relationship targets to create (excludes pending-mint targets when mintInTransaction=false) */
   targets: LinkTarget[];
   /** Warnings from resolve: links that fell back */
   resolveWarnings: Array<{ label: string; reason: "llm_not_configured" | "no_match" }>;
+  /** Present only when mintInTransaction=false — call mintPlaceholders yourself */
+  pendingMints?: PendingMint[];
+  /** Raw replacements from entity/resolve link resolution. Present only when
+   *  mintInTransaction=false. Combine with mintResult.replacements and call
+   *  applyLinkReplacements(originalContent, combined) for final content. */
+  _replacements?: Array<{ offset: number; length: number; value: string }>;
 }
 
 export interface LinkTarget {
@@ -57,8 +65,13 @@ const REL_PREDICATE_REFERENCES = "references";
 
 /**
  * Process wiki content: parse links, validate entity refs, resolve via
- * LLM, mint placeholders, queue assign links. Returns the resolved
- * content and all side-effect records.
+ * LLM. Does NOT mint placeholders — returns a plan with pending mints.
+ * Call {@link mintPlaceholders} inside your own transaction to create them.
+ *
+ * For convenience, passing `mintInTransaction: true` (the default) mints
+ * placeholders in a standalone transaction. Pass `false` and call
+ * `mintPlaceholders` yourself when you need atomicity with other writes
+ * (e.g. the POST handler's wiki insert).
  */
 export async function processWikiContent(params: {
   actor: Actor;
@@ -66,8 +79,13 @@ export async function processWikiContent(params: {
   content: string;
   depth: number;
   maxDepth: number;
+  /** When true (default), placeholders are minted in a standalone txn.
+   *  Set false and call mintPlaceholders yourself for atomicity. */
+  mintInTransaction?: boolean;
 }): Promise<WikiContentResult> {
   const { actor, spaceId, content, depth, maxDepth } = params;
+  const autoMint = params.mintInTransaction !== false;
+  const sql = createSql();
 
   // Parse links
   let links: ParsedLink[];
@@ -89,7 +107,7 @@ export async function processWikiContent(params: {
   const canonicalEntityIds = new Map<string, string>();
   if (entityLinks.length > 0) {
     for (const link of entityLinks) {
-      const canonicalId = await resolveVisibleEntityId(actor, link.id!);
+      const canonicalId = await resolveVisibleEntityId(sql, actor, link.id!);
       if (!canonicalId) {
         throw new ApiError(404, "not_found", `Entity ${link.id} not found or not visible`);
       }
@@ -134,51 +152,35 @@ export async function processWikiContent(params: {
     }
   }
 
-  // Mint placeholders for placeholder: and assign: links
-  const placeholders: Array<{ id: string; label: string; status: PlaceholderStatus }> = [];
-  const placeholderLinks: Array<{ id: string; link: ParsedLink }> = [];
-  const now = new Date().toISOString();
-
-  const stage1Mints: Array<{ link: ParsedLink; status: PlaceholderStatus }> = [
+  // Build pending placeholder mints
+  const pendingMints: PendingMint[] = [
     ...placeholderLinksIn.map((link) => ({ link, status: "placeholder" as const })),
     ...assignLinksIn.map((link) => ({ link, status: "assigned" as const })),
   ];
 
-  if (stage1Mints.length > 0) {
+  // Collect unresolved resolve: links as pending unqueued placeholders
+  const unresolvedLinks: ParsedLink[] = [];
+  for (const r of resolved) {
+    if (!r.entityId) {
+      unresolvedLinks.push(r.link);
+    }
+  }
+  for (const link of unresolvedLinks) {
+    pendingMints.push({ link, status: "placeholder" });
+  }
+
+  // Mint placeholders (auto or deferred)
+  const placeholders: Array<{ id: string; label: string; status: PlaceholderStatus }> = [];
+  const placeholderLinks: Array<{ id: string; link: ParsedLink }> = [];
+
+  if (pendingMints.length > 0 && autoMint) {
     await withTransaction(async (tx) => {
-      for (const q of setActorContext(tx, actor)) await q;
-
-      for (const { link, status } of stage1Mints) {
-        const phId = generateUlid();
-        const phProps = { label: link.label, description: link.description ?? null, status };
-
-        await tx`
-          INSERT INTO entities (
-            id, kind, type, ver, properties, owner_id,
-            edited_by, note, created_at, updated_at
-          ) VALUES (
-            ${phId}, 'entity', 'placeholder', 1, ${phProps}::jsonb, ${actor.id},
-            ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
-          )
-        `;
-
-        await tx`
-          INSERT INTO space_entities (space_id, entity_id, added_by, added_at)
-          VALUES (${spaceId}, ${phId}, ${actor.id}, ${now}::timestamptz)
-          ON CONFLICT (space_id, entity_id) DO NOTHING
-        `;
-
-        if (status === "assigned") {
-          await tx`
-            INSERT INTO wiki_draft_queue (entity_id, depth, owner_agent, deadline, status, created_at)
-            VALUES (${phId}, ${depth + 1}, ${actor.id}, ${new Date(Date.now() + 3600_000).toISOString()}::timestamptz, 'pending', ${now}::timestamptz)
-          `;
-        }
-
-        placeholders.push({ id: phId, label: link.label ?? "", status });
-        placeholderLinks.push({ id: phId, link });
-        replacements.push({ offset: link.offset, length: link.length, value: `[[entity:${phId}]]` });
-      }
+      const result = await mintPlaceholders(tx, {
+        actor, spaceId, depth, mints: pendingMints,
+      });
+      placeholders.push(...result.placeholders);
+      placeholderLinks.push(...result.placeholderLinks);
+      replacements.push(...result.replacements);
     });
   }
 
@@ -194,7 +196,7 @@ export async function processWikiContent(params: {
     });
   }
 
-  // Placeholder/assign links
+  // Placeholder/assign links (only if minted)
   for (const pl of placeholderLinks) {
     targets.push({
       targetId: pl.id,
@@ -204,54 +206,105 @@ export async function processWikiContent(params: {
   }
 
   // Resolved links
-  const unresolvedLinks: ParsedLink[] = [];
   for (const r of resolved) {
     if (r.entityId) {
       targets.push({ targetId: r.entityId, predicate: REL_PREDICATE_REFERENCES, spanText: r.link.spanText });
       replacements.push({ offset: r.link.offset, length: r.link.length, value: `[[entity:${r.entityId}]]` });
-    } else {
-      unresolvedLinks.push(r.link);
     }
   }
 
-  // Unresolved resolve: links → unqueued placeholders
-  if (unresolvedLinks.length > 0) {
-    const minted = await withTransaction(async (tx) => {
-      for (const q of setActorContext(tx, actor)) await q;
-      const result: Array<{ id: string; label: string; status: PlaceholderStatus }> = [];
+  // Deduplicate targets — if the same entity is linked multiple times,
+  // keep the last occurrence's spanText (last-write-wins).
+  const deduped = new Map<string, LinkTarget>();
+  for (const t of targets) {
+    deduped.set(`${t.targetId}:${t.predicate}`, t);
+  }
+  const dedupedTargets = [...deduped.values()];
 
-      for (const link of unresolvedLinks) {
-        const phId = generateUlid();
-        const phProps = { label: link.label, description: link.description ?? null, status: "placeholder" };
-
-        await tx`
-          INSERT INTO entities (
-            id, kind, type, ver, properties, owner_id,
-            edited_by, note, created_at, updated_at
-          ) VALUES (
-            ${phId}, 'entity', 'placeholder', 1, ${phProps}::jsonb, ${actor.id},
-            ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
-          )
-        `;
-
-        await tx`
-          INSERT INTO space_entities (space_id, entity_id, added_by, added_at)
-          VALUES (${spaceId}, ${phId}, ${actor.id}, ${now}::timestamptz)
-          ON CONFLICT (space_id, entity_id) DO NOTHING
-        `;
-
-        targets.push({ targetId: phId, predicate: REL_PREDICATE_REFERENCES, spanText: link.spanText });
-        result.push({ id: phId, label: link.label ?? "", status: "placeholder" });
-        replacements.push({ offset: link.offset, length: link.length, value: `[[entity:${phId}]]` });
-      }
-      return result;
-    });
-    placeholders.push(...minted);
+  if (autoMint) {
+    // All replacements (entity + resolve + mint) are in the array — apply them all
+    const resolvedContent = applyLinkReplacements(content, replacements);
+    return { resolvedContent, placeholders, targets: dedupedTargets, resolveWarnings };
   }
 
-  const resolvedContent = applyLinkReplacements(content, replacements);
+  // Deferred minting: return the raw replacements so the caller can combine
+  // them with mintResult.replacements and apply in one pass.
+  return {
+    resolvedContent: content, // not yet resolved — caller must apply replacements
+    placeholders,
+    targets: dedupedTargets,
+    resolveWarnings,
+    pendingMints,
+    _replacements: replacements,
+  };
+}
 
-  return { resolvedContent, placeholders, targets, resolveWarnings };
+// ── Placeholder minting ──────────────────────────────────────────
+
+export interface PendingMint {
+  link: ParsedLink;
+  status: PlaceholderStatus;
+}
+
+interface MintResult {
+  placeholders: Array<{ id: string; label: string; status: PlaceholderStatus }>;
+  placeholderLinks: Array<{ id: string; link: ParsedLink }>;
+  replacements: Array<{ offset: number; length: number; value: string }>;
+}
+
+/**
+ * Mint placeholder entities inside a caller-provided transaction.
+ * This lets the POST handler include minting in the same transaction
+ * as the wiki insert for atomicity.
+ */
+export async function mintPlaceholders(
+  tx: SqlClient,
+  params: {
+    actor: Actor;
+    spaceId: string;
+    depth: number;
+    mints: PendingMint[];
+  },
+): Promise<MintResult> {
+  const { actor, spaceId, depth, mints } = params;
+  const now = new Date().toISOString();
+  const placeholders: MintResult["placeholders"] = [];
+  const placeholderLinks: MintResult["placeholderLinks"] = [];
+  const replacements: MintResult["replacements"] = [];
+
+  for (const { link, status } of mints) {
+    const phId = generateUlid();
+    const phProps = { label: link.label, description: link.description ?? null, status };
+
+    await tx`
+      INSERT INTO entities (
+        id, kind, type, ver, properties, owner_id,
+        edited_by, note, created_at, updated_at
+      ) VALUES (
+        ${phId}, 'entity', 'placeholder', 1, ${phProps}::jsonb, ${actor.id},
+        ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
+      )
+    `;
+
+    await tx`
+      INSERT INTO space_entities (space_id, entity_id, added_by, added_at)
+      VALUES (${spaceId}, ${phId}, ${actor.id}, ${now}::timestamptz)
+      ON CONFLICT (space_id, entity_id) DO NOTHING
+    `;
+
+    if (status === "assigned") {
+      await tx`
+        INSERT INTO wiki_draft_queue (entity_id, depth, owner_agent, deadline, status, created_at)
+        VALUES (${phId}, ${depth + 1}, ${actor.id}, ${new Date(Date.now() + 3600_000).toISOString()}::timestamptz, 'pending', ${now}::timestamptz)
+      `;
+    }
+
+    placeholders.push({ id: phId, label: link.label ?? "", status });
+    placeholderLinks.push({ id: phId, link });
+    replacements.push({ offset: link.offset, length: link.length, value: `[[entity:${phId}]]` });
+  }
+
+  return { placeholders, placeholderLinks, replacements };
 }
 
 // ── Relationship management ────────────────────────────────────────
@@ -465,11 +518,10 @@ export function applyLinkReplacements(
  * Follow entity redirects to find the canonical visible entity ID.
  */
 export async function resolveVisibleEntityId(
+  sql: SqlClient,
   actor: Actor,
   id: string,
 ): Promise<string | null> {
-  const { createSql } = await import("./sql");
-  const sql = createSql();
   let current = id;
   const seen = new Set<string>();
 

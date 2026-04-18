@@ -144,10 +144,12 @@ describe("diffWikiReferences", () => {
     expect(diff.toDelete).toEqual(["rel-DELETE_ME"]);
   });
 
-  test("duplicate targets in new set are handled", () => {
-    // If the same target appears twice in new content (e.g., linked twice),
-    // both produce update entries for the same relationship. The last UPDATE
-    // wins at the DB level — harmless, just a redundant write.
+  test("duplicate targets in new set — processWikiContent deduplicates before diffing", () => {
+    // processWikiContent deduplicates targets by targetId:predicate before
+    // returning, so diffWikiReferences typically receives unique targets.
+    // But if duplicates do reach diffWikiReferences, both match the same
+    // existing relationship and produce two update entries (last-write-wins
+    // at DB level, harmless).
     const existing: ExistingRelationship[] = [
       makeExisting({ targetId: "E1", spanText: "original" }),
     ];
@@ -158,7 +160,6 @@ describe("diffWikiReferences", () => {
 
     const diff = diffWikiReferences(existing, targets);
 
-    // Both matches produce updates — last-write-wins at DB level
     expect(diff.toUpdate.length).toBe(2);
     expect(diff.toUpdate[0]!.id).toBe("rel-E1");
     expect(diff.toUpdate[1]!.id).toBe("rel-E1");
