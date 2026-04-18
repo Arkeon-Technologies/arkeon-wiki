@@ -255,19 +255,19 @@ echo "arkeon-wiki seed (idempotent)..."
 npx arkeon-wiki seed || fail "arkeon-wiki seed (second run)"
 pass "seed idempotent"
 
-echo "arkeon-wiki entities list..."
-ENTITIES_OUT=$(npx arkeon-wiki entities list --raw 2>&1) || fail "arkeon-wiki entities list"
+echo "arkeon-wiki wiki list..."
+ENTITIES_OUT=$(npx arkeon-wiki wiki list --raw 2>&1) || fail "arkeon-wiki wiki list"
 if echo "$ENTITIES_OUT" | grep -q '"entities"'; then
   # Count entities in the response (non-empty array means seed data is visible)
   # Use `|| true` because grep returns exit 1 when no matches, which kills set -eo pipefail
   ENTITY_COUNT=$(echo "$ENTITIES_OUT" | grep -o '"id"' | wc -l | tr -d ' ' || true)
   if [ -n "$ENTITY_COUNT" ] && [ "$ENTITY_COUNT" -gt 0 ]; then
-    pass "entities list returns $ENTITY_COUNT entities"
+    pass "wiki list returns $ENTITY_COUNT entities"
   else
-    fail "entities list returned empty array — auth or RLS issue"
+    fail "wiki list returned empty array — auth or RLS issue"
   fi
 else
-  fail "entities list output missing 'entities' key"
+  fail "wiki list output missing 'entities' key"
 fi
 
 echo "arkeon-wiki actors list..."
@@ -280,23 +280,23 @@ else
   warn "actors list output unexpected: $(echo "$ACTORS_OUT" | head -3)"
 fi
 
-echo "arkeon-wiki entities create..."
-CREATE_OUT=$(npx arkeon-wiki entities create --type person --properties '{"label":"Smoke Test Entity"}' --raw 2>&1) || fail "arkeon-wiki entities create"
+echo "arkeon-wiki wiki create..."
+CREATE_OUT=$(npx arkeon-wiki wiki create --label "Smoke Test Entity" --short_description "A smoke test entity" --keywords '["smoke"]' --content "Smoke test content." --type person --raw 2>&1) || fail "arkeon-wiki wiki create"
 # grep returns exit 1 when no match — use || true to prevent set -eo pipefail from killing the script
 # --raw output uses "id": "..." (with spaces), so match both formats
 ENTITY_ID=$(echo "$CREATE_OUT" | grep -oE '"id"\s*:\s*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/' || true)
 if [ -n "$ENTITY_ID" ]; then
-  pass "entities create returned id: $ENTITY_ID"
+  pass "wiki create returned id: $ENTITY_ID"
 
-  echo "arkeon-wiki entities get $ENTITY_ID..."
-  GET_OUT=$(npx arkeon-wiki entities get "$ENTITY_ID" --raw 2>&1) || fail "arkeon-wiki entities get"
+  echo "arkeon-wiki wiki get $ENTITY_ID..."
+  GET_OUT=$(npx arkeon-wiki wiki get "$ENTITY_ID" --raw 2>&1) || fail "arkeon-wiki wiki get"
   if echo "$GET_OUT" | grep -q "Smoke Test Entity"; then
-    pass "entities get returns correct entity"
+    pass "wiki get returns correct entity"
   else
-    warn "entities get — entity data mismatch"
+    warn "wiki get — entity data mismatch"
   fi
 else
-  fail "entities create — could not extract entity id. Output: $(echo "$CREATE_OUT" | head -5)"
+  fail "wiki create — could not extract entity id. Output: $(echo "$CREATE_OUT" | head -5)"
 fi
 
 echo "arkeon-wiki docs..."

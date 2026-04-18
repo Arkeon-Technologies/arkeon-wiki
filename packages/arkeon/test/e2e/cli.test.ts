@@ -85,10 +85,10 @@ describe("CLI integration — generated API commands", () => {
     expect(json?.skipped).toBe(true);
   });
 
-  // --- entities ---
+  // --- wiki ---
 
-  test("entities list returns entities", () => {
-    const result = arkeon("entities list --raw");
+  test("wiki list returns entities", () => {
+    const result = arkeon("wiki list --raw");
     expect(result.ok).toBe(true);
 
     const json = parseJson(result.stdout);
@@ -98,33 +98,32 @@ describe("CLI integration — generated API commands", () => {
     expect(entities.length).toBeGreaterThan(0);
   });
 
-  test("entities list --filter type filters by type", () => {
-    const result = arkeon('entities list --filter "type:book" --raw');
+  test("wiki list --filter subject_type filters by subject type", () => {
+    const result = arkeon('wiki list --filter "properties.subject_type:book" --raw');
     expect(result.ok).toBe(true);
 
     const json = parseJson(result.stdout);
     expect(json).not.toBeNull();
-    const entities = json?.entities as Array<{ type: string }>;
+    const entities = json?.entities as Array<{ properties: { subject_type: string } }>;
     expect(entities.length).toBeGreaterThan(0);
     for (const entity of entities) {
-      expect(entity.type).toBe("book");
+      expect(entity.properties.subject_type).toBe("book");
     }
   });
 
   let createdEntityId: string | undefined;
 
-  test("entities create creates a new entity", () => {
+  test("wiki create creates a new entity", () => {
     const result = arkeon(
-      `entities create --type person --properties '{"label":"CLI Smoke Test Person"}'`,
+      `wiki create --label "CLI Smoke Test Person" --short_description "A test person" --keywords '["test"]' --content "A person for CLI smoke testing." --type person`,
     );
     expect(result.ok).toBe(true);
 
     const json = parseJson(result.stdout);
     expect(json).not.toBeNull();
 
-    // With --raw omitted, output.result wraps as { ok, operation, data }
+    // With --raw omitted, the CLI wraps in { ok, data: { entity: { id } } }
     // With --raw, the raw API response is { entity: { id, ... } }
-    // Without --raw, the CLI wraps in { ok, data: { entity: { id } } }
     const data = (json?.data ?? json) as Record<string, unknown>;
     const entity = (data?.entity ?? data) as Record<string, unknown>;
     const id = entity?.id as string | undefined;
@@ -132,17 +131,17 @@ describe("CLI integration — generated API commands", () => {
     createdEntityId = id;
   });
 
-  test("entities get retrieves the created entity", () => {
+  test("wiki get retrieves the created entity", () => {
     expect(createdEntityId).toBeTruthy();
 
-    const result = arkeon(`entities get ${createdEntityId} --raw`);
+    const result = arkeon(`wiki get ${createdEntityId} --raw`);
     expect(result.ok).toBe(true);
 
     const json = parseJson(result.stdout);
     expect(json).not.toBeNull();
     // --raw returns { entity: { id, type, properties, ... } }
     const entity = (json?.entity ?? json) as Record<string, unknown>;
-    expect(entity?.type).toBe("person");
+    expect(entity?.type).toBe("wiki");
     const props = entity?.properties as Record<string, unknown>;
     expect(props?.label).toBe("CLI Smoke Test Person");
   });
