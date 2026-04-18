@@ -1,9 +1,0 @@
--- =============================================================================
--- Space Entity Access — REMOVED
--- =============================================================================
---
--- Space-cascaded entity permissions were removed in the single-tenant
--- simplification. All authenticated actors have full access. This file is
--- kept as a no-op placeholder for migration sort order.
---
--- =============================================================================
