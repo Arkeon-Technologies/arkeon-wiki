@@ -1,8 +1,12 @@
-# arkeon
+# arkeon-wiki
+
+Forked from `Arkeon-Technologies/arkeon` at the `wiki-rewrite` branch. Wiki-centric knowledge graph — diverged enough from core arkeon to be its own repo.
+
+**Repo**: `Arkeon-Technologies/arkeon-wiki`
 
 Three npm workspaces. Only two are published to npm.
 
-- `packages/arkeon` — the main package, published as `arkeon` on npm. Contains the CLI binary, the Hono API server, the database schema migrations, and shared TypeScript types. Single source tree under `src/`:
+- `packages/arkeon` — the main package (npm name TBD for this fork). Contains the CLI binary, the Hono API server, the database schema migrations, and shared TypeScript types. Single source tree under `src/`:
   - `src/index.ts` — CLI entry (commander wiring)
   - `src/cli/commands/**` + `src/cli/lib/**` — CLI commands and helpers
   - `src/server/**` — Hono API server (routes, middleware, wiki pipeline)
@@ -208,22 +212,11 @@ After any feature work, ask: "Can an agent discover and use this?" Specifically:
 
 ## Publishing to npm
 
-Publishing is automated via GitHub Actions (`.github/workflows/publish.yml`) and triggered by **GitHub Releases with specific tag prefixes**:
+**Not yet configured for this repo.** The CI workflows were carried over from the original arkeon repo but npm trusted publishing (OIDC) is scoped per-repo. Before publishing from arkeon-wiki:
 
-- `arkeon-v<version>` → publishes `arkeon` to npm (e.g., `arkeon-v0.3.6`)
-- `sdk-v<version>` → publishes `@arkeon-technologies/sdk` to npm (e.g., `sdk-v0.1.11`)
+1. Decide on a package name (the original `arkeon` name belongs to the upstream repo)
+2. Configure OIDC trusted publishing on npmjs.com for `Arkeon-Technologies/arkeon-wiki`
+3. Update `packages/arkeon/package.json` with the new package name
+4. Update `.github/workflows/publish.yml` tag prefixes if needed
 
-Tags like `v0.3.6` (without the `arkeon-` prefix) will NOT trigger a publish. The workflow uses npm trusted publishing (OIDC) — no token needed.
-
-### Release checklist
-
-1. Bump `version` in `packages/arkeon/package.json` (or `packages/sdk-ts/package.json` for SDK)
-2. Commit and push to main
-3. Create a GitHub release with the correct tag prefix:
-   ```bash
-   gh release create arkeon-v0.3.6 --title "arkeon v0.3.6" --generate-notes
-   ```
-4. The publish workflow runs automatically — check Actions to confirm
-5. Verify on npm: `npm view arkeon version`
-
-Do NOT create releases with bare `v*` tags — they won't publish.
+Until then, `npm pack` locally for testing.
