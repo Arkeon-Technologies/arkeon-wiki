@@ -244,19 +244,19 @@ export ARKE_API_KEY="$ADMIN_KEY"
 export HOME="$SCRATCH"
 
 echo "arkeon-wiki status..."
-npx arkeon-wiki status --port $PORT || fail "arkeon status"
+npx arkeon-wiki status --port $PORT || fail "arkeon-wiki status"
 pass "status"
 
 echo "arkeon-wiki seed..."
-npx arkeon-wiki seed || fail "arkeon seed"
+npx arkeon-wiki seed || fail "arkeon-wiki seed"
 pass "seed"
 
 echo "arkeon-wiki seed (idempotent)..."
-npx arkeon-wiki seed || fail "arkeon seed (second run)"
+npx arkeon-wiki seed || fail "arkeon-wiki seed (second run)"
 pass "seed idempotent"
 
 echo "arkeon-wiki entities list..."
-ENTITIES_OUT=$(npx arkeon-wiki entities list --raw 2>&1) || fail "arkeon entities list"
+ENTITIES_OUT=$(npx arkeon-wiki entities list --raw 2>&1) || fail "arkeon-wiki entities list"
 if echo "$ENTITIES_OUT" | grep -q '"entities"'; then
   # Count entities in the response (non-empty array means seed data is visible)
   # Use `|| true` because grep returns exit 1 when no matches, which kills set -eo pipefail
@@ -271,7 +271,7 @@ else
 fi
 
 echo "arkeon-wiki actors list..."
-ACTORS_OUT=$(npx arkeon-wiki actors list --raw 2>&1) || fail "arkeon actors list"
+ACTORS_OUT=$(npx arkeon-wiki actors list --raw 2>&1) || fail "arkeon-wiki actors list"
 if echo "$ACTORS_OUT" | grep -q '"actors"'; then
   pass "actors list returns actors array"
 elif echo "$ACTORS_OUT" | grep -q '"data"'; then
@@ -281,7 +281,7 @@ else
 fi
 
 echo "arkeon-wiki entities create..."
-CREATE_OUT=$(npx arkeon-wiki entities create --type person --properties '{"label":"Smoke Test Entity"}' --raw 2>&1) || fail "arkeon entities create"
+CREATE_OUT=$(npx arkeon-wiki entities create --type person --properties '{"label":"Smoke Test Entity"}' --raw 2>&1) || fail "arkeon-wiki entities create"
 # grep returns exit 1 when no match — use || true to prevent set -eo pipefail from killing the script
 # --raw output uses "id": "..." (with spaces), so match both formats
 ENTITY_ID=$(echo "$CREATE_OUT" | grep -oE '"id"\s*:\s*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/' || true)
@@ -289,7 +289,7 @@ if [ -n "$ENTITY_ID" ]; then
   pass "entities create returned id: $ENTITY_ID"
 
   echo "arkeon-wiki entities get $ENTITY_ID..."
-  GET_OUT=$(npx arkeon-wiki entities get "$ENTITY_ID" --raw 2>&1) || fail "arkeon entities get"
+  GET_OUT=$(npx arkeon-wiki entities get "$ENTITY_ID" --raw 2>&1) || fail "arkeon-wiki entities get"
   if echo "$GET_OUT" | grep -q "Smoke Test Entity"; then
     pass "entities get returns correct entity"
   else
@@ -300,7 +300,7 @@ else
 fi
 
 echo "arkeon-wiki docs..."
-npx arkeon-wiki docs > /dev/null 2>&1 || fail "arkeon docs"
+npx arkeon-wiki docs > /dev/null 2>&1 || fail "arkeon-wiki docs"
 pass "docs"
 
 # ---------------------------------------------------------------
@@ -309,7 +309,7 @@ pass "docs"
 step "Phase 7: Clean shutdown"
 
 echo "arkeon-wiki down..."
-npx arkeon-wiki down || fail "arkeon down"
+npx arkeon-wiki down || fail "arkeon-wiki down"
 pass "Clean shutdown"
 
 # Verify ports are freed

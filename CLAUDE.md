@@ -224,6 +224,6 @@ Tags like `v0.1.0` (without the `arkeon-wiki-` prefix) will NOT trigger a publis
    gh release create arkeon-wiki-v0.1.0 --title "arkeon-wiki v0.1.0" --generate-notes
    ```
 4. The publish workflow runs automatically — check Actions to confirm
-5. Verify on npm: `npm view arkeon version`
+5. Verify on npm: `npm view arkeon-wiki version`
 
 Do NOT create releases with bare `v*` tags — they won't publish.
