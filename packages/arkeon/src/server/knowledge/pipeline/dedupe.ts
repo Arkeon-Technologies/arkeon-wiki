@@ -153,18 +153,24 @@ async function dedupeOne(
   const candidates = [...hits.values()].slice(0, 20);
   if (candidates.length === 0) return {};
 
-  // Exact normalized-label matches — no LLM needed
+  // Exact normalized-label matches — always merge regardless of type (target's type wins)
   const normalizedSelf = normalize(label);
   const exactMatches = candidates.filter((c) => normalize(c.label) === normalizedSelf);
+  const nonExact = candidates.filter((c) => normalize(c.label) !== normalizedSelf);
+
   if (exactMatches.length > 0) {
-    const nonExact = candidates.filter((c) => normalize(c.label) !== normalizedSelf);
-    if (nonExact.length === 0) {
-      console.log(`[knowledge:dedupe] "${label}" — exact match: ${exactMatches.map((c) => `"${c.label}"`).join(", ")}`);
-      return { mergeIds: exactMatches.map((c) => c.id), rationale: `Exact label match` };
-    }
+    console.log(`[knowledge:dedupe] "${label}" — exact match: ${exactMatches.map((c) => `"${c.label}" (${c.type})`).join(", ")}`);
   }
 
-  // LLM judge
+  if (nonExact.length === 0) {
+    // All candidates are exact matches — no LLM needed
+    if (exactMatches.length > 0) {
+      return { mergeIds: exactMatches.map((c) => c.id), rationale: `Exact label match` };
+    }
+    return {};
+  }
+
+  // LLM judge — only for non-exact candidates
   const result = await llm.chatJson<{
     same_as_ids?: string[];
     different_ids?: string[];
@@ -179,21 +185,29 @@ async function dedupeOne(
         description: typeof entity.properties?.description === "string"
           ? entity.properties.description.slice(0, MAX_DESC_CHARS) : "",
       },
-      candidates,
+      candidates: nonExact,
     }),
     { maxTokens: 1200 },
   );
 
-  const sameIds = (result.data.same_as_ids ?? []).filter((id) => id !== entityId);
+  const llmSameIds = (result.data.same_as_ids ?? []).filter((id) => id !== entityId);
   const rationale = result.data.rationale ?? "";
 
-  if (sameIds.length > 0) {
-    console.log(`[knowledge:dedupe] "${label}" — LLM merge with: ${sameIds.map((id) => `"${hits.get(id)?.label ?? id}"`).join(", ")} — ${rationale}`);
+  if (llmSameIds.length > 0) {
+    console.log(`[knowledge:dedupe] "${label}" — LLM merge with: ${llmSameIds.map((id) => `"${hits.get(id)?.label ?? id}"`).join(", ")} — ${rationale}`);
   }
 
+  // Combine exact-label matches with LLM-confirmed matches
+  const exactIds = exactMatches.map((c) => c.id);
+  const allMergeIds = [...exactIds, ...llmSameIds];
+  const allRationales = [
+    ...(exactIds.length > 0 ? ["Exact label match"] : []),
+    ...(llmSameIds.length > 0 ? [rationale] : []),
+  ].join("; ");
+
   return {
-    mergeIds: sameIds.length > 0 ? sameIds : undefined,
-    rationale: sameIds.length > 0 ? rationale : undefined,
+    mergeIds: allMergeIds.length > 0 ? allMergeIds : undefined,
+    rationale: allMergeIds.length > 0 ? allRationales : undefined,
     usage: result.usage,
   };
 }
