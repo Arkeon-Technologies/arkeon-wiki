@@ -15,9 +15,7 @@ entities and relationships.
 {
   "format": "arke.ops/v1",
   "defaults": {
-    "space_id": "01...",
-    "read_level": 1,
-    "write_level": 1
+    "space_id": "01..."
   },
   "source": {
     "entity_id": "01..."
@@ -43,10 +41,10 @@ entities and relationships.
 
 Supported operations:
 
-- `entity`: creates a graph entity. All fields other than `op`, `ref`, `type`,
-  `read_level`, and `write_level` are stored in `properties`. The entity's
-  top-level `type` is preserved for compatibility, and `properties.subject_type`
-  is also set to the same value for wiki-first filters.
+- `entity`: creates a graph entity. All fields other than `op`, `ref`, and `type`
+  are stored in `properties`. The entity's top-level `type` is preserved for
+  compatibility, and `properties.subject_type` is also set to the same value for
+  wiki-first filters.
 - `relate`: creates a relationship entity plus a `relationship_edges` row.
   `source` and `target` may be bare ULIDs or earlier `@ref` values from the same
   envelope.

@@ -20,7 +20,7 @@ Three audiences need to understand the same API, but through different lenses:
 
 Single source of truth for two concerns:
 
-**Concepts** (`concepts.ts`): Named string constants defining what things are — `WHAT_IS_ARKEON`, `CORE_CONCEPTS`, `CLASSIFICATION_LEVELS`, `BEST_PRACTICES`, `FILTERING_HINT`. No tool-specific examples. Change a concept once and it propagates everywhere.
+**Concepts** (`concepts.ts`): Named string constants defining what things are — `WHAT_IS_ARKEON`, `CORE_CONCEPTS`, `BEST_PRACTICES`, `FILTERING_HINT`. No tool-specific examples. Change a concept once and it propagates everywhere.
 
 **CLI operations** (`cli-operations.ts`): The `OVERRIDES` map and `parseOperations()` function that parse an OpenAPI spec into structured `GeneratedOperation` objects. This is the single source of truth for how operationIds map to `arkeon <group> <action>` CLI commands, and how parameters, body fields, response schemas, and permission rules are extracted. Used by:
 - CLI codegen script (generates Commander commands)

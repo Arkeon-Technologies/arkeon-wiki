@@ -7,12 +7,10 @@ import {
   addEntityToSpace,
   apiRequest,
   createActor,
-  createComment,
   createEntity,
   createRelationship,
   createSpace,
   getJson,
-  grantEntityPermission,
   jsonRequest,
   uniqueName,
 } from "./helpers";
@@ -26,7 +24,7 @@ describe("Entity Merge", () => {
 
   // --- Happy path ---
 
-  test("merge transfers properties, relationships, permissions, spaces, and comments", async () => {
+  test("merge transfers properties, relationships, and spaces", async () => {
     // Create target and source entities
     const target = await createEntity(actor.apiKey, "person", {
       label: uniqueName("merge-target"),
@@ -46,16 +44,9 @@ describe("Entity Merge", () => {
     // Add relationships from source
     await createRelationship(actor.apiKey, source.id, "authored", other.id);
 
-    // Add comment on source
-    await createComment(actor.apiKey, source.id, "Comment on source entity");
-
     // Add source to a space
     const space = await createSpace(actor.apiKey, uniqueName("merge-space"));
     await addEntityToSpace(actor.apiKey, space.id, source.id);
-
-    // Grant permission on source to another actor
-    const actorB = await createActor(adminApiKey);
-    await grantEntityPermission(actor.apiKey, source.id, "actor", actorB.id, "editor");
 
     // Merge source into target (default: keep_source)
     const { response, body } = await jsonRequest(`/wiki/${target.id}/merge`, {
@@ -79,20 +70,10 @@ describe("Entity Merge", () => {
     const rels = (relBody as any).relationships;
     expect(rels.some((r: any) => r.predicate === "authored" && r.target_id === other.id)).toBe(true);
 
-    // Verify comments were transferred
-    const { body: commentBody } = await getJson(`/wiki/${target.id}/comments`, actor.apiKey);
-    const comments = (commentBody as any).comments;
-    expect(comments.some((c: any) => c.body === "Comment on source entity")).toBe(true);
-
     // Verify target is now in the space
     const { body: spaceBody } = await getJson(`/spaces/${space.id}/entities`, actor.apiKey);
     const spaceEntities = (spaceBody as any).entities;
     expect(spaceEntities.some((e: any) => e.id === target.id)).toBe(true);
-
-    // Verify permissions were transferred
-    const { body: permBody } = await getJson(`/wiki/${target.id}/permissions`, actor.apiKey);
-    const perms = (permBody as any).permissions;
-    expect(perms.some((p: any) => p.grantee_id === actorB.id && p.role === "editor")).toBe(true);
 
     // Verify source is gone
     const { response: sourceResp } = await apiRequest(`/wiki/${source.id}`, {
@@ -185,41 +166,6 @@ describe("Entity Merge", () => {
   });
 
   // --- Validation errors ---
-
-  test("403 when actor lacks admin on source", async () => {
-    const actorB = await createActor(adminApiKey);
-    const target = await createEntity(actor.apiKey, "note", { label: uniqueName("t") });
-    const source = await createEntity(actorB.apiKey, "note", { label: uniqueName("s") });
-
-    // actor owns target but not source, and has no admin grant on source
-    // Grant editor (not admin) on source so actor can see it but shouldn't merge
-    await grantEntityPermission(actorB.apiKey, source.id, "actor", actor.id, "editor");
-
-    const { response, body } = await jsonRequest(`/wiki/${target.id}/merge`, {
-      method: "POST",
-      apiKey: actor.apiKey,
-      json: { source_id: source.id, ver: target.ver },
-    });
-    expect(response.status).toBe(403);
-    expect((body as any).error.code).toBe("forbidden");
-  });
-
-  test("403 when actor lacks admin on target", async () => {
-    const actorB = await createActor(adminApiKey);
-    const target = await createEntity(actorB.apiKey, "note", { label: uniqueName("t") });
-    const source = await createEntity(actor.apiKey, "note", { label: uniqueName("s") });
-
-    // actor owns source but not target; grant editor on target (not admin)
-    await grantEntityPermission(actorB.apiKey, target.id, "actor", actor.id, "editor");
-
-    const { response, body } = await jsonRequest(`/wiki/${target.id}/merge`, {
-      method: "POST",
-      apiKey: actor.apiKey,
-      json: { source_id: source.id, ver: target.ver },
-    });
-    expect(response.status).toBe(403);
-    expect((body as any).error.code).toBe("forbidden");
-  });
 
   test("400 when merging entity into itself", async () => {
     const entity = await createEntity(actor.apiKey, "note", { label: "self" });
@@ -395,26 +341,6 @@ describe("Entity Merge", () => {
     expect(response.status).toBe(410);
     expect((body as any).error.code).toBe("entity_merged");
     expect((body as any).error.details.merged_into).toBe(target.id);
-  });
-
-  // --- Admin grant allows merge ---
-
-  test("actor with admin grant (not owner) can merge", async () => {
-    const actorB = await createActor(adminApiKey);
-
-    const target = await createEntity(actor.apiKey, "note", { label: "t" });
-    const source = await createEntity(actor.apiKey, "note", { label: "s" });
-
-    // Grant admin on both to actorB
-    await grantEntityPermission(actor.apiKey, target.id, "actor", actorB.id, "admin");
-    await grantEntityPermission(actor.apiKey, source.id, "actor", actorB.id, "admin");
-
-    const { response } = await jsonRequest(`/wiki/${target.id}/merge`, {
-      method: "POST",
-      apiKey: actorB.apiKey,
-      json: { source_id: source.id, ver: target.ver },
-    });
-    expect(response.status).toBe(200);
   });
 
   // --- Additional edge case tests ---

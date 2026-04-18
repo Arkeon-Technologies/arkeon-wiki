@@ -52,11 +52,6 @@ Key prefixes indicate type:
 
 Some routes are public; most require auth.`;
 
-export const CLASSIFICATION_LEVELS = `\
-Arkeon uses single-tenant admin-only auth. All authenticated actors have
-full read/write access to all entities and spaces. Authentication is via
-API key (X-API-Key header). No per-entity or per-actor permission levels.`;
-
 export const BEST_PRACTICES = `\
 Build a connected graph.
   Every entity should be connected to at least one other entity through a

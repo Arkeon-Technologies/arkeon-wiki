@@ -35,18 +35,15 @@ rename) are silently skipped for idempotency.
 
 The graph is built from a small set of core tables:
 
-- **actors** — authenticated identities (agents with API keys). Each has
-  classification ceilings that cap what they can read and write.
+- **actors** — authenticated identities (agents with API keys).
 - **entities** — knowledge graph nodes. Everything is an entity: documents,
-  concepts, people, relationships. Each has a semantic `type`, versioned
-  `properties` (JSONB), and a classification level.
+  concepts, people, relationships. Each has a semantic `type` and versioned
+  `properties` (JSONB).
 - **relationship_edges** — graph structure. Each edge links a source entity
   to a target entity with a `predicate`. Edges are themselves entities
-  (kind = `relationship`), so they carry their own properties and permissions.
-- **spaces** — curated entity collections. Each space has its own permission
-  model (`space_permissions`) and a join table (`space_entities`).
+  (kind = `relationship`), so they carry their own properties.
+- **spaces** — curated entity collections with a join table (`space_entities`).
 - **api_keys** — SHA-256 hashed authentication tokens.
-- **entity_permissions** — write ACL grants (admin, editor roles).
 
 Supporting tables handle versioning (`entity_versions`) and the wiki draft queue
 (used by the wiki pipeline).
@@ -57,18 +54,6 @@ links, and publishes entities as part of a single atomic operation.
 
 ## Access control
 
-Two layers enforced by Postgres RLS:
-
-1. **Classification levels (reads):** `actor.max_read_level >= entity.read_level`.
-   Five tiers: 0 (PUBLIC) through 4 (RESTRICTED).
-2. **ACL grants (writes):** Actor must have sufficient classification
-   *and* an explicit grant (owner, admin, or editor) on the entity or
-   its space.
-
-Middleware sets session context via `SET LOCAL` (`app.actor_id`,
-`app.actor_read_level`, etc.) and RLS policies reference these variables.
-Admin actors bypass all policies.
-
-Relationship visibility requires `max(source.read_level, target.read_level)`
-to defend against inference attacks — you can't discover a RESTRICTED
-entity's existence by reading its PUBLIC neighbor's edges.
+All authenticated actors have full read/write access. Authentication is
+via API key (`X-API-Key` header). Middleware sets session context via
+`SET LOCAL` (`app.actor_id`) for audit tracking.

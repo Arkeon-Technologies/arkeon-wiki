@@ -189,68 +189,6 @@ export async function addEntityToSpace(apiKey: string, spaceId: string, entityId
   return body;
 }
 
-// --- Permission helpers ---
-
-export async function grantEntityPermission(
-  apiKey: string,
-  entityId: string,
-  granteeType: string,
-  granteeId: string,
-  role: string,
-) {
-  const { response, body } = await jsonRequest(`/wiki/${entityId}/permissions`, {
-    method: "POST",
-    apiKey,
-    json: { grantee_type: granteeType, grantee_id: granteeId, role },
-  });
-  expect(response.status).toBe(201);
-  return body;
-}
-
-export async function grantSpacePermission(
-  apiKey: string,
-  spaceId: string,
-  granteeType: string,
-  granteeId: string,
-  role: string,
-) {
-  const { response, body } = await jsonRequest(`/spaces/${spaceId}/permissions`, {
-    method: "POST",
-    apiKey,
-    json: { grantee_type: granteeType, grantee_id: granteeId, role },
-  });
-  expect(response.status).toBe(201);
-  return body;
-}
-
-export async function grantSpaceEntityAccess(
-  apiKey: string,
-  spaceId: string,
-  granteeType: string,
-  granteeId: string,
-  role: string,
-) {
-  const { response, body } = await jsonRequest(`/spaces/${spaceId}/entity-access`, {
-    method: "POST",
-    apiKey,
-    json: { grantee_type: granteeType, grantee_id: granteeId, role },
-  });
-  expect(response.status).toBe(201);
-  return body;
-}
-
-// --- Comment helpers ---
-
-export async function createComment(apiKey: string, entityId: string, body: string, parentId?: string) {
-  const { response, body: responseBody } = await jsonRequest(`/wiki/${entityId}/comments`, {
-    method: "POST",
-    apiKey,
-    json: { body, ...(parentId ? { parent_id: parentId } : {}) },
-  });
-  expect(response.status).toBe(201);
-  return responseBody as Record<string, any>;
-}
-
 // --- Content helpers ---
 
 export async function uploadDirectContent(apiKey: string, entityId: string, key: string, ver: number, content: string, filename?: string) {
@@ -265,28 +203,6 @@ export async function uploadDirectContent(apiKey: string, entityId: string, key:
   );
   expect(response.status).toBe(200);
   return body as { cid: string; size: number; key: string; ver: number };
-}
-
-// --- Group helpers ---
-
-export async function createGroup(apiKey: string, name: string) {
-  const { response, body } = await jsonRequest("/groups", {
-    method: "POST",
-    apiKey,
-    json: { name },
-  });
-  expect(response.status).toBe(201);
-  return (body as { group: Record<string, any> }).group;
-}
-
-export async function addGroupMember(apiKey: string, groupId: string, actorId: string, role = "member") {
-  const { response, body } = await jsonRequest(`/groups/${groupId}/members`, {
-    method: "POST",
-    apiKey,
-    json: { actor_id: actorId, role_in_group: role },
-  });
-  expect(response.status).toBe(201);
-  return body;
 }
 
 // --- Notification helpers ---

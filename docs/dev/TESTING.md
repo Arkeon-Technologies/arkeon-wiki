@@ -4,7 +4,7 @@ Two levels: end-to-end API tests with Vitest, and opt-in stress scripts.
 
 ## E2E Test Layout
 
-`packages/arkeon/test/e2e/` — functional suite split by domain. Read the directory listing for the current set; common coverage includes bootstrap/health, actors, classification-based access control, wiki CRUD, entity permissions, spaces, and CLI smoke tests.
+`packages/arkeon/test/e2e/` — functional suite split by domain. Read the directory listing for the current set; common coverage includes bootstrap/health, actors, wiki CRUD, spaces, and CLI smoke tests.
 
 ## Stress Scripts
 

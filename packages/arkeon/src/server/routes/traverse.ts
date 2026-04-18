@@ -45,14 +45,7 @@ const traverseRoute = createRoute({
     "GET /wiki/{id}/relationships",
     "GET /search",
   ],
-  "x-arke-rules": [
-    "Source and target entities filtered by your classification clearance",
-    "Traversal follows edges in both directions",
-    "Limits are global, not per-hop",
-    "Results ranked by connectivity + recency + proximity + query relevance",
-    "If space_id is provided, traversal is constrained to entities within that space",
-    "Bridge mode uses bidirectional BFS for efficiency at higher hop counts",
-  ],
+  "x-arke-rules": [],
   request: {
     query: z.object({
       source: queryParam(
@@ -167,11 +160,7 @@ const graphDataRoute = createRoute({
     "GET /wiki/{id}",
     "GET /graph/traverse",
   ],
-  "x-arke-rules": [
-    "Nodes filtered by your classification clearance",
-    "Edges only included when both endpoints are in the result set",
-    "Collection edges are excluded",
-  ],
+  "x-arke-rules": [],
   request: {
     query: z.object({
       space_id: queryParam(

@@ -7,12 +7,10 @@ import {
   addEntityToSpace,
   apiRequest,
   createActor,
-  createComment,
   createEntity,
   createRelationship,
   createSpace,
   getJson,
-  grantSpacePermission,
   jsonRequest,
   uniqueName,
 } from "./helpers";
@@ -203,64 +201,6 @@ describe("Entities CRUD", () => {
     expect(getRes.status).toBe(404);
   });
 
-  test("Relationships: 403 when actor lacks edit access on source entity", async () => {
-    // Actor A creates source and target
-    const source = await createEntity(actor.apiKey, "note", {
-      label: uniqueName("rel-perm-source"),
-    });
-    const target = await createEntity(actor.apiKey, "note", {
-      label: uniqueName("rel-perm-target"),
-    });
-
-    // Actor B has no edit access on source
-    const actorB = await createActor(adminApiKey);
-
-    const { response, body } = await jsonRequest(
-      `/wiki/${source.id}/relationships`,
-      {
-        method: "POST",
-        apiKey: actorB.apiKey,
-        json: { predicate: "references", target_id: target.id },
-      },
-    );
-    expect(response.status).toBe(403);
-    expect((body as any).error.code).toBe("forbidden");
-    expect((body as any).error.message).toContain("edit access");
-  });
-
-  test("Relationships: 201 when actor has editor grant on source entity", async () => {
-    const source = await createEntity(actor.apiKey, "note", {
-      label: uniqueName("rel-grant-source"),
-    });
-    const target = await createEntity(actor.apiKey, "note", {
-      label: uniqueName("rel-grant-target"),
-    });
-
-    const actorB = await createActor(adminApiKey);
-
-    // Grant editor role to actor B on the source entity
-    const { response: grantRes } = await jsonRequest(
-      `/wiki/${source.id}/permissions`,
-      {
-        method: "POST",
-        apiKey: actor.apiKey,
-        json: { grantee_type: "actor", grantee_id: actorB.id, role: "editor" },
-      },
-    );
-    expect(grantRes.status).toBe(201);
-
-    // Actor B should now be able to create a relationship from source
-    const { response: relRes } = await jsonRequest(
-      `/wiki/${source.id}/relationships`,
-      {
-        method: "POST",
-        apiKey: actorB.apiKey,
-        json: { predicate: "references", target_id: target.id },
-      },
-    );
-    expect(relRes.status).toBe(201);
-  });
-
   test("Relationships: 404 for nonexistent source entity", async () => {
     const target = await createEntity(actor.apiKey, "note", {
       label: uniqueName("rel-404-target"),
@@ -427,48 +367,6 @@ describe("Entities CRUD", () => {
     );
     const ids2 = (body2 as any).entities.map((e: any) => e.id);
     expect(ids2).toContain(e3.id);
-  });
-
-  test("Comments: create, list with threading, delete", async () => {
-    const entity = await createEntity(actor.apiKey, "note", {
-      label: uniqueName("comment-target"),
-    });
-
-    // Create top-level comment
-    const comment1 = await createComment(actor.apiKey, entity.id, "Top-level comment");
-    expect(comment1.id).toBeTruthy();
-    expect(comment1.body).toBe("Top-level comment");
-    expect(comment1.parent_id).toBeNull();
-
-    // Create reply
-    const reply = await createComment(
-      actor.apiKey,
-      entity.id,
-      "Reply to top-level",
-      comment1.id,
-    );
-    expect(reply.parent_id).toBe(comment1.id);
-
-    // List comments -- should have threading
-    const { response: listRes, body: listBody } = await getJson(
-      `/wiki/${entity.id}/comments`,
-      actor.apiKey,
-    );
-    expect(listRes.status).toBe(200);
-    const comments = (listBody as any).comments;
-    expect(comments.length).toBeGreaterThan(0);
-
-    const topComment = comments.find((c: any) => c.id === comment1.id);
-    expect(topComment).toBeTruthy();
-    expect(topComment.replies.length).toBeGreaterThan(0);
-    expect(topComment.replies[0].id).toBe(reply.id);
-
-    // Delete comment
-    const { response: deleteRes } = await apiRequest(
-      `/wiki/${entity.id}/comments/${comment1.id}`,
-      { method: "DELETE", apiKey: actor.apiKey },
-    );
-    expect(deleteRes.status).toBe(204);
   });
 
   test("List entities with space_id filter returns only entities in that space", async () => {

@@ -11,7 +11,6 @@ import {
   createRelationship,
   createSpace,
   getJson,
-  grantEntityPermission,
   jsonRequest,
   uniqueName,
 } from "./helpers";
@@ -222,24 +221,6 @@ describe("Entity Merge Batch", () => {
     expect(response.status).toBe(404);
   });
 
-  test("403 when actor lacks admin on any entity", async () => {
-    const actorB = await createActor(adminApiKey);
-    const owned = await createEntity(actor.apiKey, "note", { label: uniqueName("o") });
-    const foreign = await createEntity(actorB.apiKey, "note", { label: uniqueName("f") });
-
-    // Grant editor (not admin) so actor can see it
-    await grantEntityPermission(actorB.apiKey, foreign.id, "actor", actor.id, "editor");
-
-    const { response } = await jsonRequest("/wiki/merge-batch", {
-      method: "POST",
-      apiKey: actor.apiKey,
-      json: {
-        groups: [{ entity_ids: [owned.id, foreign.id] }],
-      },
-    });
-    expect(response.status).toBe(403);
-  });
-
   // --- Redirect chains ---
 
   test("all source IDs redirect to target after batch merge", async () => {
@@ -271,17 +252,15 @@ describe("Entity Merge Batch", () => {
 
   // --- Space and permission transfer ---
 
-  test("spaces and permissions transfer from all sources", async () => {
+  test("spaces transfer from all sources", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("batch-space"));
-    const actorB = await createActor(adminApiKey);
 
     const e1 = await createEntity(actor.apiKey, "note", { label: uniqueName("e1") });
     const e2 = await createEntity(actor.apiKey, "note", { label: uniqueName("e2") });
     const e3 = await createEntity(actor.apiKey, "note", { label: uniqueName("e3") });
 
-    // Add e2 to space, grant permission on e3
+    // Add e2 to space
     await addEntityToSpace(actor.apiKey, space.id, e2.id);
-    await grantEntityPermission(actor.apiKey, e3.id, "actor", actorB.id, "editor");
 
     const { body } = await jsonRequest("/wiki/merge-batch", {
       method: "POST",
@@ -296,12 +275,6 @@ describe("Entity Merge Batch", () => {
     // Target should be in space
     const { body: spaceBody } = await getJson(`/spaces/${space.id}/entities`, actor.apiKey);
     expect((spaceBody as any).entities.some((e: any) => e.id === targetId)).toBe(true);
-
-    // Target should have actorB's permission
-    const { body: permBody } = await getJson(`/wiki/${targetId}/permissions`, actor.apiKey);
-    expect((permBody as any).permissions.some(
-      (p: any) => p.grantee_id === actorB.id && p.role === "editor",
-    )).toBe(true);
   });
 
   // --- Property strategies ---
