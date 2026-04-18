@@ -148,8 +148,8 @@ export const PaginationQuery = z.object({
 export const ProjectionQuery = z.object({
   view: queryParam(
     "view",
-    z.enum(["summary", "expanded", "page"]).optional(),
-    "Projection: summary | expanded | page. Default returns all fields. expanded adds _relationships. page returns structured links_to/linked_from/sources.",
+    z.enum(["full", "summary", "expanded"]).optional(),
+    "Projection: full (all fields, no relationships) | summary (label + short_description) | expanded (all fields + _relationships).",
   ),
   fields: queryParam(
     "fields",
@@ -262,7 +262,7 @@ export const PageSourceSchema = z
 
 export const PageEntitySchema = z
   .object({
-    wiki: EntitySchema,
+    entity: EntitySchema,
     links_to: z.array(PageLinkSchema).describe("Outgoing relationships from this entity"),
     linked_from: z.array(PageLinkSchema).describe("Incoming relationships to this entity"),
     sources: z.array(PageSourceSchema).describe("Source documents linked to this entity"),

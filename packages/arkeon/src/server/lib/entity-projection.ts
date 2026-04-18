@@ -27,7 +27,7 @@ export function parseProjection(viewRaw: string | undefined, fieldsRaw: string |
     };
   }
 
-  if (!viewRaw) {
+  if (!viewRaw || viewRaw === "full") {
     return { view: "full", fields: null };
   }
 

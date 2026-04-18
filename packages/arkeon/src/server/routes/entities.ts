@@ -117,7 +117,7 @@ const getEntityRoute = createRoute({
     query: z.object({
       view: queryParam(
         "view",
-        z.enum(["summary", "expanded", "page"]).optional(),
+        z.enum(["full", "summary", "expanded", "page"]).optional(),
         "Projection (default: page). page returns structured links_to/linked_from/sources. expanded adds flat _relationships. full returns entity only. summary returns label + short_description.",
       ),
       fields: queryParam("fields", z.string().optional(), "Comma-separated field list"),
@@ -386,8 +386,8 @@ const bulkGetEntitiesRoute = createRoute({
     query: z.object({
       view: queryParam(
         "view",
-        z.enum(["summary", "expanded"]).optional(),
-        "Projection: summary | expanded. Default returns all fields. expanded adds _relationships.",
+        z.enum(["full", "summary", "expanded"]).optional(),
+        "Projection: full (default, all fields) | summary (label + short_description) | expanded (all fields + _relationships).",
       ),
       fields: queryParam("fields", z.string().optional(), "Comma-separated field list"),
       rel_limit: queryParam(
@@ -531,7 +531,7 @@ wikisRouter.openapi(getEntityRoute, async (c) => {
     }
 
     return c.json({
-      wiki: projectEntity(entity, { view: "full", fields: null }),
+      entity: projectEntity(entity, { view: "full", fields: null }),
       links_to,
       linked_from,
       sources,

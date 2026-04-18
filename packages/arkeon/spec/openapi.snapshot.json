@@ -287,6 +287,9 @@
       },
       "PageEntity": {
         "properties": {
+          "entity": {
+            "$ref": "#/components/schemas/Entity"
+          },
           "linked_from": {
             "description": "Incoming relationships to this entity",
             "items": {
@@ -311,13 +314,10 @@
               "$ref": "#/components/schemas/PageSource"
             },
             "type": "array"
-          },
-          "wiki": {
-            "$ref": "#/components/schemas/Entity"
           }
         },
         "required": [
-          "wiki",
+          "entity",
           "links_to",
           "linked_from",
           "sources",
@@ -2743,16 +2743,16 @@
         "operationId": "searchEntities",
         "parameters": [
           {
-            "description": "Projection: summary | expanded | page. Default returns all fields. expanded adds _relationships. page returns structured links_to/linked_from/sources.",
+            "description": "Projection: full (all fields, no relationships) | summary (label + short_description) | expanded (all fields + _relationships).",
             "in": "query",
             "name": "view",
             "required": false,
             "schema": {
-              "description": "Projection: summary | expanded | page. Default returns all fields. expanded adds _relationships. page returns structured links_to/linked_from/sources.",
+              "description": "Projection: full (all fields, no relationships) | summary (label + short_description) | expanded (all fields + _relationships).",
               "enum": [
+                "full",
                 "summary",
-                "expanded",
-                "page"
+                "expanded"
               ],
               "type": "string"
             }
@@ -3995,16 +3995,16 @@
             }
           },
           {
-            "description": "Projection: summary | expanded | page. Default returns all fields. expanded adds _relationships. page returns structured links_to/linked_from/sources.",
+            "description": "Projection: full (all fields, no relationships) | summary (label + short_description) | expanded (all fields + _relationships).",
             "in": "query",
             "name": "view",
             "required": false,
             "schema": {
-              "description": "Projection: summary | expanded | page. Default returns all fields. expanded adds _relationships. page returns structured links_to/linked_from/sources.",
+              "description": "Projection: full (all fields, no relationships) | summary (label + short_description) | expanded (all fields + _relationships).",
               "enum": [
+                "full",
                 "summary",
-                "expanded",
-                "page"
+                "expanded"
               ],
               "type": "string"
             }
@@ -4434,6 +4434,7 @@
             "schema": {
               "description": "Projection (default: page). page returns structured links_to/linked_from/sources. expanded adds flat _relationships. full returns entity only. summary returns label + short_description.",
               "enum": [
+                "full",
                 "summary",
                 "expanded",
                 "page"
@@ -5744,13 +5745,14 @@
         "operationId": "bulkGetWikis",
         "parameters": [
           {
-            "description": "Projection: summary | expanded. Default returns all fields. expanded adds _relationships.",
+            "description": "Projection: full (default, all fields) | summary (label + short_description) | expanded (all fields + _relationships).",
             "in": "query",
             "name": "view",
             "required": false,
             "schema": {
-              "description": "Projection: summary | expanded. Default returns all fields. expanded adds _relationships.",
+              "description": "Projection: full (default, all fields) | summary (label + short_description) | expanded (all fields + _relationships).",
               "enum": [
+                "full",
                 "summary",
                 "expanded"
               ],
