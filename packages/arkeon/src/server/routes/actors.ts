@@ -16,7 +16,6 @@ import { createRouter } from "../lib/openapi";
 import { createApiKey, sha256Hex } from "../lib/auth";
 import {
   ActorSchema,
-  ClassificationLevel,
   EntityIdParam,
   JsonObjectSchema,
   cursorResponseSchema,
@@ -33,10 +32,6 @@ import { createSql } from "../lib/sql";
 type ActorRecord = {
   id: string;
   kind: string;
-  max_read_level: number;
-  max_write_level: number;
-  is_admin: boolean;
-  can_publish_public: boolean;
   owner_id: string | null;
   properties: Record<string, unknown>;
   status: string;
@@ -52,7 +47,7 @@ const createActorRoute = createRoute({
   summary: "Create a new actor and its initial API key",
   "x-arke-auth": "required",
   "x-arke-related": ["GET /actors/{id}", "GET /actors"],
-  "x-arke-rules": ["Cannot grant max_read_level higher than your own", "Cannot grant max_write_level higher than your own"],
+  "x-arke-rules": [],
   request: {
     body: {
       required: true,
@@ -60,8 +55,6 @@ const createActorRoute = createRoute({
         z.object({
           kind: z.enum(["agent"]).describe("Actor kind (only 'agent' is supported)"),
           properties: JsonObjectSchema.optional().describe("Actor properties"),
-          max_read_level: ClassificationLevel.optional().describe("Max read level (0-4, default 1=INTERNAL)"),
-          max_write_level: ClassificationLevel.optional().describe("Max write level (0-4, default 1=INTERNAL)"),
         }),
       ),
     },
@@ -138,10 +131,10 @@ const updateActorRoute = createRoute({
   path: "/{id}",
   operationId: "updateActor",
   tags: ["Actors"],
-  summary: "Update an actor (admin or self)",
+  summary: "Update an actor",
   "x-arke-auth": "required",
   "x-arke-related": ["GET /actors/{id}"],
-  "x-arke-rules": ["Only the actor themselves or a system admin may update", "Cannot set clearance levels higher than your own"],
+  "x-arke-rules": [],
   request: {
     params: entityIdParams("Actor ULID"),
     body: {
@@ -149,8 +142,6 @@ const updateActorRoute = createRoute({
       content: jsonContent(
         z.object({
           properties: JsonObjectSchema.optional().describe("New properties"),
-          max_read_level: ClassificationLevel.optional().describe("New max read level"),
-          max_write_level: ClassificationLevel.optional().describe("New max write level"),
         }),
       ),
     },
@@ -169,9 +160,9 @@ const deactivateActorRoute = createRoute({
   path: "/{id}",
   operationId: "deactivateActor",
   tags: ["Actors"],
-  summary: "Deactivate an actor (admin only)",
+  summary: "Deactivate an actor",
   "x-arke-auth": "required",
-  "x-arke-rules": ["System admin only"],
+  "x-arke-rules": [],
   request: {
     params: entityIdParams("Actor ULID"),
   },
@@ -189,10 +180,10 @@ const createActorKeyRoute = createRoute({
   path: "/{id}/keys",
   operationId: "createActorKey",
   tags: ["Actors"],
-  summary: "Create an API key for a specific actor (admin only)",
+  summary: "Create an API key for a specific actor",
   "x-arke-auth": "required",
   "x-arke-related": ["GET /auth/keys", "POST /auth/keys"],
-  "x-arke-rules": ["System admin only", "Target actor must be active"],
+  "x-arke-rules": ["Target actor must be active"],
   request: {
     params: entityIdParams("Actor ULID"),
     body: {
@@ -229,17 +220,7 @@ actorsRouter.openapi(createActorRoute, async (c) => {
     throw new ApiError(400, "invalid_kind", "kind must be 'agent' (the only supported actor kind)");
   }
 
-  const maxReadLevel = typeof body.max_read_level === "number" ? body.max_read_level : 1;
-  const maxWriteLevel = typeof body.max_write_level === "number" ? body.max_write_level : 1;
   const properties = body.properties && typeof body.properties === "object" ? body.properties : {};
-
-  // RLS: caller cannot grant higher levels than their own
-  if (maxReadLevel > actor.maxReadLevel) {
-    throw new ApiError(403, "forbidden", "Cannot grant max_read_level higher than your own");
-  }
-  if (maxWriteLevel > actor.maxWriteLevel) {
-    throw new ApiError(403, "forbidden", "Cannot grant max_write_level higher than your own");
-  }
 
   const id = generateUlid();
   const now = new Date().toISOString();
@@ -252,10 +233,10 @@ actorsRouter.openapi(createActorRoute, async (c) => {
   const results = await sql.transaction([
     ...setActorContext(sql, actor),
     sql.query(
-      `INSERT INTO actors (id, kind, max_read_level, max_write_level, is_admin, can_publish_public, owner_id, properties, status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, false, false, $5, $6::jsonb, 'active', $7::timestamptz, $7::timestamptz)
+      `INSERT INTO actors (id, kind, owner_id, properties, status, created_at, updated_at)
+       VALUES ($1, $2, $3, $4::jsonb, 'active', $5::timestamptz, $5::timestamptz)
        RETURNING *`,
-      [id, body.kind, maxReadLevel, maxWriteLevel, actor.id, JSON.stringify(properties), now],
+      [id, body.kind, actor.id, JSON.stringify(properties), now],
     ),
     sql.query(
       `INSERT INTO api_keys (id, actor_id, key_hash, key_prefix, created_at)
@@ -326,11 +307,6 @@ actorsRouter.openapi(updateActorRoute, async (c) => {
   const sql = createSql();
   const now = new Date().toISOString();
 
-  // RLS: admin or self
-  if (actorId !== actor.id && !actor.isAdmin) {
-    throw new ApiError(403, "forbidden", "Only the actor's owner or an admin can update this actor");
-  }
-
   const sets: string[] = [];
   const params: unknown[] = [];
   let paramIdx = 1;
@@ -338,20 +314,6 @@ actorsRouter.openapi(updateActorRoute, async (c) => {
   if (body.properties && typeof body.properties === "object") {
     sets.push(`properties = $${paramIdx++}::jsonb`);
     params.push(JSON.stringify(body.properties));
-  }
-  if (typeof body.max_read_level === "number") {
-    if (body.max_read_level > actor.maxReadLevel && !actor.isAdmin) {
-      throw new ApiError(403, "forbidden", "Cannot set max_read_level higher than your own");
-    }
-    sets.push(`max_read_level = $${paramIdx++}`);
-    params.push(body.max_read_level);
-  }
-  if (typeof body.max_write_level === "number") {
-    if (body.max_write_level > actor.maxWriteLevel && !actor.isAdmin) {
-      throw new ApiError(403, "forbidden", "Cannot set max_write_level higher than your own");
-    }
-    sets.push(`max_write_level = $${paramIdx++}`);
-    params.push(body.max_write_level);
   }
   if (sets.length === 0) {
     throw new ApiError(400, "invalid_body", "No changes requested");
@@ -391,10 +353,6 @@ actorsRouter.openapi(deactivateActorRoute, async (c) => {
   const sql = createSql();
   const now = new Date().toISOString();
 
-  if (!actor.isAdmin) {
-    throw new ApiError(403, "forbidden", "Admin access required");
-  }
-
   const results = await sql.transaction([
     ...setActorContext(sql, actor),
     sql.query(
@@ -419,10 +377,6 @@ actorsRouter.openapi(deactivateActorRoute, async (c) => {
 
 actorsRouter.openapi(createActorKeyRoute, async (c) => {
   const actor = requireActor(c);
-  if (!actor.isAdmin) {
-    throw new ApiError(403, "forbidden", "Admin access required");
-  }
-
   const actorId = c.req.param("id");
   const sql = createSql();
 

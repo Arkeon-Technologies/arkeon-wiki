@@ -23,10 +23,7 @@ describe("Context-rich retrieval", () => {
   let reportEntity: Record<string, any>;
 
   test("setup: create actor and test entities with relationships", async () => {
-    actor = await createActor(adminApiKey, {
-      maxReadLevel: 2,
-      maxWriteLevel: 2,
-    });
+    actor = await createActor(adminApiKey);
 
     // Create entities
     personA = await createEntity(actor.apiKey, "person", {
@@ -282,22 +279,6 @@ describe("Context-rich retrieval", () => {
       expect(response.status).toBe(400);
     });
 
-    test("RLS hides entities above actor clearance", async () => {
-      // Create a high-clearance entity
-      const secret = await createEntity(adminApiKey, "report", {
-        label: uniqueName("ctx-secret"),
-      }, { read_level: 4 });
-
-      // Low-clearance actor cannot see it
-      const { body } = await jsonRequest("/wiki/bulk", {
-        method: "POST",
-        apiKey: actor.apiKey,
-        json: { ids: [personA.id, secret.id] },
-      });
-      const ids = (body as any).entities.map((e: any) => e.id);
-      expect(ids).toContain(personA.id);
-      expect(ids).not.toContain(secret.id);
-    });
   });
 
   // -------------------------------------------------------

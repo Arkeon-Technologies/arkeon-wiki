@@ -21,10 +21,7 @@ describe("Entity Merge", () => {
   let actor: Awaited<ReturnType<typeof createActor>>;
 
   test("setup: create actor", async () => {
-    actor = await createActor(adminApiKey, {
-      maxReadLevel: 2,
-      maxWriteLevel: 2,
-    });
+    actor = await createActor(adminApiKey);
   });
 
   // --- Happy path ---
@@ -57,7 +54,7 @@ describe("Entity Merge", () => {
     await addEntityToSpace(actor.apiKey, space.id, source.id);
 
     // Grant permission on source to another actor
-    const actorB = await createActor(adminApiKey, { maxReadLevel: 2, maxWriteLevel: 2 });
+    const actorB = await createActor(adminApiKey);
     await grantEntityPermission(actor.apiKey, source.id, "actor", actorB.id, "editor");
 
     // Merge source into target (default: keep_source)
@@ -190,7 +187,7 @@ describe("Entity Merge", () => {
   // --- Validation errors ---
 
   test("403 when actor lacks admin on source", async () => {
-    const actorB = await createActor(adminApiKey, { maxReadLevel: 2, maxWriteLevel: 2 });
+    const actorB = await createActor(adminApiKey);
     const target = await createEntity(actor.apiKey, "note", { label: uniqueName("t") });
     const source = await createEntity(actorB.apiKey, "note", { label: uniqueName("s") });
 
@@ -208,7 +205,7 @@ describe("Entity Merge", () => {
   });
 
   test("403 when actor lacks admin on target", async () => {
-    const actorB = await createActor(adminApiKey, { maxReadLevel: 2, maxWriteLevel: 2 });
+    const actorB = await createActor(adminApiKey);
     const target = await createEntity(actorB.apiKey, "note", { label: uniqueName("t") });
     const source = await createEntity(actor.apiKey, "note", { label: uniqueName("s") });
 
@@ -403,7 +400,7 @@ describe("Entity Merge", () => {
   // --- Admin grant allows merge ---
 
   test("actor with admin grant (not owner) can merge", async () => {
-    const actorB = await createActor(adminApiKey, { maxReadLevel: 2, maxWriteLevel: 2 });
+    const actorB = await createActor(adminApiKey);
 
     const target = await createEntity(actor.apiKey, "note", { label: "t" });
     const source = await createEntity(actor.apiKey, "note", { label: "s" });
@@ -480,7 +477,7 @@ describe("Entity Merge", () => {
 
   test("third-party relationships are repointed during merge", async () => {
     // ActorB creates entities and a relationship
-    const actorB = await createActor(adminApiKey, { maxReadLevel: 2, maxWriteLevel: 2 });
+    const actorB = await createActor(adminApiKey);
     const thirdParty = await createEntity(actorB.apiKey, "note", { label: uniqueName("tp") });
 
     // Actor creates source and target
@@ -507,7 +504,7 @@ describe("Entity Merge", () => {
 
   test("spaces actor does not own are transferred during merge", async () => {
     // ActorB creates a space
-    const actorB = await createActor(adminApiKey, { maxReadLevel: 2, maxWriteLevel: 2 });
+    const actorB = await createActor(adminApiKey);
     const space = await createSpace(actorB.apiKey, uniqueName("space"));
 
     // Actor creates source and target

@@ -16,10 +16,7 @@ describe("Wiki create", () => {
   let actor: Awaited<ReturnType<typeof createActor>>;
 
   test("setup: create actor", async () => {
-    actor = await createActor(adminApiKey, {
-      maxReadLevel: 2,
-      maxWriteLevel: 2,
-    });
+    actor = await createActor(adminApiKey);
   });
 
   test("publishes canonical content and creates relationships for entity, placeholder, and assign links", async () => {

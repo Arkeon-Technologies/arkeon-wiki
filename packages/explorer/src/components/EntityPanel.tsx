@@ -433,27 +433,6 @@ export function EntityPanel({ entity, loadedEntityIds, client, onNavigate, onLoa
         </div>
       )}
 
-      {/* Classification */}
-      {(entity.entity.read_level != null || entity.entity.write_level != null) && (
-        <div className="px-4 py-3 border-b border-zinc-800">
-          <h3 className="text-xs font-semibold uppercase text-zinc-500 tracking-wide mb-3">Classification</h3>
-          <div className="flex gap-3">
-            {entity.entity.read_level != null && (
-              <div className="flex-1 px-3 py-2 rounded bg-zinc-800/60 border border-zinc-700/50">
-                <span className="text-[10px] text-zinc-500 uppercase tracking-wide">Read</span>
-                <p className="text-sm text-zinc-300">{entity.entity.read_level}</p>
-              </div>
-            )}
-            {entity.entity.write_level != null && (
-              <div className="flex-1 px-3 py-2 rounded bg-zinc-800/60 border border-zinc-700/50">
-                <span className="text-[10px] text-zinc-500 uppercase tracking-wide">Write</span>
-                <p className="text-sm text-zinc-300">{entity.entity.write_level}</p>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Comments */}
       <div className="p-4 border-b border-zinc-800">
         <h3 className="text-xs font-semibold uppercase text-zinc-500 tracking-wide mb-3">Comments</h3>

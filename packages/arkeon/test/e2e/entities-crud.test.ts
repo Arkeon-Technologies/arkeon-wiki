@@ -21,10 +21,7 @@ describe("Entities CRUD", () => {
   let actor: Awaited<ReturnType<typeof createActor>>;
 
   test("setup: create actor", async () => {
-    actor = await createActor(adminApiKey, {
-      maxReadLevel: 2,
-      maxWriteLevel: 2,
-    });
+    actor = await createActor(adminApiKey);
   });
 
   test("Create entity with properties", async () => {
@@ -216,10 +213,7 @@ describe("Entities CRUD", () => {
     });
 
     // Actor B has no edit access on source
-    const actorB = await createActor(adminApiKey, {
-      maxReadLevel: 2,
-      maxWriteLevel: 2,
-    });
+    const actorB = await createActor(adminApiKey);
 
     const { response, body } = await jsonRequest(
       `/wiki/${source.id}/relationships`,
@@ -242,10 +236,7 @@ describe("Entities CRUD", () => {
       label: uniqueName("rel-grant-target"),
     });
 
-    const actorB = await createActor(adminApiKey, {
-      maxReadLevel: 2,
-      maxWriteLevel: 2,
-    });
+    const actorB = await createActor(adminApiKey);
 
     // Grant editor role to actor B on the source entity
     const { response: grantRes } = await jsonRequest(

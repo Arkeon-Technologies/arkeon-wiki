@@ -58,7 +58,7 @@ export interface ResolutionOptions {
   actor: Actor;
   /** Which workspace to search within. Omit for global. */
   spaceId?: string;
-  /** Meilisearch filters in addition to kind/read_level/space_ids.
+  /** Meilisearch filters in addition to kind/space_ids.
    *  E.g. ['type = "wiki"'] to restrict candidates to wikis. */
   candidateFilter?: string[];
   /** Attributes to search against. Defaults to the wiki-metadata set
@@ -122,7 +122,6 @@ export async function findSimilarEntities(
   // --- Filter assembly ---
   const filters: string[] = [
     'kind = "entity"',
-    `read_level <= ${Number(options.actor.maxReadLevel)}`,
   ];
   if (options.spaceId) filters.push(`space_ids = "${options.spaceId}"`);
   if (options.candidateFilter) filters.push(...options.candidateFilter);

@@ -9,7 +9,6 @@ import { parseCursorParam, parseLimit } from "../lib/http";
 import { setActorContext } from "../lib/actor-context";
 import { createRouter } from "../lib/openapi";
 import {
-  ClassificationLevel,
   EntityIdParam,
   cursorResponseSchema,
   entityIdParams,
@@ -28,8 +27,6 @@ const RelationshipSummarySchema = z.object({
   target_id: EntityIdParam,
   direction: z.enum(["in", "out"]).describe("Whether this entity is the source (out) or target (in)"),
   properties: z.record(z.string(), z.any()),
-  read_level: ClassificationLevel,
-  write_level: ClassificationLevel,
   source: z.any().optional(),
   target: z.any().optional(),
 });
@@ -45,10 +42,7 @@ const listRelationshipsRoute = createRoute({
     "There is no public endpoint for creating relationships directly — they are a pure side effect of publishing a wiki.",
   "x-arke-auth": "optional",
   "x-arke-related": ["GET /wiki/{id}", "GET /relationships/{relId}"],
-  "x-arke-rules": [
-    "Results filtered by your classification clearance",
-    "Only shows relationships where you can read the relationship entity",
-  ],
+  "x-arke-rules": [],
   request: {
     params: entityIdParams(),
     query: paginationQuerySchema(50, 200).extend({
@@ -74,7 +68,7 @@ const getRelationshipRoute = createRoute({
   summary: "Get a relationship by its ID with source/target details",
   "x-arke-auth": "optional",
   "x-arke-related": ["GET /wiki/{id}/relationships"],
-  "x-arke-rules": ["Requires read_level clearance >= relationship's read_level"],
+  "x-arke-rules": [],
   request: {
     params: z.object({
       relId: pathParam("relId", EntityIdParam, "Relationship entity ULID"),
@@ -90,8 +84,6 @@ const getRelationshipRoute = createRoute({
           source_id: EntityIdParam,
           target_id: EntityIdParam,
           properties: z.record(z.string(), z.any()),
-          read_level: ClassificationLevel,
-          write_level: ClassificationLevel,
           source: z.any(),
           target: z.any(),
         }),
@@ -131,8 +123,6 @@ wikiRelationshipsRouter.openapi(listRelationshipsRoute, async (c) => {
           re.source_id,
           re.target_id,
           rel.properties,
-          rel.read_level,
-          rel.write_level,
           CASE WHEN re.source_id = $1 THEN 'out' ELSE 'in' END AS direction,
           json_build_object(
             'id', other.id,
@@ -169,8 +159,6 @@ wikiRelationshipsRouter.openapi(listRelationshipsRoute, async (c) => {
         target_id: row.target_id,
         direction: dir,
         properties: row.properties,
-        read_level: row.read_level,
-        write_level: row.write_level,
         [dir === "in" ? "source" : "target"]: row.counterpart,
       };
     }),

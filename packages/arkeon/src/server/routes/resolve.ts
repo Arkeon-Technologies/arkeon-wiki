@@ -12,8 +12,7 @@
  *
  * Given a subject (label + optional description/keywords/context), runs
  * multi-query Meilisearch + LLM judge and returns the confirmed matches
- * in rank order. The caller's actor context controls read-level filtering
- * just like any other read path.
+ * in rank order.
  */
 
 import { createRoute, z } from "@hono/zod-openapi";
@@ -23,7 +22,7 @@ import { ApiError } from "../lib/errors";
 import { createRouter } from "../lib/openapi";
 import { findSimilarEntities, type ResolutionOptions } from "../lib/entity-resolve";
 import { isLlmConfigured } from "../lib/llm";
-import { ClassificationLevel, EntityIdParam, errorResponses, jsonContent } from "../lib/schemas";
+import { EntityIdParam, errorResponses, jsonContent } from "../lib/schemas";
 
 const resolveSubjectRoute = createRoute({
   method: "post",
@@ -34,7 +33,6 @@ const resolveSubjectRoute = createRoute({
   "x-arke-auth": "required",
   "x-arke-related": ["POST /wiki", "GET /search"],
   "x-arke-rules": [
-    "Candidate pool is filtered to entities visible under the caller's max_read_level",
     "Returns 503 if no LLM provider is configured (see ~/.arkeon/llm.json)",
   ],
   request: {
@@ -65,7 +63,6 @@ const resolveSubjectRoute = createRoute({
               rationale: z.string().optional().describe("Short explanation of the match decision"),
             }),
           ),
-          actor_read_level: ClassificationLevel.describe("The read_level the candidate pool was filtered against"),
         }),
       ),
     },
@@ -121,7 +118,6 @@ resolveRouter.openapi(resolveSubjectRoute, async (c) => {
   return c.json(
     {
       matches: trimmed,
-      actor_read_level: actor.maxReadLevel,
     },
     200,
   );

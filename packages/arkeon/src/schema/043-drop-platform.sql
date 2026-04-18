@@ -70,37 +70,8 @@ DROP FUNCTION IF EXISTS notify_activity()                     CASCADE;
 
 
 -- -----------------------------------------------------------------------------
--- 3. Scrub leftover group/worker grants on kept tables
+-- 3-4. Permission table cleanup (no-op: tables dropped in 044)
 -- -----------------------------------------------------------------------------
-
--- entity_permissions may have grantee_type='group' rows. Remove them
--- before tightening the CHECK constraint.
-DELETE FROM entity_permissions       WHERE grantee_type <> 'actor';
-DELETE FROM space_entity_access      WHERE grantee_type <> 'actor';
-DELETE FROM space_permissions        WHERE grantee_type <> 'actor';
-
-
--- -----------------------------------------------------------------------------
--- 4. Tighten grantee_type CHECK constraints to actor-only
--- -----------------------------------------------------------------------------
-
-ALTER TABLE entity_permissions
-  DROP CONSTRAINT IF EXISTS valid_grantee_type;
-
-ALTER TABLE entity_permissions
-  ADD CONSTRAINT valid_grantee_type CHECK (grantee_type = 'actor');
-
-ALTER TABLE space_entity_access
-  DROP CONSTRAINT IF EXISTS sea_valid_grantee_type;
-
-ALTER TABLE space_entity_access
-  ADD CONSTRAINT sea_valid_grantee_type CHECK (grantee_type = 'actor');
-
-ALTER TABLE space_permissions
-  DROP CONSTRAINT IF EXISTS valid_grantee_type;
-
-ALTER TABLE space_permissions
-  ADD CONSTRAINT valid_grantee_type CHECK (grantee_type = 'actor');
 
 
 -- -----------------------------------------------------------------------------
@@ -109,8 +80,6 @@ ALTER TABLE space_permissions
 
 -- Admin context so actor_update_guard allows the kind change.
 SELECT set_config('app.actor_id', 'MIGRATION', true);
-SELECT set_config('app.actor_is_admin', 'true', true);
-
 -- Delete worker-kind actors (they were runtime identities, not humans).
 DELETE FROM actors WHERE kind = 'worker';
 

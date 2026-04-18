@@ -20,10 +20,7 @@ describe("Entity Merge Batch", () => {
   let actor: Awaited<ReturnType<typeof createActor>>;
 
   test("setup: create actor", async () => {
-    actor = await createActor(adminApiKey, {
-      maxReadLevel: 2,
-      maxWriteLevel: 2,
-    });
+    actor = await createActor(adminApiKey);
   });
 
   // --- Happy path ---
@@ -226,7 +223,7 @@ describe("Entity Merge Batch", () => {
   });
 
   test("403 when actor lacks admin on any entity", async () => {
-    const actorB = await createActor(adminApiKey, { maxReadLevel: 2, maxWriteLevel: 2 });
+    const actorB = await createActor(adminApiKey);
     const owned = await createEntity(actor.apiKey, "note", { label: uniqueName("o") });
     const foreign = await createEntity(actorB.apiKey, "note", { label: uniqueName("f") });
 
@@ -276,7 +273,7 @@ describe("Entity Merge Batch", () => {
 
   test("spaces and permissions transfer from all sources", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("batch-space"));
-    const actorB = await createActor(adminApiKey, { maxReadLevel: 2, maxWriteLevel: 2 });
+    const actorB = await createActor(adminApiKey);
 
     const e1 = await createEntity(actor.apiKey, "note", { label: uniqueName("e1") });
     const e2 = await createEntity(actor.apiKey, "note", { label: uniqueName("e2") });

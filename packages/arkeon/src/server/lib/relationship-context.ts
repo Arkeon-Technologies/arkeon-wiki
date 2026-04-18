@@ -12,8 +12,6 @@ export interface RelationshipSummary {
   target_id: string;
   direction: "in" | "out";
   properties: Record<string, unknown>;
-  read_level: number;
-  write_level: number;
   counterpart: {
     id: string;
     kind: string;
@@ -55,8 +53,6 @@ export async function fetchRelationshipContext(
           re.source_id,
           re.target_id,
           rel.properties,
-          rel.read_level,
-          rel.write_level,
           CASE WHEN re.source_id = $1 THEN 'out' ELSE 'in' END AS direction,
           json_build_object(
             'id', other.id,
@@ -89,7 +85,6 @@ export async function fetchRelationshipContext(
       `WITH expanded AS (
         SELECT
           rel.id, re.predicate, re.source_id, re.target_id, rel.properties,
-          rel.read_level, rel.write_level,
           re.source_id AS anchor_id, 'out' AS direction,
           re.target_id AS counterpart_id, rel.created_at
         FROM relationship_edges re
@@ -98,7 +93,6 @@ export async function fetchRelationshipContext(
         UNION ALL
         SELECT
           rel.id, re.predicate, re.source_id, re.target_id, rel.properties,
-          rel.read_level, rel.write_level,
           re.target_id AS anchor_id, 'in' AS direction,
           re.source_id AS counterpart_id, rel.created_at
         FROM relationship_edges re
@@ -116,7 +110,7 @@ export async function fetchRelationshipContext(
         FROM expanded e
         JOIN entities other ON other.id = e.counterpart_id
       )
-      SELECT id, predicate, source_id, target_id, properties, read_level, write_level, anchor_id, direction, counterpart, rn
+      SELECT id, predicate, source_id, target_id, properties, anchor_id, direction, counterpart, rn
       FROM ranked
       WHERE rn <= $2`,
       [entityIds, perEntityLimit + 1],
@@ -148,8 +142,6 @@ function toSummary(row: Record<string, unknown>): RelationshipSummary {
     target_id: String(row.target_id),
     direction: row.direction as "in" | "out",
     properties: (row.properties ?? {}) as Record<string, unknown>,
-    read_level: Number(row.read_level),
-    write_level: Number(row.write_level),
     counterpart: row.counterpart as RelationshipSummary["counterpart"],
   };
 }

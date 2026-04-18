@@ -291,10 +291,8 @@ export function registerAuthCommands(program: Command): void {
     .description("Create a new actor on the graph and register it as a local profile")
     .argument("<name>", "Profile name (e.g. ingestor, reviewer)")
     .option("--kind <kind>", "Actor kind (only 'agent' is supported)", "agent")
-    .option("--max-read-level <level>", "Max read level (0-4, default 1)")
-    .option("--max-write-level <level>", "Max write level (0-4, default 1)")
     .option("--properties <json>", "Properties JSON")
-    .action(async (name: string, opts: { kind: string; maxReadLevel?: string; maxWriteLevel?: string; properties?: string }) => {
+    .action(async (name: string, opts: { kind: string; properties?: string }) => {
       try {
         const state = loadRepoState();
         if (!state) throw new Error("Not in an initialized repo. Run `arkeon init` first.");
@@ -309,8 +307,6 @@ export function registerAuthCommands(program: Command): void {
           kind: opts.kind,
           properties: opts.properties ? JSON.parse(opts.properties) : { label: name },
         };
-        if (opts.maxReadLevel !== undefined) body.max_read_level = Number(opts.maxReadLevel);
-        if (opts.maxWriteLevel !== undefined) body.max_write_level = Number(opts.maxWriteLevel);
 
         // Creating actors requires admin privileges. Resolve the admin key
         // from the instance registry or the instance's secrets.json.

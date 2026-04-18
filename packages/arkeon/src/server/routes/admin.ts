@@ -4,13 +4,11 @@
 import { createRoute, z } from "@hono/zod-openapi";
 
 import { ApiError } from "../lib/errors";
-import { requireAdmin, parseJsonBody } from "../lib/http";
+import { requireActor, parseJsonBody } from "../lib/http";
 import { bulkIndexEntities, ensureMeiliIndex, isMeilisearchConfigured } from "../lib/meilisearch";
 import { createRouter } from "../lib/openapi";
 import {
   ActorSchema,
-  ClassificationLevel,
-  EntityIdParam,
   JsonObjectSchema,
   entityIdParams,
   errorResponses,
@@ -26,27 +24,20 @@ const updateAdminActorRoute = createRoute({
   path: "/actors/{id}",
   operationId: "adminUpdateActor",
   tags: ["Admin"],
-  summary: "Update actor admin-only fields (is_admin, status, can_publish_public)",
+  summary: "Update actor fields (status, properties)",
   "x-arke-auth": "required",
   "x-arke-related": ["GET /actors/{id}", "PUT /actors/{id}"],
-  "x-arke-rules": ["System admin only"],
+  "x-arke-rules": [],
   request: {
     params: entityIdParams("Actor ULID"),
     body: {
       required: true,
       content: jsonContent(
         z.object({
-          is_admin: z.boolean().optional().describe("System admin flag"),
           status: z
             .enum(["active", "suspended", "deactivated"])
             .optional()
             .describe("Actor status"),
-          can_publish_public: z
-            .boolean()
-            .optional()
-            .describe("Whether actor can publish public (read_level=0) content"),
-          max_read_level: ClassificationLevel.optional().describe("Max read level (0-4)"),
-          max_write_level: ClassificationLevel.optional().describe("Max write level (0-4)"),
           properties: JsonObjectSchema.optional().describe("Actor properties"),
         }),
       ),
@@ -68,7 +59,7 @@ const statsRoute = createRoute({
   tags: ["Admin"],
   summary: "Get instance statistics (entity, actor, relationship counts and DB size)",
   "x-arke-auth": "required",
-  "x-arke-rules": ["System admin only"],
+  "x-arke-rules": [],
   responses: {
     200: {
       description: "Instance statistics",
@@ -94,7 +85,7 @@ const instanceRoute = createRoute({
   tags: ["Admin"],
   summary: "Get instance metadata (Arke ID, version)",
   "x-arke-auth": "required",
-  "x-arke-rules": ["System admin only"],
+  "x-arke-rules": [],
   responses: {
     200: {
       description: "Instance metadata",
@@ -115,7 +106,7 @@ const reindexRoute = createRoute({
   tags: ["Admin"],
   summary: "Rebuild the Meilisearch index from Postgres",
   "x-arke-auth": "required",
-  "x-arke-rules": ["System admin only"],
+  "x-arke-rules": [],
   responses: {
     200: {
       description: "Reindex result",
@@ -135,7 +126,7 @@ const reindexRoute = createRoute({
 export const adminRouter = createRouter();
 
 adminRouter.openapi(updateAdminActorRoute, async (c) => {
-  const actor = requireAdmin(c);
+  const actor = requireActor(c);
   const actorId = c.req.param("id");
   const body = await parseJsonBody<Record<string, unknown>>(c);
   const sql = createSql();
@@ -145,25 +136,9 @@ adminRouter.openapi(updateAdminActorRoute, async (c) => {
   const params: unknown[] = [];
   let paramIdx = 1;
 
-  if (typeof body.is_admin === "boolean") {
-    sets.push(`is_admin = $${paramIdx++}`);
-    params.push(body.is_admin);
-  }
   if (typeof body.status === "string" && ["active", "suspended", "deactivated"].includes(body.status)) {
     sets.push(`status = $${paramIdx++}`);
     params.push(body.status);
-  }
-  if (typeof body.can_publish_public === "boolean") {
-    sets.push(`can_publish_public = $${paramIdx++}`);
-    params.push(body.can_publish_public);
-  }
-  if (typeof body.max_read_level === "number") {
-    sets.push(`max_read_level = $${paramIdx++}`);
-    params.push(body.max_read_level);
-  }
-  if (typeof body.max_write_level === "number") {
-    sets.push(`max_write_level = $${paramIdx++}`);
-    params.push(body.max_write_level);
   }
   if (body.properties && typeof body.properties === "object") {
     sets.push(`properties = $${paramIdx++}::jsonb`);
@@ -202,7 +177,7 @@ adminRouter.openapi(updateAdminActorRoute, async (c) => {
 });
 
 adminRouter.openapi(statsRoute, async (c) => {
-  const actor = requireAdmin(c);
+  const actor = requireActor(c);
   const sql = createSql();
 
   const results = await sql.transaction([
@@ -221,7 +196,7 @@ adminRouter.openapi(statsRoute, async (c) => {
 });
 
 adminRouter.openapi(instanceRoute, async (c) => {
-  requireAdmin(c);
+  requireActor(c);
 
   return c.json(
     {
@@ -232,7 +207,7 @@ adminRouter.openapi(instanceRoute, async (c) => {
 });
 
 adminRouter.openapi(reindexRoute, async (c) => {
-  requireAdmin(c);
+  requireActor(c);
 
   if (!isMeilisearchConfigured()) {
     throw new ApiError(409, "not_available", "Meilisearch is not configured (MEILI_URL not set)");

@@ -13,7 +13,6 @@ export interface TraverseNode {
   kind: "entity" | "relationship";
   type: string;
   properties: { label: string | null; description: string | null };
-  read_level: number;
   created_at: string;
   updated_at: string;
   source_depth: number;
@@ -219,7 +218,7 @@ async function scoreNodes(
         )::numeric, 2) AS score,
         e.kind, e.type,
         json_build_object('label', e.properties->>'label', 'description', e.properties->>'description') AS properties,
-        e.read_level, e.created_at, e.updated_at
+        e.created_at, e.updated_at
       FROM edge_counts ec
       JOIN entities e ON e.id = ec.id
       ORDER BY score DESC
@@ -350,7 +349,6 @@ async function neighborhoodTraverse(
     kind: row.kind as "entity" | "relationship",
     type: String(row.type),
     properties: row.properties as { label: string | null; description: string | null },
-    read_level: Number(row.read_level),
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
     source_depth: Number(row.depth),
@@ -493,7 +491,6 @@ async function bridgeTraverse(
       kind: row.kind as "entity" | "relationship",
       type: String(row.type),
       properties: row.properties as { label: string | null; description: string | null },
-      read_level: Number(row.read_level),
       created_at: String(row.created_at),
       updated_at: String(row.updated_at),
       source_depth: bridge.sourceDepth,

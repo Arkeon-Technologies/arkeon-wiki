@@ -17,7 +17,7 @@ import { requireActor, parseJsonBody } from "../lib/http";
 import { generateUlid } from "../lib/ids";
 import { indexEntityById } from "../lib/meilisearch";
 import { createRouter } from "../lib/openapi";
-import { requireSpaceRole } from "../lib/spaces";
+import { fetchSpaceForActor } from "../lib/spaces";
 import { setActorContext } from "../lib/actor-context";
 import { createSql, withTransaction, type SqlClient } from "../lib/sql";
 import {
@@ -33,8 +33,6 @@ type EntityOp = Record<string, unknown> & {
   op: "entity";
   ref?: string;
   type?: string;
-  read_level?: number;
-  write_level?: number;
 };
 
 type RelateOp = Record<string, unknown> & {
@@ -42,16 +40,12 @@ type RelateOp = Record<string, unknown> & {
   source?: string;
   target?: string;
   predicate?: string;
-  read_level?: number;
-  write_level?: number;
 };
 
 type OpsEnvelope = {
   format?: string;
   defaults?: {
     space_id?: string;
-    read_level?: number;
-    write_level?: number;
   };
   source?: {
     entity_id?: string;
@@ -102,9 +96,7 @@ const postOpsRoute = createRoute({
     "`defaults.space_id`, and `source.entity_id` provenance. Wiki authoring remains the preferred path for narrative pages.",
   "x-arke-auth": "required",
   "x-arke-rules": [
-    "Requires write clearance for inserted entities and relationships",
-    "If defaults.space_id is provided, requires contributor role on that space",
-    "Relationship creation requires edit access on source and read access on target; RLS is the final authority",
+    "If defaults.space_id is provided, the space must exist",
     "source.entity_id creates extracted_from relationships from every created entity and relationship to the source entity",
   ],
   request: {
@@ -118,8 +110,6 @@ const postOpsRoute = createRoute({
           format: z.literal("arke.ops/v1"),
           defaults: z.object({
             space_id: EntityIdParam.optional(),
-            read_level: z.number().int().min(0).max(4).optional(),
-            write_level: z.number().int().min(0).max(4).optional(),
           }).optional(),
           source: z.object({
             entity_id: EntityIdParam.optional(),
@@ -170,7 +160,10 @@ opsRouter.openapi(postOpsRoute, async (c) => {
   const sql = createSql();
   const spaceId = body.defaults?.space_id;
   if (spaceId) {
-    await requireSpaceRole(sql, actor, spaceId, "contributor");
+    const space = await fetchSpaceForActor(actor, spaceId);
+    if (!space) {
+      throw new ApiError(404, "not_found", "Space not found");
+    }
   }
 
   const planned = planOps(body);
@@ -202,8 +195,6 @@ opsRouter.openapi(postOpsRoute, async (c) => {
         type: item.type,
         properties: item.properties,
         ownerId: actor.id,
-        readLevel: item.readLevel,
-        writeLevel: item.writeLevel,
         now,
       });
       createdIds.push(item.id);
@@ -221,8 +212,6 @@ opsRouter.openapi(postOpsRoute, async (c) => {
         predicate: item.predicate,
         properties: item.properties,
         ownerId: actor.id,
-        readLevel: item.readLevel,
-        writeLevel: item.writeLevel,
         now,
       });
       createdIds.push(item.id);
@@ -244,8 +233,6 @@ opsRouter.openapi(postOpsRoute, async (c) => {
           predicate: "extracted_from",
           properties: {},
           ownerId: actor.id,
-          readLevel: body.defaults?.read_level ?? 1,
-          writeLevel: body.defaults?.write_level ?? 1,
           now,
         });
         createdIds.push(provenanceId);
@@ -279,8 +266,6 @@ function planOps(body: OpsEnvelope) {
     id: string;
     type: string;
     properties: Record<string, unknown>;
-    readLevel: number;
-    writeLevel: number;
   }> = [];
   const edgesToInsert: Array<{
     id: string;
@@ -288,8 +273,6 @@ function planOps(body: OpsEnvelope) {
     target: string;
     predicate: string;
     properties: Record<string, unknown>;
-    readLevel: number;
-    writeLevel: number;
   }> = [];
 
   for (const [index, op] of body.ops!.entries()) {
@@ -319,8 +302,6 @@ function planOps(body: OpsEnvelope) {
         id,
         type,
         properties,
-        readLevel: numericLevel(op.read_level, body.defaults?.read_level),
-        writeLevel: numericLevel(op.write_level, body.defaults?.write_level),
       });
       continue;
     }
@@ -345,8 +326,6 @@ function planOps(body: OpsEnvelope) {
         target,
         predicate,
         properties,
-        readLevel: numericLevel(op.read_level, body.defaults?.read_level),
-        writeLevel: numericLevel(op.write_level, body.defaults?.write_level),
       });
       continue;
     }
@@ -359,13 +338,13 @@ function planOps(body: OpsEnvelope) {
 
 function entityProperties(op: EntityOp): Record<string, unknown> {
   return {
-    ...omit(op, ["op", "ref", "type", "read_level", "write_level"]),
+    ...omit(op, ["op", "ref", "type"]),
     subject_type: op.type,
   };
 }
 
 function relationshipProperties(op: RelateOp): Record<string, unknown> {
-  return omit(op, ["op", "ref", "source", "target", "predicate", "read_level", "write_level"]);
+  return omit(op, ["op", "ref", "source", "target", "predicate"]);
 }
 
 function omit(value: Record<string, unknown>, keys: string[]): Record<string, unknown> {
@@ -378,14 +357,6 @@ function stringField(value: unknown, field: string): string {
     throw new ApiError(400, "invalid_body", `${field} is required`);
   }
   return value.trim();
-}
-
-function numericLevel(value: unknown, fallback: unknown): number {
-  const candidate = typeof value === "number" ? value : typeof fallback === "number" ? fallback : 1;
-  if (!Number.isInteger(candidate) || candidate < 0 || candidate > 4) {
-    throw new ApiError(400, "invalid_body", "classification levels must be integers from 0 to 4");
-  }
-  return candidate;
 }
 
 function resolveEndpoint(value: unknown, refs: Map<string, string>, field: string): string {
@@ -408,18 +379,16 @@ async function insertEntity(
     type: string;
     properties: Record<string, unknown>;
     ownerId: string;
-    readLevel: number;
-    writeLevel: number;
     now: string;
   },
 ): Promise<void> {
   const [entity] = await tx`
     INSERT INTO entities (
       id, kind, type, ver, properties, owner_id,
-      read_level, write_level, edited_by, note, created_at, updated_at
+      edited_by, note, created_at, updated_at
     ) VALUES (
       ${options.id}, ${options.kind}, ${options.type}, 1, ${options.properties}::jsonb, ${options.ownerId},
-      ${options.readLevel}, ${options.writeLevel}, ${options.ownerId}, NULL, ${options.now}::timestamptz, ${options.now}::timestamptz
+      ${options.ownerId}, NULL, ${options.now}::timestamptz, ${options.now}::timestamptz
     )
     RETURNING id
   `;
@@ -442,29 +411,26 @@ async function insertRelationship(
     predicate: string;
     properties: Record<string, unknown>;
     ownerId: string;
-    readLevel: number;
-    writeLevel: number;
     now: string;
   },
 ): Promise<void> {
-  const [relationship] = await tx`
-    INSERT INTO entities (
-      id, kind, type, ver, properties, owner_id,
-      read_level, write_level, edited_by, note, created_at, updated_at
-    )
-    SELECT
-      ${options.id}, 'relationship', 'relationship', 1, ${options.properties}::jsonb,
-      ${options.ownerId},
-      GREATEST(src.read_level, tgt.read_level, ${options.readLevel}),
-      GREATEST(src.write_level, tgt.write_level, ${options.writeLevel}),
-      ${options.ownerId}, NULL, ${options.now}::timestamptz, ${options.now}::timestamptz
-    FROM entities src, entities tgt
-    WHERE src.id = ${options.sourceId} AND tgt.id = ${options.targetId}
-    RETURNING id, properties
-  `;
-  if (!relationship) {
+  // Verify source and target exist
+  const sourceRows = await tx`SELECT id FROM entities WHERE id = ${options.sourceId} LIMIT 1`;
+  const targetRows = await tx`SELECT id FROM entities WHERE id = ${options.targetId} LIMIT 1`;
+  if (sourceRows.length === 0 || targetRows.length === 0) {
     throw new ApiError(404, "not_found", "Relationship source or target not found or not visible");
   }
+
+  await tx`
+    INSERT INTO entities (
+      id, kind, type, ver, properties, owner_id,
+      edited_by, note, created_at, updated_at
+    ) VALUES (
+      ${options.id}, 'relationship', 'relationship', 1, ${options.properties}::jsonb,
+      ${options.ownerId},
+      ${options.ownerId}, NULL, ${options.now}::timestamptz, ${options.now}::timestamptz
+    )
+  `;
 
   await tx`
     INSERT INTO entity_versions (entity_id, ver, properties, edited_by, note, created_at)

@@ -25,9 +25,6 @@ type RequestOptions = {
 export type CreatedActor = {
   id: string;
   apiKey: string;
-  maxReadLevel: number;
-  maxWriteLevel: number;
-  isAdmin: boolean;
 };
 
 export function uniqueName(prefix: string) {
@@ -78,14 +75,11 @@ export async function getJson(path: string, apiKey?: string) {
 
 // --- Actor helpers ---
 
-/** Create an actor via POST /actors (requires admin or actor with sufficient level) */
+/** Create an actor via POST /actors */
 export async function createActor(
   callerApiKey: string,
   options: {
     kind?: string;
-    maxReadLevel?: number;
-    maxWriteLevel?: number;
-    canPublishPublic?: boolean;
     properties?: Record<string, unknown>;
   } = {},
 ): Promise<CreatedActor> {
@@ -94,9 +88,6 @@ export async function createActor(
     apiKey: callerApiKey,
     json: {
       kind: options.kind ?? "agent",
-      max_read_level: options.maxReadLevel ?? 1,
-      max_write_level: options.maxWriteLevel ?? 1,
-      can_publish_public: options.canPublishPublic ?? false,
       properties: options.properties ?? { label: uniqueName("actor") },
     },
   });
@@ -105,9 +96,6 @@ export async function createActor(
   return {
     id: data.actor.id,
     apiKey: data.api_key,
-    maxReadLevel: data.actor.max_read_level,
-    maxWriteLevel: data.actor.max_write_level,
-    isAdmin: data.actor.is_admin,
   };
 }
 

@@ -15,7 +15,7 @@ import {
   renderRouteHelpFromSpec,
   renderRouteNotFoundFromSpec,
 } from "../lib/openapi-help";
-import { requireAdmin } from "../lib/http";
+import { requireActor } from "../lib/http";
 import type { AppBindings } from "../types";
 
 const TEXT_HEADERS = {
@@ -66,12 +66,11 @@ The route index (GET /help) shows each route's auth requirement.
 
 ## Working Within a Space
 
-Spaces are organizational containers with their own access controls. Pass
-space_id to POST /wiki to publish into a specific space.
+Spaces are organizational containers. Pass space_id to POST /wiki to
+publish into a specific space.
 
-You can still add entities to spaces and grant permissions separately:
+You can also add entities to spaces directly:
    POST /spaces/{id}/entities          — add existing entity to space
-   POST /wiki/{id}/permissions         — grant permissions on existing entity
 
 ## Filtering
 
@@ -126,8 +125,7 @@ This guide covers operations that require admin privileges.
 
 ## What Admins Can Do
 
-- Create and manage networks, actors, and API keys
-- Set classification levels on content
+- Create and manage actors and API keys
 - Rebuild search indexes
 - View instance-wide statistics
 
@@ -137,9 +135,7 @@ Create an actor:
   POST /actors
   {
     "kind": "agent",
-    "properties": { "label": "Researcher" },
-    "max_read_level": 2,
-    "max_write_level": 2
+    "properties": { "label": "Researcher" }
   }
 
 Generate an API key for them:
@@ -149,32 +145,15 @@ Only kind "agent" is supported. (Legacy "worker" actors from earlier
 releases remain readable, but the runtime that invoked them has been
 removed.)
 
-## Classification Levels
-
-Arkeon uses integer clearance levels (0-4) to control access:
-
-  0  PUBLIC        readable by anyone, including unauthenticated
-  1  INTERNAL      readable by any authenticated actor
-  2  TEAM          requires TEAM clearance or above
-  3  CONFIDENTIAL  requires CONFIDENTIAL clearance or above
-  4  RESTRICTED    highly restricted
-
-Entities have read_level and write_level.
-Actors have max_read_level and max_write_level.
-
-Rule: an actor can only read entities where
-  entity.read_level <= actor.max_read_level
-and only write where
-  entity.write_level <= actor.max_write_level
-
-## Spaces & Permissions
+## Spaces
 
 Create a space:
   POST /spaces
   { "name": "Design Review" }
 
-Spaces have their own read_level/write_level defaults. Assign roles to
-actors within spaces to scope access.
+Spaces are organizational containers. Any authenticated actor can read
+all spaces and entities. The space owner or a system admin can update
+or delete a space.
 
 Add an entity to a space:
   POST /spaces/{id}/entities
@@ -448,7 +427,7 @@ export function createHelpRouter(getSpec: () => { paths?: Record<string, unknown
   const helpRouter = new Hono<AppBindings>();
 
   helpRouter.get("/guide/admin", (c) => {
-    requireAdmin(c);
+    requireActor(c);
     return c.text(ADMIN_GUIDE, 200, TEXT_HEADERS);
   });
 

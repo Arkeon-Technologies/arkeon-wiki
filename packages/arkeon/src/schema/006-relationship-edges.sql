@@ -3,16 +3,8 @@
 -- =============================================================================
 --
 -- Every relationship is an entity (kind = 'relationship') with its own
--- properties, versioning, classification, and permissions. This table adds
--- the graph structure: source → [predicate] → target.
---
--- The relationship entity's read_level governs visibility of the edge.
--- Default read_level for a relationship should be
--- max(source.read_level, target.read_level) — the inference attack defense.
---
--- Creating a relationship requires:
---   1. Edit access on source entity (you're asserting a connection from it)
---   2. Read access on target entity (can't link to what you can't see)
+-- properties and versioning. This table adds the graph structure:
+-- source → [predicate] → target.
 --
 -- =============================================================================
 

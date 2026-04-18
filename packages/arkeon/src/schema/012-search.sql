@@ -9,8 +9,7 @@
 --   - Indexed JSON structural noise (keys, braces, colons)
 --   - No relevance ranking, stemming, or typo tolerance
 --
--- Meilisearch indexes only searchable text (label, description, note) and
--- enforces permission filtering via read_level before returning results.
+-- Meilisearch indexes only searchable text (label, description, note).
 -- Postgres RLS remains the final backstop on all fetches.
 --
 -- =============================================================================

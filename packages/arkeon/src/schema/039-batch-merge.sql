@@ -81,11 +81,7 @@ BEGIN
     -- 5. Repoint remaining incoming edges
     UPDATE relationship_edges SET target_id = p_target_id WHERE target_id = v_source_id;
 
-    -- 6. Transfer permissions (skip duplicates)
-    INSERT INTO entity_permissions (entity_id, grantee_type, grantee_id, role, granted_by, granted_at)
-    SELECT p_target_id, grantee_type, grantee_id, role, granted_by, granted_at
-    FROM entity_permissions WHERE entity_id = v_source_id
-    ON CONFLICT (entity_id, grantee_type, grantee_id) DO NOTHING;
+    -- 6. (entity_permissions removed — no-op)
 
     -- 7. Transfer space memberships
     INSERT INTO space_entities (space_id, entity_id, added_by, added_at)

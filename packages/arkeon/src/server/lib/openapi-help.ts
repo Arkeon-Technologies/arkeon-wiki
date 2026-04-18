@@ -26,13 +26,8 @@ export function renderPreamble(actor: Actor | null): string {
   lines.push(`# Arkeon API`);
   lines.push(`#`);
   lines.push(`# You are authenticated as: ${name}`);
-  lines.push(`# Clearance: read=${actor.maxReadLevel} write=${actor.maxWriteLevel}`);
   lines.push(`#`);
   lines.push(`# New here? See GET /help/guide for a getting-started walkthrough.`);
-
-  if (actor.isAdmin) {
-    lines.push(`# Admin? See GET /help/guide/admin for network setup, actors, and classification.`);
-  }
 
   lines.push("");
   return lines.join("\n");
@@ -114,8 +109,6 @@ const LLMS_FILTER_SYNTAX = [
   "#   type            text       semantic type (book, person, etc.)",
   "#   ver             numeric    content version number",
   "#   owner_id        text       owner actor ULID",
-  "#   read_level      numeric    classification level (0-4)",
-  "#   write_level     numeric    write ceiling (0-4)",
   "#   edited_by       text       last editor ULID",
   "#   created_at      timestamp  ISO 8601",
   "#   updated_at      timestamp  ISO 8601",
@@ -136,7 +129,7 @@ const LLMS_FILTER_SYNTAX = [
   "#",
   "# Examples:",
   "#   filter=kind:entity,properties.subject_type:book,created_at>2026-01-01",
-  "#   filter=owner_id:01ABC,read_level<=2",
+  "#   filter=owner_id:01ABC,ver>=2",
   "#   filter=kind!:relationship,language:English",
   "#   filter=rel.extracted_from:01ABC,properties.subject_type:character",
   "",

@@ -38,11 +38,6 @@ const SearchQuery = ProjectionQuery.extend({
     z.string().optional(),
     "Scope search to a space ULID",
   ),
-  read_level: queryParam(
-    "read_level",
-    z.coerce.number().int().min(0).max(4).optional(),
-    "Restrict results to this read level or below (cannot exceed your clearance)",
-  ),
   limit: queryParam(
     "limit",
     z.coerce.number().int().min(1).max(200).optional(),
@@ -68,11 +63,9 @@ const searchRoute = createRoute({
   summary: "Full-text search across entities via Meilisearch",
   description:
     "Keyword search with typo tolerance, prefix matching, and relevance ranking. " +
-    "Results are automatically filtered by the caller's read clearance level. " +
-    "Use the read_level parameter to restrict results below your clearance. " +
     "Use view=expanded to include each result's relationships with counterpart summaries.",
   "x-arke-auth": "optional",
-  "x-arke-rules": ["Results filtered by your classification clearance"],
+  "x-arke-rules": [],
   request: {
     query: SearchQuery,
   },
@@ -97,7 +90,6 @@ const MultiSearchQuerySchema = z.object({
   type: z.string().optional().describe("Filter by entity type"),
   kind: z.string().optional().describe("Filter by kind (entity or relationship)"),
   space_id: z.string().optional().describe("Scope to a space ULID"),
-  read_level: z.number().int().min(0).max(4).optional().describe("Max read level for results"),
   limit: z.number().int().min(1).max(50).optional().describe("Per-query limit (default 20, max 50)"),
   offset: z.number().int().min(0).optional().describe("Per-query offset (default 0)"),
 });
@@ -114,7 +106,7 @@ const multiSearchRoute = createRoute({
     "Shared view/fields params apply to all results.",
   "x-arke-auth": "optional",
   "x-arke-related": ["GET /search"],
-  "x-arke-rules": ["Results filtered by your classification clearance"],
+  "x-arke-rules": [],
   request: {
     body: {
       required: true,
@@ -172,14 +164,10 @@ searchRouter.openapi(searchRoute, async (c) => {
   const offset = Math.max(0, Number(c.req.query("offset")) || 0);
   const projection = parseProjection(c.req.query("view"), c.req.query("fields"));
 
-  const readLevelParam = c.req.query("read_level");
-  const readLevelOverride = readLevelParam !== undefined ? Number(readLevelParam) : undefined;
-
-  const filters = buildSearchFilters(actor, {
+  const filters = buildSearchFilters({
     type: c.req.query("type"),
     kind: c.req.query("kind"),
     spaceId: c.req.query("space_id"),
-    readLevelOverride,
   });
 
   const meiliResult = await searchEntities(q, {
@@ -275,13 +263,11 @@ searchRouter.openapi(multiSearchRoute, async (c) => {
 
     const limit = Math.min(Math.max(1, Number(sq.limit) || 20), 50);
     const offset = Math.max(0, Number(sq.offset) || 0);
-    const readLevelOverride = typeof sq.read_level === "number" ? sq.read_level : undefined;
 
-    const filters = buildSearchFilters(actor, {
+    const filters = buildSearchFilters({
       type: typeof sq.type === "string" ? sq.type : undefined,
       kind: typeof sq.kind === "string" ? sq.kind : undefined,
       spaceId: typeof sq.space_id === "string" ? sq.space_id : undefined,
-      readLevelOverride,
     });
 
     return { q, filters, limit, offset };

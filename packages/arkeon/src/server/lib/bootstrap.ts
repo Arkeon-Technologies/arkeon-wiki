@@ -32,15 +32,11 @@ export function ensureBootstrap(): Promise<void> {
     // Ensure SYSTEM actor exists if no bootstrap key
     if (!process.env.ADMIN_BOOTSTRAP_KEY) {
       await sql.transaction([
-        sql`SELECT
-          set_config('app.actor_id', 'SYSTEM', true),
-          set_config('app.actor_read_level', '4', true),
-          set_config('app.actor_write_level', '4', true),
-          set_config('app.actor_is_admin', 'true', true)`,
+        sql`SELECT set_config('app.actor_id', 'SYSTEM', true)`,
         sql`
-          INSERT INTO actors (id, kind, max_read_level, max_write_level, is_admin, can_publish_public, properties, created_at, updated_at)
+          INSERT INTO actors (id, kind, properties, created_at, updated_at)
           VALUES (
-            'SYSTEM', 'agent', 4, 4, true, false,
+            'SYSTEM', 'agent',
             ${JSON.stringify({ label: "System" })}::jsonb,
             ${now}::timestamptz, ${now}::timestamptz
           )
@@ -78,15 +74,11 @@ async function bootstrapAdmin(
   // Create admin actor + API key
   // Use permissive context (no actor_id check needed for bootstrap)
   await sql.transaction([
-    sql`SELECT
-      set_config('app.actor_id', ${adminId}, true),
-      set_config('app.actor_read_level', '4', true),
-      set_config('app.actor_write_level', '4', true),
-      set_config('app.actor_is_admin', 'true', true)`,
+    sql`SELECT set_config('app.actor_id', ${adminId}, true)`,
     sql`
-      INSERT INTO actors (id, kind, max_read_level, max_write_level, is_admin, can_publish_public, properties, created_at, updated_at)
+      INSERT INTO actors (id, kind, properties, created_at, updated_at)
       VALUES (
-        ${adminId}, 'agent', 4, 4, true, true,
+        ${adminId}, 'agent',
         ${JSON.stringify({ label: "Bootstrap Admin" })}::jsonb,
         ${now}::timestamptz, ${now}::timestamptz
       )

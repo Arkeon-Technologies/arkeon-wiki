@@ -22,10 +22,7 @@ describe("Spaces", () => {
   let actor: Awaited<ReturnType<typeof createActor>>;
 
   test("setup: create actor", async () => {
-    actor = await createActor(adminApiKey, {
-      maxReadLevel: 3,
-      maxWriteLevel: 3,
-    });
+    actor = await createActor(adminApiKey);
   });
 
   test("Create space", async () => {
@@ -34,39 +31,21 @@ describe("Spaces", () => {
     expect(space.name).toContain("test-space");
   });
 
-  test("List spaces (filtered by read_level via RLS)", async () => {
-    const level1Actor = await createActor(adminApiKey, {
-      maxReadLevel: 1,
-      maxWriteLevel: 1,
-    });
-
-    // Create a public space (read_level=0) and an elevated space (read_level=2)
-    await createSpace(actor.apiKey, uniqueName("public-space"), { read_level: 0 });
-    const secretSpace = await createSpace(actor.apiKey, uniqueName("secret-space"), {
-      read_level: 2,
-    });
-
-    // Level-1 actor should see public but not secret
-    const { response, body } = await getJson("/spaces", level1Actor.apiKey);
+  test("List spaces", async () => {
+    await createSpace(actor.apiKey, uniqueName("list-space"));
+    const { response, body } = await getJson("/spaces", actor.apiKey);
     expect(response.status).toBe(200);
-    const spaceIds = (body as any).spaces.map((s: any) => s.id);
-    expect(spaceIds).not.toContain(secretSpace.id);
+    expect((body as any).spaces.length).toBeGreaterThan(0);
   });
 
   test("Add entity to space (as contributor)", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("add-entity-space"));
-    const contributor = await createActor(adminApiKey, {
-      maxReadLevel: 2,
-      maxWriteLevel: 2,
-    });
+    const contributor = await createActor(adminApiKey);
     await grantSpacePermission(actor.apiKey, space.id, "actor", contributor.id, "contributor");
 
-    const entity = await createEntity(
-      contributor.apiKey,
-      "note",
-      { label: uniqueName("in-space") },
-      { read_level: 1, write_level: 1 },
-    );
+    const entity = await createEntity(contributor.apiKey, "note", {
+      label: uniqueName("in-space"),
+    });
 
     await addEntityToSpace(contributor.apiKey, space.id, entity.id);
 
@@ -78,18 +57,12 @@ describe("Spaces", () => {
 
   test("List entities in space", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("list-entities-space"));
-    const entity1 = await createEntity(
-      actor.apiKey,
-      "note",
-      { label: uniqueName("e1") },
-      { read_level: 1, write_level: 1 },
-    );
-    const entity2 = await createEntity(
-      actor.apiKey,
-      "note",
-      { label: uniqueName("e2") },
-      { read_level: 1, write_level: 1 },
-    );
+    const entity1 = await createEntity(actor.apiKey, "note", {
+      label: uniqueName("e1"),
+    });
+    const entity2 = await createEntity(actor.apiKey, "note", {
+      label: uniqueName("e2"),
+    });
     await addEntityToSpace(actor.apiKey, space.id, entity1.id);
     await addEntityToSpace(actor.apiKey, space.id, entity2.id);
 
@@ -100,12 +73,9 @@ describe("Spaces", () => {
 
   test("Remove entity from space", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("remove-space"));
-    const entity = await createEntity(
-      actor.apiKey,
-      "note",
-      { label: uniqueName("to-remove") },
-      { read_level: 1, write_level: 1 },
-    );
+    const entity = await createEntity(actor.apiKey, "note", {
+      label: uniqueName("to-remove"),
+    });
     await addEntityToSpace(actor.apiKey, space.id, entity.id);
 
     const { response } = await apiRequest(`/spaces/${space.id}/wiki/${entity.id}`, {
@@ -122,16 +92,10 @@ describe("Spaces", () => {
 
   test("Non-contributor cannot add entity to space", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("no-contrib-space"));
-    const outsider = await createActor(adminApiKey, {
-      maxReadLevel: 2,
-      maxWriteLevel: 2,
+    const outsider = await createActor(adminApiKey);
+    const entity = await createEntity(outsider.apiKey, "note", {
+      label: uniqueName("no-add"),
     });
-    const entity = await createEntity(
-      outsider.apiKey,
-      "note",
-      { label: uniqueName("no-add") },
-      { read_level: 1, write_level: 1 },
-    );
 
     const { response } = await jsonRequest(`/spaces/${space.id}/entities`, {
       method: "POST",
@@ -143,10 +107,7 @@ describe("Spaces", () => {
 
   test("Space permissions: grant contributor, editor, admin", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("perm-space"));
-    const target = await createActor(adminApiKey, {
-      maxReadLevel: 2,
-      maxWriteLevel: 2,
-    });
+    const target = await createActor(adminApiKey);
 
     // Grant contributor
     await grantSpacePermission(actor.apiKey, space.id, "actor", target.id, "contributor");
@@ -166,9 +127,9 @@ describe("Spaces", () => {
 
   test("Bulk grant permissions on a space", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("bulk-perm-space"));
-    const actor1 = await createActor(adminApiKey, { maxReadLevel: 2, maxWriteLevel: 2 });
-    const actor2 = await createActor(adminApiKey, { maxReadLevel: 2, maxWriteLevel: 2 });
-    const actor3 = await createActor(adminApiKey, { maxReadLevel: 2, maxWriteLevel: 2 });
+    const actor1 = await createActor(adminApiKey);
+    const actor2 = await createActor(adminApiKey);
+    const actor3 = await createActor(adminApiKey);
 
     // Bulk grant contributor to all 3 actors
     const { response, body } = await jsonRequest(`/spaces/${space.id}/permissions`, {
@@ -202,7 +163,7 @@ describe("Spaces", () => {
 
   test("Space permission 403 includes descriptive message", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("403-msg-space"));
-    const unprivileged = await createActor(adminApiKey, { maxReadLevel: 2, maxWriteLevel: 2 });
+    const unprivileged = await createActor(adminApiKey);
     const entity = await createEntity(unprivileged.apiKey, "note", {
       label: uniqueName("403-msg-entity"),
     });
@@ -222,8 +183,8 @@ describe("Spaces", () => {
 
   test("Entity-access: grant gives edit access to entities in space", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("ea-grant"));
-    const user = await createActor(adminApiKey, { maxReadLevel: 1, maxWriteLevel: 1 });
-    const entity = await createEntity(actor.apiKey, "note", { label: "ea-doc" }, { read_level: 1, write_level: 1 });
+    const user = await createActor(adminApiKey);
+    const entity = await createEntity(actor.apiKey, "note", { label: "ea-doc" });
     await addEntityToSpace(actor.apiKey, space.id, entity.id);
 
     // Before grant: user cannot edit
@@ -249,9 +210,9 @@ describe("Spaces", () => {
 
   test("Entity-access: does not grant access to entities outside the space", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("ea-outside"));
-    const user = await createActor(adminApiKey, { maxReadLevel: 1, maxWriteLevel: 1 });
-    const insideEntity = await createEntity(actor.apiKey, "note", { label: "inside" }, { read_level: 1, write_level: 1 });
-    const outsideEntity = await createEntity(actor.apiKey, "note", { label: "outside" }, { read_level: 1, write_level: 1 });
+    const user = await createActor(adminApiKey);
+    const insideEntity = await createEntity(actor.apiKey, "note", { label: "inside" });
+    const outsideEntity = await createEntity(actor.apiKey, "note", { label: "outside" });
     await addEntityToSpace(actor.apiKey, space.id, insideEntity.id);
 
     await grantSpaceEntityAccess(actor.apiKey, space.id, "actor", user.id, "editor");
@@ -275,8 +236,8 @@ describe("Spaces", () => {
 
   test("Entity-access: revoke removes access", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("ea-revoke"));
-    const user = await createActor(adminApiKey, { maxReadLevel: 1, maxWriteLevel: 1 });
-    const entity = await createEntity(actor.apiKey, "note", { label: "rev-doc" }, { read_level: 1, write_level: 1 });
+    const user = await createActor(adminApiKey);
+    const entity = await createEntity(actor.apiKey, "note", { label: "rev-doc" });
     await addEntityToSpace(actor.apiKey, space.id, entity.id);
     await grantSpaceEntityAccess(actor.apiKey, space.id, "actor", user.id, "editor");
 
@@ -306,8 +267,8 @@ describe("Spaces", () => {
 
   test("Entity-access: list and bulk grant", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("ea-bulk"));
-    const user1 = await createActor(adminApiKey, { maxReadLevel: 1, maxWriteLevel: 1 });
-    const user2 = await createActor(adminApiKey, { maxReadLevel: 1, maxWriteLevel: 1 });
+    const user1 = await createActor(adminApiKey);
+    const user2 = await createActor(adminApiKey);
 
     // Bulk grant
     const { response: bulkRes, body: bulkBody } = await jsonRequest(`/spaces/${space.id}/entity-access`, {
@@ -334,10 +295,10 @@ describe("Spaces", () => {
   test("Entity-access: group grant cascades to group members", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("ea-group"));
     const group = await createGroup(adminApiKey, uniqueName("ea-grp"));
-    const member = await createActor(adminApiKey, { maxReadLevel: 1, maxWriteLevel: 1 });
+    const member = await createActor(adminApiKey);
     await addGroupMember(adminApiKey, group.id, member.id);
 
-    const entity = await createEntity(actor.apiKey, "note", { label: "grp-doc" }, { read_level: 1, write_level: 1 });
+    const entity = await createEntity(actor.apiKey, "note", { label: "grp-doc" });
     await addEntityToSpace(actor.apiKey, space.id, entity.id);
 
     // Before grant: member cannot edit
@@ -363,8 +324,8 @@ describe("Spaces", () => {
 
   test("Entity-access: removing entity from space revokes cascaded access", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("ea-remove"));
-    const user = await createActor(adminApiKey, { maxReadLevel: 1, maxWriteLevel: 1 });
-    const entity = await createEntity(actor.apiKey, "note", { label: "rm-doc" }, { read_level: 1, write_level: 1 });
+    const user = await createActor(adminApiKey);
+    const entity = await createEntity(actor.apiKey, "note", { label: "rm-doc" });
     await addEntityToSpace(actor.apiKey, space.id, entity.id);
     await grantSpaceEntityAccess(actor.apiKey, space.id, "actor", user.id, "editor");
 
@@ -394,12 +355,9 @@ describe("Spaces", () => {
 
   test("Space feed shows activity", async () => {
     const space = await createSpace(actor.apiKey, uniqueName("feed-space"));
-    const entity = await createEntity(
-      actor.apiKey,
-      "note",
-      { label: uniqueName("feed-entity") },
-      { read_level: 1, write_level: 1 },
-    );
+    const entity = await createEntity(actor.apiKey, "note", {
+      label: uniqueName("feed-entity"),
+    });
     await addEntityToSpace(actor.apiKey, space.id, entity.id);
 
     // Update entity to generate activity

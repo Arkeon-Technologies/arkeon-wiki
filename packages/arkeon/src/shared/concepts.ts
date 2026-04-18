@@ -38,8 +38,8 @@ Space
   spaces and grant actors roles within them.
 
 Actor
-  An authenticated identity (kind='agent'). Each actor has API keys and
-  clearance levels (max_read_level, max_write_level).`;
+  An authenticated identity (kind='agent'). Each actor has API keys.
+  All authenticated actors have full read/write access.`;
 
 export const AUTHENTICATION = `\
 Pass your API key via header:
@@ -53,21 +53,9 @@ Key prefixes indicate type:
 Some routes are public; most require auth.`;
 
 export const CLASSIFICATION_LEVELS = `\
-Arkeon uses integer clearance levels (0-4) to control access:
-
-  0  PUBLIC        readable by anyone, including unauthenticated
-  1  INTERNAL      readable by any authenticated actor
-  2  TEAM          requires TEAM clearance or above
-  3  CONFIDENTIAL  requires CONFIDENTIAL clearance or above
-  4  RESTRICTED    highly restricted
-
-Entities have read_level and write_level.
-Actors have max_read_level and max_write_level.
-
-Rule: an actor can only read entities where
-  entity.read_level <= actor.max_read_level
-and only write where
-  entity.write_level <= actor.max_write_level`;
+Arkeon uses single-tenant admin-only auth. All authenticated actors have
+full read/write access to all entities and spaces. Authentication is via
+API key (X-API-Key header). No per-entity or per-actor permission levels.`;
 
 export const BEST_PRACTICES = `\
 Build a connected graph.
@@ -95,7 +83,7 @@ Format: filter=field<op>value,field<op>value (comma-separated, AND'd)
 
 Operators: : (equals), !: (not equals), > >= < <= (comparisons), ? (exists), !? (missing)
 
-Entity columns: kind, type, arke_id, ver, owner_id, read_level, write_level,
+Entity columns: kind, type, arke_id, ver, owner_id,
 edited_by, created_at, updated_at
 
 Property paths: label:Neuroscience, metadata.source:arxiv, year>2020`;

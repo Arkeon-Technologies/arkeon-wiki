@@ -14,13 +14,6 @@ export const UlidSchema = z
 
 export const EntityIdParam = UlidSchema.describe("ULID string");
 
-export const ClassificationLevel = z
-  .number()
-  .int()
-  .min(0)
-  .max(4)
-  .openapi({ description: "0=PUBLIC, 1=INTERNAL, 2=TEAM, 3=CONFIDENTIAL, 4=RESTRICTED" });
-
 export const DateTimeSchema = z
   .string()
   .datetime({ offset: true })
@@ -49,8 +42,6 @@ export const EntitySchema = z
     ver: z.number().int(),
     properties: JsonObjectSchema,
     owner_id: UlidSchema,
-    read_level: ClassificationLevel,
-    write_level: ClassificationLevel,
     edited_by: UlidSchema,
     note: z.string().nullable(),
     created_at: DateTimeSchema,
@@ -70,10 +61,6 @@ export const ActorSchema = z
   .object({
     id: UlidSchema,
     kind: z.enum(["agent"]),
-    max_read_level: ClassificationLevel,
-    max_write_level: ClassificationLevel,
-    is_admin: z.boolean(),
-    can_publish_public: z.boolean(),
     owner_id: UlidSchema.nullable(),
     properties: JsonObjectSchema,
     status: z.enum(["active", "suspended", "deactivated"]),
@@ -96,8 +83,6 @@ export const SpaceSchema = z
     name: z.string(),
     description: z.string().nullable(),
     owner_id: UlidSchema,
-    read_level: ClassificationLevel,
-    write_level: ClassificationLevel,
     status: z.enum(["active", "archived", "deleted"]),
     entity_count: z.number().int(),
     last_activity_at: DateTimeSchema.nullable(),
@@ -106,19 +91,6 @@ export const SpaceSchema = z
     updated_at: DateTimeSchema,
   })
   .openapi("Space");
-
-// --- Group ---
-
-export const GroupSchema = z
-  .object({
-    id: UlidSchema,
-    name: z.string(),
-    type: z.enum(["org", "project", "editorial", "admin"]),
-    read_level: ClassificationLevel,
-    created_by: UlidSchema,
-    created_at: DateTimeSchema,
-  })
-  .openapi("Group");
 
 // --- Pagination ---
 
@@ -196,8 +168,6 @@ export const RelationshipSummarySchema = z
     target_id: UlidSchema,
     direction: z.enum(["in", "out"]),
     properties: JsonObjectSchema,
-    read_level: ClassificationLevel,
-    write_level: ClassificationLevel,
     counterpart: z.object({
       id: UlidSchema,
       kind: z.enum(["entity", "relationship"]),
@@ -215,7 +185,6 @@ export const TraverseNodeSchema = z
     kind: z.enum(["entity", "relationship"]),
     type: z.string(),
     properties: z.object({ label: z.string().nullable(), description: z.string().nullable() }),
-    read_level: ClassificationLevel,
     created_at: DateTimeSchema,
     updated_at: DateTimeSchema,
     source_depth: z.number().int().describe("Hops from the nearest source entity"),

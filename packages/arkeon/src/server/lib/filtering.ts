@@ -19,8 +19,6 @@ const COLUMN_WHITELIST: Record<string, "text" | "numeric" | "timestamp"> = {
   type: "text",
   ver: "numeric",
   owner_id: "text",
-  read_level: "numeric",
-  write_level: "numeric",
   edited_by: "text",
   created_at: "timestamp",
   updated_at: "timestamp",

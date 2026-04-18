@@ -151,7 +151,7 @@ const getContentRoute = createRoute({
   summary: "Download a file from an entity",
   "x-arke-auth": "optional",
   "x-arke-related": ["POST /wiki/{id}/content", "DELETE /wiki/{id}/content"],
-  "x-arke-rules": ["Requires read_level clearance >= entity's read_level"],
+  "x-arke-rules": [],
   request: {
     params: z.object({
       id: pathParam("id", EntityIdParam, "Entity ULID"),

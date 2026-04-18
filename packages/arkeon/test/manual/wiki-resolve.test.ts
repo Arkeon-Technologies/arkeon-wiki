@@ -24,7 +24,6 @@ import { seedResolveTestFixtures, type ResolveFixture } from "./wiki-resolve-see
 
 interface ResolveResponse {
   matches: Array<{ id: string; confidence: number; rationale?: string }>;
-  actor_read_level: number;
 }
 
 async function resolveCall(apiKey: string, body: Record<string, unknown>): Promise<ResolveResponse> {
@@ -44,10 +43,7 @@ describe("resolve — end-to-end with live LLM", () => {
   let fx: ResolveFixture;
 
   beforeAll(async () => {
-    const actor = await createActor(adminApiKey, {
-      maxReadLevel: 2,
-      maxWriteLevel: 2,
-    });
+    const actor = await createActor(adminApiKey);
     actorKey = actor.apiKey;
     fx = await seedResolveTestFixtures(actorKey);
     // eslint-disable-next-line no-console

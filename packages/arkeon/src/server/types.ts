@@ -6,10 +6,6 @@ export interface Actor {
   apiKeyId: string;
   keyPrefix: string;
   label: string | null;
-  maxReadLevel: number;
-  maxWriteLevel: number;
-  isAdmin: boolean;
-  canPublishPublic: boolean;
 }
 
 export interface AppBindings {

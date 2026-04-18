@@ -14,7 +14,7 @@
 import { createRoute, z } from "@hono/zod-openapi";
 
 import { requireActor, parseJsonBody } from "../lib/http";
-import { requireSpaceRole, resolveDefaultSpace } from "../lib/spaces";
+import { fetchSpaceForActor, resolveDefaultSpace } from "../lib/spaces";
 import { isLlmConfigured } from "../lib/llm";
 import { ApiError } from "../lib/errors";
 import { generateUlid } from "../lib/ids";
@@ -26,7 +26,6 @@ import { backgroundTask } from "../lib/background";
 import { parseWikiLinks, WikiLinkParseError, type ParsedLink } from "../lib/wiki-links";
 import { resolveLinks } from "../lib/wiki-resolve";
 import {
-  ClassificationLevel,
   EntityIdParam,
   EntitySchema,
   errorResponses,
@@ -63,7 +62,6 @@ const createWikiRoute = createRoute({
   "x-arke-auth": "required",
   "x-arke-related": ["POST /resolve", "GET /help/guide/wiki"],
   "x-arke-rules": [
-    "Requires contributor role or above on the target space",
     "All [[entity:ULID]] links must reference existing visible entities — 404 otherwise",
     "[[resolve:...]] links soft-degrade to placeholders on LLM miss / no-match — the wiki still publishes with resolve_warnings",
     "Returns 409 if a wiki with the same normalized label or alias already exists in the space",
@@ -113,8 +111,6 @@ const createWikiRoute = createRoute({
           space_id: EntityIdParam
             .optional()
             .describe("Space to create the wiki in. Optional — defaults to the only space the actor can contribute to. 400 if ambiguous (multiple candidates) or none."),
-          read_level: ClassificationLevel.optional().default(1),
-          write_level: ClassificationLevel.optional().default(1),
           depth: z
             .number()
             .int()
@@ -180,8 +176,6 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   const aliasesRaw = body.aliases;
   const extraPropertiesRaw = body.properties;
   const space_id_input = body.space_id;
-  const read_level = typeof body.read_level === "number" ? body.read_level : 1;
-  const write_level = typeof body.write_level === "number" ? body.write_level : 1;
   const depth = typeof body.depth === "number" ? body.depth : 0;
 
   if (!content || typeof content !== "string") {
@@ -223,8 +217,11 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
       ? space_id_input
       : await resolveDefaultSpace(actor);
 
-  // --- Auth: require contributor on the target space ---
-  await requireSpaceRole(sql, actor, space_id, "contributor");
+  // --- Verify target space exists ---
+  const targetSpace = await fetchSpaceForActor(actor, space_id);
+  if (!targetSpace) {
+    throw new ApiError(404, "not_found", "Space not found");
+  }
 
   // --- Parse links ---
   let links: ParsedLink[];
@@ -350,10 +347,10 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
     const [wiki] = await tx`
       INSERT INTO entities (
         id, kind, type, ver, properties, owner_id,
-        read_level, write_level, edited_by, note, created_at, updated_at
+        edited_by, note, created_at, updated_at
       ) VALUES (
         ${wikiId}, 'entity', 'wiki', 1, ${wikiProperties}::jsonb, ${actor.id},
-        ${read_level}, ${write_level}, ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
+        ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
       ) RETURNING *
     `;
 
@@ -384,10 +381,10 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
       await tx`
         INSERT INTO entities (
           id, kind, type, ver, properties, owner_id,
-          read_level, write_level, edited_by, note, created_at, updated_at
+          edited_by, note, created_at, updated_at
         ) VALUES (
           ${phId}, 'entity', 'placeholder', 1, ${phProps}::jsonb, ${actor.id},
-          ${read_level}, ${write_level}, ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
+          ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
         )
       `;
 
@@ -470,10 +467,10 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
       await tx`
         INSERT INTO entities (
           id, kind, type, ver, properties, owner_id,
-          read_level, write_level, edited_by, note, created_at, updated_at
+          edited_by, note, created_at, updated_at
         ) VALUES (
           ${phId}, 'entity', 'placeholder', 1, ${phProps}::jsonb, ${actor.id},
-          ${read_level}, ${write_level}, ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
+          ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
         )
       `;
 
@@ -506,16 +503,12 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
         await tx`
           INSERT INTO entities (
             id, kind, type, ver, properties, owner_id,
-            read_level, write_level, edited_by, note, created_at, updated_at
-          )
-          SELECT
+            edited_by, note, created_at, updated_at
+          ) VALUES (
             ${relId}, 'relationship', 'relationship', 1, ${relProps}::jsonb,
             ${actor.id},
-            GREATEST(src.read_level, tgt.read_level),
-            GREATEST(src.write_level, tgt.write_level),
             ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
-          FROM entities src, entities tgt
-          WHERE src.id = ${wikiId} AND tgt.id = ${t.targetId}
+          )
         `;
 
         // Insert edge

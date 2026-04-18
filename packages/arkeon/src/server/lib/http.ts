@@ -15,14 +15,6 @@ export function requireActor(c: Context<AppBindings>) {
   return actor;
 }
 
-export function requireAdmin(c: Context<AppBindings>) {
-  const actor = requireActor(c);
-  if (!actor.isAdmin) {
-    throw new ApiError(403, "forbidden", "Admin access required");
-  }
-  return actor;
-}
-
 export function parseLimit(
   c: Context<AppBindings>,
   options: {

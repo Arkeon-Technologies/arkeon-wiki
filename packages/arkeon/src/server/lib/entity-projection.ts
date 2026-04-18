@@ -68,8 +68,6 @@ export function projectEntity<T extends Record<string, unknown>>(entity: T, proj
       type: entity.type,
       ver: entity.ver,
       owner_id: entity.owner_id,
-      read_level: entity.read_level,
-      write_level: entity.write_level,
       properties: {
         label: properties.label,
       },

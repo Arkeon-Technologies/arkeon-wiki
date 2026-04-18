@@ -2,24 +2,14 @@
 -- Auth Tables
 -- =============================================================================
 --
--- Authentication via Ed25519 key pairs and API keys.
--- No PoW challenges — system is invite-only for now.
+-- Authentication via API keys.
 --
 -- Flow:
---   1. Admin creates actor and API key
+--   1. First start generates admin API key
 --   2. Day-to-day: X-API-Key: ak_xxx or uk_xxx (also supports Authorization: ApiKey <key>)
---   3. Lost keys: admin issues new key
+--   3. Lost keys: generate new key
 --
 -- =============================================================================
-
--- Ed25519 public key → actor ID mapping (one per actor)
-CREATE TABLE agent_keys (
-  actor_id   TEXT PRIMARY KEY REFERENCES actors(id),
-  public_key TEXT NOT NULL UNIQUE,                         -- base64-encoded Ed25519 public key
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_agent_keys_pubkey ON agent_keys(public_key);
 
 -- API keys
 CREATE TABLE api_keys (
@@ -37,5 +27,4 @@ CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 CREATE INDEX IF NOT EXISTS idx_api_keys_actor ON api_keys(actor_id);
 
 -- Grants
-GRANT SELECT, INSERT, UPDATE, DELETE ON agent_keys TO arke_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON api_keys TO arke_app;

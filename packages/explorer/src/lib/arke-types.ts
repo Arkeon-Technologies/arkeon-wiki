@@ -32,8 +32,6 @@ export interface ArkeEntity {
   updated_at: string
   owner_id?: string
   space_ids?: string[]
-  read_level?: number
-  write_level?: number
 }
 
 export interface LoadedEntity {

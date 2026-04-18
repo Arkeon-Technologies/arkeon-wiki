@@ -10,12 +10,8 @@ import { parseProjection, projectEntity } from "../lib/entity-projection";
 import {
   assertBodyObject,
   addEntityToSpaceQuery,
-  grantEntityPermissionQuery,
-  InlinePermissionGrant,
-  validatePermissionGrant,
   type EntityRecord,
 } from "../lib/entities";
-import { requireSpaceRole } from "../lib/spaces";
 import { ApiError } from "../lib/errors";
 import {
   requireActor,
@@ -29,7 +25,6 @@ import { indexEntity, indexEntityById, removeEntities, removeEntity } from "../l
 import { fetchRelationshipContext } from "../lib/relationship-context";
 import { createRouter } from "../lib/openapi";
 import {
-  ClassificationLevel,
   ExpandedEntitySchema,
   DateTimeSchema,
   EntityIdParam,
@@ -58,15 +53,6 @@ type VersionRow = {
   created_at: string;
 };
 
-const PermissionGrantSchema = z.object({
-  entity_id: EntityIdParam,
-  grantee_type: z.enum(["actor"]),
-  grantee_id: z.string(),
-  role: z.enum(["admin", "editor"]),
-  granted_by: EntityIdParam,
-  granted_at: DateTimeSchema,
-});
-
 const VersionSchema = z.object({
   entity_id: EntityIdParam.optional(),
   ver: z.number().int(),
@@ -94,7 +80,6 @@ const listEntitiesRoute = createRoute({
   "x-arke-auth": "optional",
   "x-arke-related": ["GET /search", "GET /wiki/{id}"],
   "x-arke-rules": [
-    "Results filtered by your classification clearance",
     "If space_id is provided, only entities belonging to that space are returned",
   ],
   request: {
@@ -124,7 +109,7 @@ const getEntityRoute = createRoute({
     "PUT /wiki/{id}",
     "GET /wiki/{id}/versions",
   ],
-  "x-arke-rules": ["Requires read_level clearance >= entity's read_level", "Returns 404 if entity is not visible to you"],
+  "x-arke-rules": ["Returns 404 if entity does not exist"],
   request: {
     params: entityIdParams(),
     query: z.object({
@@ -162,7 +147,7 @@ const updateEntityRoute = createRoute({
   summary: "Update entity properties",
   "x-arke-auth": "required",
   "x-arke-related": ["GET /wiki/{id}", "GET /wiki/{id}/versions"],
-  "x-arke-rules": ["Only the owner, an entity editor, or an entity admin may update", "Requires write_level clearance >= entity's write_level", "Optimistic concurrency: must pass current ver to update", "Properties are shallow-merged: only provided keys are updated, omitted keys are preserved", "remove_properties deletes keys by name after the merge, so removals take precedence over additions"],
+  "x-arke-rules": ["Only the owner or an admin may update", "Optimistic concurrency: must pass current ver to update", "Properties are shallow-merged: only provided keys are updated, omitted keys are preserved", "remove_properties deletes keys by name after the merge, so removals take precedence over additions"],
   request: {
     params: entityIdParams(),
     body: {
@@ -193,7 +178,7 @@ const deleteEntityRoute = createRoute({
   tags: ["Wiki"],
   summary: "Delete an entity",
   "x-arke-auth": "required",
-  "x-arke-rules": ["Only the owner, an entity admin, or a system admin may delete", "Requires write_level clearance >= entity's write_level"],
+  "x-arke-rules": ["Only the owner or an admin may delete"],
   request: { params: entityIdParams() },
   responses: {
     204: { description: "Entity deleted" },
@@ -235,136 +220,6 @@ const bulkDeleteEntitiesRoute = createRoute({
   },
 });
 
-const changeLevelRoute = createRoute({
-  method: "put",
-  path: "/{id}/level",
-  operationId: "changeWikiLevel",
-  tags: ["Wiki"],
-  summary: "Change entity classification levels",
-  "x-arke-auth": "required",
-  "x-arke-rules": ["Only the owner, an entity editor, or an entity admin may change levels", "Cannot set read_level above your own max_read_level", "Cannot set write_level above your own max_write_level", "Setting read_level to PUBLIC (0) requires can_publish_public flag"],
-  request: {
-    params: entityIdParams(),
-    body: {
-      required: true,
-      content: jsonContent(
-        z.object({
-          read_level: ClassificationLevel.optional(),
-          write_level: ClassificationLevel.optional(),
-        }),
-      ),
-    },
-  },
-  responses: {
-    200: {
-      description: "Classification updated",
-      content: jsonContent(EntityResponse),
-    },
-    ...errorResponses([400, 401, 403, 404]),
-  },
-});
-
-const getPermissionsRoute = createRoute({
-  method: "get",
-  path: "/{id}/permissions",
-  operationId: "getWikiPermissions",
-  tags: ["Wiki"],
-  summary: "List permission grants on an entity",
-  "x-arke-auth": "required",
-  "x-arke-rules": ["Requires read_level clearance >= entity's read_level"],
-  request: { params: entityIdParams() },
-  responses: {
-    200: {
-      description: "Entity permissions",
-      content: jsonContent(
-        z.object({
-          owner_id: EntityIdParam,
-          permissions: z.array(PermissionGrantSchema),
-        }),
-      ),
-    },
-    ...errorResponses([401, 404]),
-  },
-});
-
-const grantPermissionRoute = createRoute({
-  method: "post",
-  path: "/{id}/permissions",
-  operationId: "grantWikiPermission",
-  tags: ["Wiki"],
-  summary: "Grant a role on an entity (owner/admin only, enforced by RLS)",
-  "x-arke-auth": "required",
-  "x-arke-rules": ["Only the entity owner, an entity admin, or a system admin may grant permissions"],
-  request: {
-    params: entityIdParams(),
-    body: {
-      required: true,
-      content: jsonContent(
-        z.object({
-          grantee_type: z.enum(["actor"]),
-          grantee_id: z.string(),
-          role: z.enum(["admin", "editor"]),
-        }),
-      ),
-    },
-  },
-  responses: {
-    201: {
-      description: "Permission granted",
-      content: jsonContent(z.object({ permission: PermissionGrantSchema })),
-    },
-    ...errorResponses([400, 401, 403, 404]),
-  },
-});
-
-const revokePermissionRoute = createRoute({
-  method: "delete",
-  path: "/{id}/permissions/{granteeId}",
-  operationId: "revokeWikiPermission",
-  tags: ["Wiki"],
-  summary: "Revoke a role from an actor",
-  "x-arke-auth": "required",
-  "x-arke-rules": ["Only the entity owner, an entity admin, or a system admin may revoke permissions"],
-  request: {
-    params: z.object({
-      id: pathParam("id", EntityIdParam, "Entity ULID"),
-      granteeId: pathParam("granteeId", z.string(), "Grantee actor ID"),
-    }),
-  },
-  responses: {
-    204: { description: "Permission revoked" },
-    ...errorResponses([401, 403, 404]),
-  },
-});
-
-const transferOwnerRoute = createRoute({
-  method: "put",
-  path: "/{id}/owner",
-  operationId: "transferWikiOwner",
-  tags: ["Wiki"],
-  summary: "Transfer entity ownership",
-  "x-arke-auth": "required",
-  "x-arke-rules": ["Only the current owner or a system admin may transfer ownership", "Previous owner loses all access unless they have a separate permission grant"],
-  request: {
-    params: entityIdParams(),
-    body: {
-      required: true,
-      content: jsonContent(
-        z.object({
-          owner_id: EntityIdParam.describe("New owner actor ULID"),
-        }),
-      ),
-    },
-  },
-  responses: {
-    200: {
-      description: "Ownership transferred",
-      content: jsonContent(EntityResponse),
-    },
-    ...errorResponses([400, 401, 403, 404]),
-  },
-});
-
 const listVersionsRoute = createRoute({
   method: "get",
   path: "/{id}/versions",
@@ -372,7 +227,7 @@ const listVersionsRoute = createRoute({
   tags: ["Wiki"],
   summary: "List version history",
   "x-arke-auth": "optional",
-  "x-arke-rules": ["Requires read_level clearance >= entity's read_level"],
+  "x-arke-rules": [],
   request: {
     params: entityIdParams(),
     query: paginationQuerySchema(50, 200),
@@ -395,7 +250,6 @@ const mergeEntityRoute = createRoute({
   "x-arke-auth": "required",
   "x-arke-related": ["GET /wiki/{id}", "DELETE /wiki/{id}"],
   "x-arke-rules": [
-    "Requires admin access on both source and target entities",
     "Both entities must have the same kind (entity or relationship)",
     "If merging relationships, both must connect the same source and target entities",
     "Source entity is deleted after merge; a redirect is created from source ID to target ID",
@@ -431,7 +285,7 @@ const getVersionRoute = createRoute({
   tags: ["Wiki"],
   summary: "Get a specific version snapshot",
   "x-arke-auth": "optional",
-  "x-arke-rules": ["Requires read_level clearance >= entity's read_level"],
+  "x-arke-rules": [],
   request: {
     params: z.object({
       id: pathParam("id", EntityIdParam, "Entity ULID"),
@@ -460,7 +314,6 @@ const mergeBatchRoute = createRoute({
   "x-arke-auth": "required",
   "x-arke-related": ["POST /wiki/{id}/merge", "POST /wiki/bulk"],
   "x-arke-rules": [
-    "Requires admin access on all entities in every group",
     "All entities in a group must have the same kind (entity or relationship)",
     "Entity with richest properties is auto-selected as merge target",
     "Maximum 100 groups per request, 500 entities per group",
@@ -517,7 +370,7 @@ const bulkGetEntitiesRoute = createRoute({
     "Use view=expanded to include relationships with counterpart summaries.",
   "x-arke-auth": "optional",
   "x-arke-related": ["GET /wiki/{id}", "GET /search"],
-  "x-arke-rules": ["Results filtered by your classification clearance"],
+  "x-arke-rules": [],
   request: {
     body: {
       required: true,
@@ -595,7 +448,7 @@ wikisRouter.openapi(getEntityRoute, async (c) => {
   const entityId = c.req.param("id");
   const sql = createSql();
 
-  // RLS handles classification filtering — just SELECT
+  // Simple SELECT — actor context is set for any future RLS needs
   const results = await sql.transaction([
     ...setActorContext(sql, actor),
     sql`SELECT e.*,
@@ -699,7 +552,7 @@ wikisRouter.openapi(updateEntityRoute, async (c) => {
   const verIdx = paramIdx + 4;
   params.push(actor.id, note, now, entityId, expectedVer);
 
-  // RLS enforces: classification ceiling + ACL (owner/editor/admin/is_admin)
+  // Actor context set for ownership checks
   const results = await sql.transaction([
     ...setActorContext(sql, actor),
     sql.query(
@@ -732,14 +585,6 @@ wikisRouter.openapi(updateEntityRoute, async (c) => {
       }
       throw new ApiError(403, "forbidden", "You do not have write access on this entity");
     }
-    // Entity not visible — could be 403 or 404
-    const exists = await sql.transaction([
-      sql`SELECT set_config('app.actor_id', '', true)`,
-      sql`SELECT entity_exists(${entityId}) AS e`,
-    ]);
-    if ((exists[1] as Array<{ e: boolean }>)[0]?.e) {
-      throw new ApiError(403, "forbidden", "You do not have access to this entity");
-    }
     throw new ApiError(404, "not_found", "Entity not found");
   }
 
@@ -764,20 +609,13 @@ wikisRouter.openapi(deleteEntityRoute, async (c) => {
   const entityId = c.req.param("id");
   const sql = createSql();
 
-  // RLS enforces: classification ceiling + admin ACL (owner/admin/is_admin)
+  // Actor context set for ownership checks
   const results = await sql.transaction([
     ...setActorContext(sql, actor),
     sql`DELETE FROM entities WHERE id = ${entityId} RETURNING id`,
   ]);
 
   if ((results[results.length - 1] as Array<{ id: string }>).length === 0) {
-    const exists = await sql.transaction([
-      sql`SELECT set_config('app.actor_id', '', true)`,
-      sql`SELECT entity_exists(${entityId}) AS e`,
-    ]);
-    if ((exists[1] as Array<{ e: boolean }>)[0]?.e) {
-      throw new ApiError(403, "forbidden", "You do not have access to this entity");
-    }
     throw new ApiError(404, "not_found", "Entity not found");
   }
 
@@ -829,146 +667,6 @@ wikisRouter.openapi(bulkDeleteEntitiesRoute, async (c) => {
   return c.json({ deleted: ids.length, ids }, 200);
 });
 
-wikisRouter.openapi(changeLevelRoute, async (c) => {
-  const actor = requireActor(c);
-  const entityId = c.req.param("id");
-  const body = await parseJsonBody<Record<string, unknown>>(c);
-  const sql = createSql();
-
-  // Validate levels
-  if (typeof body.read_level === "number" && body.read_level > actor.maxReadLevel) {
-    throw new ApiError(403, "forbidden", "Cannot set read_level above your clearance");
-  }
-  if (typeof body.write_level === "number" && body.write_level > actor.maxWriteLevel) {
-    throw new ApiError(403, "forbidden", "Cannot set write_level above your clearance");
-  }
-  if (typeof body.read_level === "number" && body.read_level === 0 && !actor.canPublishPublic) {
-    throw new ApiError(403, "forbidden", "Cannot set read_level to PUBLIC without can_publish_public");
-  }
-
-  // RLS on UPDATE enforces ACL (owner/editor/admin)
-  const results = await sql.transaction([
-    ...setActorContext(sql, actor),
-    sql.query(
-      `UPDATE entities
-       SET read_level = COALESCE($1, read_level),
-           write_level = COALESCE($2, write_level)
-       WHERE id = $3
-       RETURNING *`,
-      [
-        typeof body.read_level === "number" ? body.read_level : null,
-        typeof body.write_level === "number" ? body.write_level : null,
-        entityId,
-      ],
-    ),
-  ]);
-
-  const updated = (results[results.length - 1] as EntityRecord[])[0];
-  if (!updated) {
-    throw new ApiError(404, "not_found", "Entity not found or access denied");
-  }
-
-  backgroundTask(indexEntity(updated));
-
-  return c.json({ entity: updated }, 200);
-});
-
-wikisRouter.openapi(getPermissionsRoute, async (c) => {
-  const actor = requireActor(c);
-  const entityId = c.req.param("id");
-  const sql = createSql();
-
-  const results = await sql.transaction([
-    ...setActorContext(sql, actor),
-    sql`SELECT owner_id FROM entities WHERE id = ${entityId} LIMIT 1`,
-    sql`SELECT * FROM entity_permissions WHERE entity_id = ${entityId} ORDER BY granted_at`,
-  ]);
-
-  const entity = (results[results.length - 2] as Array<{ owner_id: string }>)[0];
-  if (!entity) {
-    throw new ApiError(404, "not_found", "Entity not found");
-  }
-
-  return c.json({
-    owner_id: entity.owner_id,
-    permissions: results[results.length - 1],
-  }, 200);
-});
-
-wikisRouter.openapi(grantPermissionRoute, async (c) => {
-  const actor = requireActor(c);
-  const entityId = c.req.param("id");
-  const body = await parseJsonBody<Record<string, unknown>>(c);
-  const sql = createSql();
-
-  const grant = validatePermissionGrant(body);
-
-  // RLS on entity_permissions INSERT enforces: owner or admin
-  const results = await sql.transaction([
-    ...setActorContext(sql, actor),
-    grantEntityPermissionQuery(sql, entityId, grant.grantee_type, grant.grantee_id, grant.role, actor.id),
-  ]);
-
-  const perm = (results[results.length - 1] as Array<Record<string, unknown>>)[0];
-  if (!perm) {
-    throw new ApiError(403, "forbidden", "Only the entity owner or an admin can grant permissions");
-  }
-
-  return c.json({ permission: perm }, 201);
-});
-
-wikisRouter.openapi(revokePermissionRoute, async (c) => {
-  const actor = requireActor(c);
-  const entityId = c.req.param("id");
-  const granteeId = c.req.param("granteeId");
-  const sql = createSql();
-
-  // RLS on entity_permissions DELETE enforces: owner or admin
-  const results = await sql.transaction([
-    ...setActorContext(sql, actor),
-    sql`DELETE FROM entity_permissions WHERE entity_id = ${entityId} AND grantee_id = ${granteeId} RETURNING entity_id`,
-  ]);
-
-  if ((results[results.length - 1] as Array<Record<string, unknown>>).length === 0) {
-    throw new ApiError(404, "not_found", "Permission not found");
-  }
-
-  return new Response(null, { status: 204 });
-});
-
-wikisRouter.openapi(transferOwnerRoute, async (c) => {
-  const actor = requireActor(c);
-  const entityId = c.req.param("id");
-  const body = await parseJsonBody<Record<string, unknown>>(c);
-  if (typeof body.owner_id !== "string") {
-    throw new ApiError(400, "missing_required_field", "Missing owner_id");
-  }
-
-  const sql = createSql();
-
-  // First verify current ownership (only owner can transfer)
-  const results = await sql.transaction([
-    ...setActorContext(sql, actor),
-    sql`SELECT owner_id FROM entities WHERE id = ${entityId} LIMIT 1`,
-  ]);
-
-  const entity = (results[results.length - 1] as Array<{ owner_id: string }>)[0];
-  if (!entity) {
-    throw new ApiError(404, "not_found", "Entity not found");
-  }
-  if (entity.owner_id !== actor.id && !actor.isAdmin) {
-    throw new ApiError(403, "forbidden", "Only the owner can transfer ownership");
-  }
-
-  const updateResults = await sql.transaction([
-    ...setActorContext(sql, actor),
-    sql`UPDATE entities SET owner_id = ${body.owner_id} WHERE id = ${entityId} RETURNING *`,
-  ]);
-
-  const updated = (updateResults[updateResults.length - 1] as EntityRecord[])[0];
-  return c.json({ entity: updated }, 200);
-});
-
 wikisRouter.openapi(listVersionsRoute, async (c) => {
   const actor = c.get("actor");
   const entityId = c.req.param("id");
@@ -976,7 +674,7 @@ wikisRouter.openapi(listVersionsRoute, async (c) => {
   const cursor = parseCursorParam(c);
   const sql = createSql();
 
-  // RLS on entity_versions inherits parent entity classification
+  // Actor context set for entity_versions access
   const results = await sql.transaction([
     ...setActorContext(sql, actor),
     sql`
@@ -1059,7 +757,7 @@ wikisRouter.openapi(mergeEntityRoute, async (c) => {
   const results = await sql.transaction([
     ...setActorContext(sql, actor),
 
-    // Fetch both entities (RLS applies classification check)
+    // Fetch both entities
     sql.query(
       `SELECT * FROM entities WHERE id = ANY($1)`,
       [[targetId, sourceId]],
@@ -1087,44 +785,6 @@ wikisRouter.openapi(mergeEntityRoute, async (c) => {
   // Validate same kind
   if (source.kind !== target.kind) {
     throw new ApiError(400, "invalid_body", "Cannot merge entities of different kinds");
-  }
-
-  // Validate admin access on both
-  const isTargetAdmin = target.owner_id === actor.id || actor.isAdmin;
-  const isSourceAdmin = source.owner_id === actor.id || actor.isAdmin;
-
-  if (!isTargetAdmin || !isSourceAdmin) {
-    // Check entity_permissions for admin grants (only for the ones not already covered)
-    const permChecks = await sql.transaction([
-      ...setActorContext(sql, actor),
-      ...(!isTargetAdmin ? [sql.query(
-        `SELECT 1 FROM entity_permissions WHERE entity_id = $1 AND role = 'admin'
-         AND grantee_type = 'actor' AND grantee_id = $2
-         LIMIT 1`,
-        [targetId, actor.id],
-      )] : []),
-      ...(!isSourceAdmin ? [sql.query(
-        `SELECT 1 FROM entity_permissions WHERE entity_id = $1 AND role = 'admin'
-         AND grantee_type = 'actor' AND grantee_id = $2
-         LIMIT 1`,
-        [sourceId, actor.id],
-      )] : []),
-    ]);
-
-    let idx = ctxLen;
-    if (!isTargetAdmin) {
-      const targetPerm = (permChecks[idx] as Array<Record<string, unknown>>);
-      if (targetPerm.length === 0) {
-        throw new ApiError(403, "forbidden", "Requires admin access on both entities");
-      }
-      idx++;
-    }
-    if (!isSourceAdmin) {
-      const sourcePerm = (permChecks[idx] as Array<Record<string, unknown>>);
-      if (sourcePerm.length === 0) {
-        throw new ApiError(403, "forbidden", "Requires admin access on both entities");
-      }
-    }
   }
 
   // If relationships, validate same endpoints
@@ -1283,33 +943,6 @@ wikisRouter.openapi(mergeBatchRoute, async (c) => {
   const missing = allIds.filter((id) => !entityMap.has(id));
   if (missing.length > 0) {
     throw new ApiError(404, "not_found", `Entities not found: ${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ` (+${missing.length - 5} more)` : ""}`);
-  }
-
-  // Verify admin access on all entities
-  const nonOwnedIds = allIds.filter((id) => {
-    const e = entityMap.get(id)!;
-    return e.owner_id !== actor.id && !actor.isAdmin;
-  });
-
-  if (nonOwnedIds.length > 0) {
-    // Batch check permissions for non-owned entities
-    const permResults = await sql.transaction([
-      ...setActorContext(sql, actor),
-      sql.query(
-        `SELECT entity_id FROM entity_permissions
-         WHERE entity_id = ANY($1::text[]) AND role = 'admin'
-         AND grantee_type = 'actor' AND grantee_id = $2`,
-        [nonOwnedIds, actor.id],
-      ),
-    ]);
-
-    const permittedIds = new Set(
-      (permResults[ctxLen] as Array<{ entity_id: string }>).map((r) => r.entity_id),
-    );
-    const unauthorized = nonOwnedIds.filter((id) => !permittedIds.has(id));
-    if (unauthorized.length > 0) {
-      throw new ApiError(403, "forbidden", `Admin access required on all entities. Missing for: ${unauthorized.slice(0, 3).join(", ")}${unauthorized.length > 3 ? ` (+${unauthorized.length - 3} more)` : ""}`);
-    }
   }
 
   const now = new Date().toISOString();

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { MeiliSearch } from "meilisearch";
-import type { Actor } from "../types";
 import { withSystemActorContext } from "./actor-context";
 
 const ENTITIES_INDEX = "entities";
@@ -68,8 +67,6 @@ interface MeiliEntityDoc {
   type: string;
   kind: string;
   owner_id: string;
-  read_level: number;
-  write_level: number;
   space_ids: string[];
   updated_at: number;
   created_at: number;
@@ -107,8 +104,6 @@ export function toMeiliDoc(entity: Record<string, unknown>, spaceIds: string[] =
     type: String(entity.type ?? ""),
     kind: String(entity.kind ?? ""),
     owner_id: String(entity.owner_id ?? ""),
-    read_level: typeof entity.read_level === "number" ? entity.read_level : 1,
-    write_level: typeof entity.write_level === "number" ? entity.write_level : 1,
     space_ids: spaceIds,
     updated_at: toUnix(entity.updated_at),
     created_at: toUnix(entity.created_at),
@@ -128,7 +123,7 @@ export async function ensureMeiliIndex(): Promise<void> {
   }
   await c.index(ENTITIES_INDEX).updateSettings({
     searchableAttributes: ["*"],
-    filterableAttributes: ["type", "kind", "owner_id", "read_level", "write_level", "space_ids"],
+    filterableAttributes: ["type", "kind", "owner_id", "space_ids"],
     sortableAttributes: ["updated_at", "created_at"],
   });
 }
@@ -141,9 +136,7 @@ export async function ensureMeiliIndex(): Promise<void> {
  * Fetch the space IDs an entity belongs to.
  *
  * Runs under a system-level RLS context because background indexing is
- * a privileged system operation — the index must reflect every entity
- * regardless of read_level, and `space_entities_select` would otherwise
- * drop rows for level-1+ spaces. See `withSystemActorContext`.
+ * a privileged system operation. See `withSystemActorContext`.
  */
 async function fetchSpaceIds(entityId: string): Promise<string[]> {
   return withSystemActorContext(async (tx) => {
@@ -229,28 +222,16 @@ export interface SearchOptions {
   type?: string;
   kind?: string;
   spaceId?: string;
-  readLevelOverride?: number;
   limit?: number;
   offset?: number;
 }
 
 /**
- * Build Meilisearch filter expressions from search options + actor context.
- * Automatically injects read_level permission filter.
+ * Build Meilisearch filter expressions from search options.
+ * All authenticated actors have full access — no permission filters needed.
  */
-export function buildSearchFilters(actor: Actor | null, options: SearchOptions): string[] {
+export function buildSearchFilters(options: SearchOptions): string[] {
   const filters: string[] = [];
-
-  // Permission filter: actor can only see entities at or below their clearance
-  if (actor) {
-    const maxRead = options.readLevelOverride !== undefined
-      ? Math.min(options.readLevelOverride, actor.maxReadLevel)
-      : actor.maxReadLevel;
-    filters.push(`read_level <= ${maxRead}`);
-  } else {
-    // Unauthenticated: only public entities
-    filters.push(`read_level = 0`);
-  }
 
   // Default: exclude relationships unless explicitly included
   if (options.kind) {

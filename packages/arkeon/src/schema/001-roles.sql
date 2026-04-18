@@ -33,29 +33,11 @@ GRANT USAGE ON SCHEMA public TO arke_app;
 -- Session Context Helper Functions
 -- =============================================================================
 --
--- Middleware sets these per request via SET LOCAL:
---   app.actor_id         — the authenticated actor's ID
---   app.actor_read_level — actor's max_read_level (integer)
---   app.actor_write_level — actor's max_write_level (integer)
---   app.actor_is_admin   — actor's is_admin flag (boolean)
---
--- These helper functions provide safe defaults when context is not set
--- (e.g., unauthenticated requests for PUBLIC content).
+-- Middleware sets per request via SET LOCAL:
+--   app.actor_id — the authenticated actor's ID
 --
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION current_actor_id() RETURNS TEXT AS $$
   SELECT COALESCE(NULLIF(current_setting('app.actor_id', true), ''), NULL);
-$$ LANGUAGE sql STABLE;
-
-CREATE OR REPLACE FUNCTION current_actor_read_level() RETURNS INT AS $$
-  SELECT COALESCE(NULLIF(current_setting('app.actor_read_level', true), '')::int, -1);
-$$ LANGUAGE sql STABLE;
-
-CREATE OR REPLACE FUNCTION current_actor_write_level() RETURNS INT AS $$
-  SELECT COALESCE(NULLIF(current_setting('app.actor_write_level', true), '')::int, -1);
-$$ LANGUAGE sql STABLE;
-
-CREATE OR REPLACE FUNCTION current_actor_is_admin() RETURNS BOOLEAN AS $$
-  SELECT COALESCE(NULLIF(current_setting('app.actor_is_admin', true), '')::boolean, false);
 $$ LANGUAGE sql STABLE;
