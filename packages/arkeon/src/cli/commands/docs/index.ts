@@ -319,7 +319,7 @@ function renderApiReference(): string {
     "",
     "IMPORTANT: API responses wrap objects in a named key. Never access .id directly.",
     "Each endpoint below includes a Response section showing the exact field names and types.",
-    "  Example: resp.entity.id (NOT resp.id) — always use the wrapper key first.",
+    "  Example: resp.wiki.id (NOT resp.id) — always use the wrapper key first.",
     "",
   ];
 

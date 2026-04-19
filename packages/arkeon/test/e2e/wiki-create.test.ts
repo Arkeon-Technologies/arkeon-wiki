@@ -142,8 +142,8 @@ describe("Wiki create", () => {
         actor.apiKey,
       );
       expect(phResponse.status).toBe(200);
-      expect((phBody as any).entity.type).toBe("placeholder");
-      expect((phBody as any).entity.properties.status).toBe("placeholder");
+      expect((phBody as any).wiki.type).toBe("placeholder");
+      expect((phBody as any).wiki.properties.status).toBe("placeholder");
     }
   });
 

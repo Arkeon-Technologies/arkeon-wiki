@@ -69,7 +69,7 @@ describe("Context-rich retrieval", () => {
       );
       expect(response.status).toBe(200);
 
-      const entity = (body as any).entity;
+      const entity = (body as any).wiki;
       expect(entity.id).toBe(personA.id);
       expect(entity.properties.label).toContain("ctx-person-a");
       expect(entity.properties.description).toBe("Intelligence analyst");
@@ -83,7 +83,7 @@ describe("Context-rich retrieval", () => {
         `/wiki/${personA.id}?view=expanded`,
         actor.apiKey,
       );
-      const rels = (body as any).entity._relationships;
+      const rels = (body as any).wiki._relationships;
 
       for (const rel of rels) {
         expect(rel.id).toBeTruthy();
@@ -104,7 +104,7 @@ describe("Context-rich retrieval", () => {
         `/wiki/${personA.id}?view=expanded`,
         actor.apiKey,
       );
-      const rels = (body as any).entity._relationships;
+      const rels = (body as any).wiki._relationships;
       const counterpartLabels = rels.map((r: any) => r.counterpart.properties.label);
 
       // personA has outbound rels to orgEntity, reportEntity, personB
@@ -122,7 +122,7 @@ describe("Context-rich retrieval", () => {
         actor.apiKey,
       );
       expect(response.status).toBe(200);
-      expect((body as any).entity._relationships).toEqual([]);
+      expect((body as any).wiki._relationships).toEqual([]);
     });
 
     test("rel_limit caps the number of relationships returned", async () => {
@@ -130,7 +130,7 @@ describe("Context-rich retrieval", () => {
         `/wiki/${personA.id}?view=expanded&rel_limit=2`,
         actor.apiKey,
       );
-      const entity = (body as any).entity;
+      const entity = (body as any).wiki;
       expect(entity._relationships.length).toBe(2);
       expect(entity._relationships_truncated).toBe(true); // 3 rels, limit 2
     });
@@ -141,7 +141,7 @@ describe("Context-rich retrieval", () => {
         `/wiki/${orgEntity.id}?view=expanded`,
         actor.apiKey,
       );
-      const rels = (body as any).entity._relationships;
+      const rels = (body as any).wiki._relationships;
       const inbound = rels.filter((r: any) => r.direction === "in");
       expect(inbound.length).toBeGreaterThanOrEqual(2);
 
@@ -155,7 +155,7 @@ describe("Context-rich retrieval", () => {
         `/wiki/${personA.id}`,
         actor.apiKey,
       );
-      expect((body as any).entity._relationships).toBeUndefined();
+      expect((body as any).wiki._relationships).toBeUndefined();
     });
 
     test("view=summary does NOT include _relationships", async () => {
@@ -163,7 +163,7 @@ describe("Context-rich retrieval", () => {
         `/wiki/${personA.id}?view=summary`,
         actor.apiKey,
       );
-      expect((body as any).entity._relationships).toBeUndefined();
+      expect((body as any).wiki._relationships).toBeUndefined();
     });
 
     test("404 for nonexistent entity with view=expanded", async () => {

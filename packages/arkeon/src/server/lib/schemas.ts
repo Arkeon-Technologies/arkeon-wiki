@@ -51,7 +51,7 @@ export const EntitySchema = z
 
 export const EntityResponse = z
   .object({
-    entity: EntitySchema,
+    wiki: EntitySchema,
   })
   .openapi("EntityResponse");
 
@@ -262,7 +262,7 @@ export const PageSourceSchema = z
 
 export const PageEntitySchema = z
   .object({
-    entity: EntitySchema,
+    wiki: EntitySchema,
     links_to: z.array(PageLinkSchema).describe("Outgoing relationships from this entity"),
     linked_from: z.array(PageLinkSchema).describe("Incoming relationships to this entity"),
     sources: z.array(PageSourceSchema).describe("Source documents linked to this entity"),

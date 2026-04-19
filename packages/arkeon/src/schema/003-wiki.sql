@@ -40,19 +40,28 @@ CREATE TABLE IF NOT EXISTS space_entities (
 CREATE INDEX IF NOT EXISTS idx_space_entities_entity ON space_entities (entity_id);
 
 -- Trigger: maintain entity_count and last_activity_at on spaces
+-- Only counts entities with kind='entity', not relationships
 CREATE OR REPLACE FUNCTION update_space_stats() RETURNS trigger AS $$
 BEGIN
   IF TG_OP = 'INSERT' THEN
-    UPDATE spaces
-    SET entity_count = entity_count + 1,
-        last_activity_at = NOW()
-    WHERE id = NEW.space_id;
+    IF EXISTS (SELECT 1 FROM entities WHERE id = NEW.entity_id AND kind = 'entity') THEN
+      UPDATE spaces
+      SET entity_count = entity_count + 1,
+          last_activity_at = NOW()
+      WHERE id = NEW.space_id;
+    ELSE
+      UPDATE spaces SET last_activity_at = NOW() WHERE id = NEW.space_id;
+    END IF;
     RETURN NEW;
   ELSIF TG_OP = 'DELETE' THEN
-    UPDATE spaces
-    SET entity_count = GREATEST(entity_count - 1, 0),
-        last_activity_at = NOW()
-    WHERE id = OLD.space_id;
+    IF EXISTS (SELECT 1 FROM entities WHERE id = OLD.entity_id AND kind = 'entity') THEN
+      UPDATE spaces
+      SET entity_count = GREATEST(entity_count - 1, 0),
+          last_activity_at = NOW()
+      WHERE id = OLD.space_id;
+    ELSE
+      UPDATE spaces SET last_activity_at = NOW() WHERE id = OLD.space_id;
+    END IF;
     RETURN OLD;
   END IF;
   RETURN NULL;
@@ -63,6 +72,17 @@ DROP TRIGGER IF EXISTS trg_space_stats ON space_entities;
 CREATE TRIGGER trg_space_stats
 AFTER INSERT OR DELETE ON space_entities
 FOR EACH ROW EXECUTE FUNCTION update_space_stats();
+
+-- Repair existing entity_count values (recompute from actual entity-kind rows)
+UPDATE spaces s
+SET entity_count = COALESCE(sub.cnt, 0)
+FROM (
+  SELECT se.space_id, COUNT(*) AS cnt
+  FROM space_entities se
+  JOIN entities e ON e.id = se.entity_id AND e.kind = 'entity'
+  GROUP BY se.space_id
+) sub
+WHERE s.id = sub.space_id AND s.entity_count != sub.cnt;
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON spaces TO arke_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON space_entities TO arke_app;
@@ -121,7 +141,7 @@ ALTER TABLE entities ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS entities_select ON entities;
 CREATE POLICY entities_select ON entities
-FOR SELECT TO arke_app USING (current_actor_id() IS NOT NULL);
+FOR SELECT TO arke_app USING (true);
 
 DROP POLICY IF EXISTS entities_insert ON entities;
 CREATE POLICY entities_insert ON entities
@@ -142,7 +162,7 @@ ALTER TABLE relationship_edges ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS edges_select ON relationship_edges;
 CREATE POLICY edges_select ON relationship_edges
-FOR SELECT TO arke_app USING (current_actor_id() IS NOT NULL);
+FOR SELECT TO arke_app USING (true);
 
 DROP POLICY IF EXISTS edges_insert ON relationship_edges;
 CREATE POLICY edges_insert ON relationship_edges
@@ -157,7 +177,7 @@ ALTER TABLE entity_versions ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS versions_select ON entity_versions;
 CREATE POLICY versions_select ON entity_versions
-FOR SELECT TO arke_app USING (current_actor_id() IS NOT NULL);
+FOR SELECT TO arke_app USING (true);
 
 DROP POLICY IF EXISTS versions_insert ON entity_versions;
 CREATE POLICY versions_insert ON entity_versions
@@ -175,7 +195,7 @@ ALTER TABLE spaces ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS spaces_select ON spaces;
 CREATE POLICY spaces_select ON spaces
-FOR SELECT TO arke_app USING (current_actor_id() IS NOT NULL);
+FOR SELECT TO arke_app USING (true);
 
 DROP POLICY IF EXISTS spaces_insert ON spaces;
 CREATE POLICY spaces_insert ON spaces
@@ -196,7 +216,7 @@ ALTER TABLE space_entities ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS space_entities_select ON space_entities;
 CREATE POLICY space_entities_select ON space_entities
-FOR SELECT TO arke_app USING (current_actor_id() IS NOT NULL);
+FOR SELECT TO arke_app USING (true);
 
 DROP POLICY IF EXISTS space_entities_insert ON space_entities;
 CREATE POLICY space_entities_insert ON space_entities

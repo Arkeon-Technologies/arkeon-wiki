@@ -59,7 +59,7 @@ describe("Entity Merge", () => {
       },
     });
     expect(response.status).toBe(200);
-    const merged = (body as any).entity;
+    const merged = (body as any).wiki;
     expect(merged.id).toBe(target.id);
     expect(merged.ver).toBe(target.ver + 1);
     // keep_source: source properties replace target properties
@@ -99,8 +99,8 @@ describe("Entity Merge", () => {
       },
     });
     expect(response.status).toBe(200);
-    const merged = (body as any).entity;
-    expect(merged.properties.label).toContain("target-label");
+    const merged = (body as any).wiki;
+    expect(merged.properties.label).toBe("target-label");
     expect(merged.properties.target_only).toBe(true);
     expect(merged.properties.source_only).toBeUndefined();
   });
@@ -125,8 +125,8 @@ describe("Entity Merge", () => {
       },
     });
     expect(response.status).toBe(200);
-    const merged = (body as any).entity;
-    expect(merged.properties.label).toContain("source-label");
+    const merged = (body as any).wiki;
+    expect(merged.properties.label).toBe("source-label");
     expect(merged.properties.source_only).toBe(true);
     expect(merged.properties.target_only).toBeUndefined();
   });
@@ -153,7 +153,7 @@ describe("Entity Merge", () => {
       },
     });
     expect(response.status).toBe(200);
-    const merged = (body as any).entity;
+    const merged = (body as any).wiki;
     expect(merged.properties.target_only).toBe("keep");
     expect(merged.properties.source_only).toBe("keep");
     expect(merged.properties.shared).toBe("from-source"); // source wins
@@ -184,6 +184,71 @@ describe("Entity Merge", () => {
     });
     expect(response.status).toBe(409);
     expect((body as any).error.code).toBe("cas_conflict");
+  });
+
+  // --- Relationship merge ---
+
+  test("merge two relationships with same endpoints", async () => {
+    const entityA = await createEntity(actor.apiKey, "note", { label: uniqueName("a") });
+    const entityB = await createEntity(actor.apiKey, "note", { label: uniqueName("b") });
+
+    const rel1 = await createRelationship(actor.apiKey, entityA.id, "references", entityB.id, {
+      weight: 1,
+      note: "first",
+    });
+    const rel2 = await createRelationship(actor.apiKey, entityA.id, "cites", entityB.id, {
+      weight: 5,
+      note: "second",
+    });
+
+    const targetRelId = rel1.relationship.id;
+    const sourceRelId = rel2.relationship.id;
+    const targetRelVer = rel1.relationship.ver;
+
+    const { response, body } = await jsonRequest(`/wiki/${targetRelId}/merge`, {
+      method: "POST",
+      apiKey: actor.apiKey,
+      json: {
+        source_id: sourceRelId,
+        property_strategy: "keep_source",
+        ver: targetRelVer,
+      },
+    });
+    expect(response.status).toBe(200);
+    const merged = (body as any).wiki;
+    // Relationship properties may be double-string-encoded; unwrap as needed
+    let props = merged.properties;
+    while (typeof props === "string") {
+      props = JSON.parse(props);
+    }
+    expect(props.weight).toBe(5);
+    expect(props.note).toBe("second");
+
+    // Source relationship should be gone
+    const { response: srcResp } = await apiRequest(`/relationships/${sourceRelId}`, {
+      apiKey: actor.apiKey,
+    });
+    expect(srcResp.status).toBe(404);
+  });
+
+  test("400 when merging relationships with different endpoints", async () => {
+    const entityA = await createEntity(actor.apiKey, "note", { label: "a" });
+    const entityB = await createEntity(actor.apiKey, "note", { label: "b" });
+    const entityC = await createEntity(actor.apiKey, "note", { label: "c" });
+
+    const rel1 = await createRelationship(actor.apiKey, entityA.id, "references", entityB.id);
+    const rel2 = await createRelationship(actor.apiKey, entityA.id, "references", entityC.id);
+
+    const { response, body } = await jsonRequest(`/wiki/${rel1.relationship.id}/merge`, {
+      method: "POST",
+      apiKey: actor.apiKey,
+      json: {
+        source_id: rel2.relationship.id,
+        ver: rel1.relationship.ver,
+      },
+    });
+    expect(response.status).toBe(400);
+    expect((body as any).error.message).toContain("different endpoints");
   });
 
   // --- Edge deduplication ---

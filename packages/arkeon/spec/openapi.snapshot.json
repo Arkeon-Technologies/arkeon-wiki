@@ -122,12 +122,12 @@
       },
       "EntityResponse": {
         "properties": {
-          "entity": {
+          "wiki": {
             "$ref": "#/components/schemas/Entity"
           }
         },
         "required": [
-          "entity"
+          "wiki"
         ],
         "type": "object"
       },
@@ -287,9 +287,6 @@
       },
       "PageEntity": {
         "properties": {
-          "entity": {
-            "$ref": "#/components/schemas/Entity"
-          },
           "linked_from": {
             "description": "Incoming relationships to this entity",
             "items": {
@@ -314,10 +311,13 @@
               "$ref": "#/components/schemas/PageSource"
             },
             "type": "array"
+          },
+          "wiki": {
+            "$ref": "#/components/schemas/Entity"
           }
         },
         "required": [
-          "entity",
+          "wiki",
           "links_to",
           "linked_from",
           "sources",
@@ -2205,6 +2205,261 @@
         "x-arke-rules": []
       }
     },
+    "/ops": {
+      "post": {
+        "description": "Compatibility endpoint for structured ingestion. Supports `entity` and `relate` operations, `defaults.space_id`, and `source.entity_id` provenance. Wiki authoring remains the preferred path for narrative pages.",
+        "operationId": "postOps",
+        "parameters": [
+          {
+            "description": "Validate and plan IDs without writing",
+            "in": "query",
+            "name": "dry_run",
+            "required": false,
+            "schema": {
+              "description": "Validate and plan IDs without writing",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "defaults": {
+                    "properties": {
+                      "space_id": {
+                        "description": "ULID string",
+                        "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "format": {
+                    "enum": [
+                      "arke.ops/v1"
+                    ],
+                    "type": "string"
+                  },
+                  "ops": {
+                    "items": {
+                      "$ref": "#/components/schemas/JsonObject"
+                    },
+                    "maxItems": 1000,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "source": {
+                    "properties": {
+                      "entity_id": {
+                        "description": "ULID string",
+                        "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "format",
+                  "ops"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "committed": {
+                      "type": "boolean"
+                    },
+                    "edges": {
+                      "items": {
+                        "properties": {
+                          "id": {
+                            "description": "ULID string",
+                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                            "type": "string"
+                          },
+                          "predicate": {
+                            "type": "string"
+                          },
+                          "ref": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "source": {
+                            "description": "ULID string",
+                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                            "type": "string"
+                          },
+                          "target": {
+                            "description": "ULID string",
+                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "ref",
+                          "id",
+                          "source",
+                          "predicate",
+                          "target"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "entities": {
+                      "items": {
+                        "properties": {
+                          "action": {
+                            "enum": [
+                              "created"
+                            ],
+                            "type": "string"
+                          },
+                          "id": {
+                            "description": "ULID string",
+                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "ref": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "type": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "ref",
+                          "id",
+                          "type",
+                          "label",
+                          "action"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "errors": {
+                      "items": {},
+                      "type": "array"
+                    },
+                    "format": {
+                      "enum": [
+                        "arke.ops/v1"
+                      ],
+                      "type": "string"
+                    },
+                    "stats": {
+                      "properties": {
+                        "edges": {
+                          "type": "integer"
+                        },
+                        "entities": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "entities",
+                        "edges"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "format",
+                    "committed",
+                    "entities",
+                    "edges",
+                    "stats"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Ops committed or dry-run planned"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          }
+        },
+        "summary": "Bulk ingest entities and relationships",
+        "tags": [
+          "Ops"
+        ],
+        "x-arke-auth": "required",
+        "x-arke-rules": [
+          "If defaults.space_id is provided, the space must exist",
+          "source.entity_id creates extracted_from relationships from every created entity and relationship to the source entity"
+        ]
+      }
+    },
     "/relationships/{relId}": {
       "get": {
         "operationId": "getRelationship",
@@ -2612,10 +2867,48 @@
                       "items": {
                         "anyOf": [
                           {
-                            "$ref": "#/components/schemas/Entity"
+                            "allOf": [
+                              {
+                                "$ref": "#/components/schemas/Entity"
+                              },
+                              {
+                                "properties": {
+                                  "space_ids": {
+                                    "description": "Space ULIDs this entity belongs to",
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "space_ids"
+                                ],
+                                "type": "object"
+                              }
+                            ]
                           },
                           {
-                            "$ref": "#/components/schemas/ExpandedEntity"
+                            "allOf": [
+                              {
+                                "$ref": "#/components/schemas/ExpandedEntity"
+                              },
+                              {
+                                "properties": {
+                                  "space_ids": {
+                                    "description": "Space ULIDs this entity belongs to",
+                                    "items": {
+                                      "type": "string"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "space_ids"
+                                ],
+                                "type": "object"
+                              }
+                            ]
                           }
                         ]
                       },
@@ -2632,7 +2925,7 @@
                 }
               }
             },
-            "description": "Search results ordered by relevance. When view=expanded, each result includes _relationships and _relationships_truncated."
+            "description": "Search results ordered by relevance. When view=expanded, each result includes _relationships and _relationships_truncated. Each result includes space_ids."
           },
           "400": {
             "content": {
@@ -2767,10 +3060,48 @@
                             "items": {
                               "anyOf": [
                                 {
-                                  "$ref": "#/components/schemas/Entity"
+                                  "allOf": [
+                                    {
+                                      "$ref": "#/components/schemas/Entity"
+                                    },
+                                    {
+                                      "properties": {
+                                        "space_ids": {
+                                          "description": "Space ULIDs this entity belongs to",
+                                          "items": {
+                                            "type": "string"
+                                          },
+                                          "type": "array"
+                                        }
+                                      },
+                                      "required": [
+                                        "space_ids"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  ]
                                 },
                                 {
-                                  "$ref": "#/components/schemas/ExpandedEntity"
+                                  "allOf": [
+                                    {
+                                      "$ref": "#/components/schemas/ExpandedEntity"
+                                    },
+                                    {
+                                      "properties": {
+                                        "space_ids": {
+                                          "description": "Space ULIDs this entity belongs to",
+                                          "items": {
+                                            "type": "string"
+                                          },
+                                          "type": "array"
+                                        }
+                                      },
+                                      "required": [
+                                        "space_ids"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  ]
                                 }
                               ]
                             },
@@ -2796,7 +3127,7 @@
                 }
               }
             },
-            "description": "Array of search result sets, one per query. When view=expanded, each result includes _relationships and _relationships_truncated."
+            "description": "Array of search result sets, one per query. When view=expanded, each result includes _relationships and _relationships_truncated. Each result includes space_ids."
           },
           "400": {
             "content": {
@@ -3914,7 +4245,7 @@
                     "type": "object"
                   },
                   "short_description": {
-                    "description": "One to two sentences of framing, used in search previews and multi-choice disambiguation",
+                    "description": "One to two sentences of framing, used in search previews and multi-choice disambiguation. Min 10 chars, max 400.",
                     "maxLength": 400,
                     "minLength": 10,
                     "type": "string"
@@ -4218,7 +4549,7 @@
                   "anyOf": [
                     {
                       "properties": {
-                        "entity": {
+                        "wiki": {
                           "anyOf": [
                             {
                               "$ref": "#/components/schemas/Entity"
@@ -4230,7 +4561,7 @@
                         }
                       },
                       "required": [
-                        "entity"
+                        "wiki"
                       ],
                       "type": "object"
                     },
@@ -4338,9 +4669,6 @@
               "application/json": {
                 "schema": {
                   "properties": {
-                    "entity": {
-                      "$ref": "#/components/schemas/Entity"
-                    },
                     "placeholders": {
                       "description": "Placeholders minted from wiki links in updated content. Only present when content was processed through the wiki link pipeline.",
                       "items": {
@@ -4405,10 +4733,13 @@
                         "type": "object"
                       },
                       "type": "array"
+                    },
+                    "wiki": {
+                      "$ref": "#/components/schemas/Entity"
                     }
                   },
                   "required": [
-                    "entity"
+                    "wiki"
                   ],
                   "type": "object"
                 }

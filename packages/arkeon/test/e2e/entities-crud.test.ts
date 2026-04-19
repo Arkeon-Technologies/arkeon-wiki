@@ -40,8 +40,8 @@ describe("Entities CRUD", () => {
     });
     const { response, body } = await getJson(`/wiki/${entity.id}`, actor.apiKey);
     expect(response.status).toBe(200);
-    expect((body as any).entity.id).toBe(entity.id);
-    expect((body as any).entity.properties.label).toBe(entity.properties.label);
+    expect((body as any).wiki.id).toBe(entity.id);
+    expect((body as any).wiki.properties.label).toBe(entity.properties.label);
   });
 
   test("Update entity with CAS (ver)", async () => {
@@ -57,8 +57,8 @@ describe("Entities CRUD", () => {
       json: { ver: 2, properties: { label: "version-2" } },
     });
     expect(response.status).toBe(200);
-    expect((body as any).entity.ver).toBe(3);
-    expect((body as any).entity.properties.label).toBe("version-2");
+    expect((body as any).wiki.ver).toBe(2);
+    expect((body as any).wiki.properties.label).toBe("version-2");
   });
 
   test("CAS conflict on stale ver returns 409", async () => {

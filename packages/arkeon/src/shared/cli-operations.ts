@@ -61,6 +61,10 @@ export type JsonSchema = {
   allOf?: JsonSchema[];
   anyOf?: JsonSchema[];
   oneOf?: JsonSchema[];
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -73,6 +77,10 @@ export type GeneratedField = {
   required: boolean;
   type: string;
   enumValues?: string[];
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
 };
 
 export type GeneratedOperation = {
@@ -280,13 +288,20 @@ export function extractBodyFields(spec: OpenAPISpec, operation: OpenAPIOperation
     return [];
   }
   const required = new Set(schema.required ?? []);
-  return Object.entries(schema.properties).map(([name, propertySchema]) => ({
-    name,
-    description: normalizeFieldDescription(name, propertySchema.description ?? ""),
-    required: required.has(name),
-    type: schemaType(resolveSchema(spec, propertySchema)),
-    enumValues: propertySchema.enum?.map(String),
-  }));
+  return Object.entries(schema.properties).map(([name, propertySchema]) => {
+    const resolved = resolveSchema(spec, propertySchema);
+    return {
+      name,
+      description: normalizeFieldDescription(name, propertySchema.description ?? ""),
+      required: required.has(name),
+      type: schemaType(resolved),
+      enumValues: propertySchema.enum?.map(String),
+      minLength: resolved?.minLength,
+      maxLength: resolved?.maxLength,
+      minimum: resolved?.minimum,
+      maximum: resolved?.maximum,
+    };
+  });
 }
 
 export function extractResponseFields(spec: OpenAPISpec, operation: OpenAPIOperation): GeneratedField[] {
