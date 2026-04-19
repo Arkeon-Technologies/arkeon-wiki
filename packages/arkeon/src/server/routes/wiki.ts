@@ -90,7 +90,7 @@ const createWikiRoute = createRoute({
             .string()
             .min(10)
             .max(400)
-            .describe("One to two sentences of framing, used in search previews and multi-choice disambiguation"),
+            .describe("One to two sentences of framing, used in search previews and multi-choice disambiguation. Min 10 chars, max 400."),
           type: z
             .string()
             .min(1)

@@ -120,8 +120,8 @@ describe("CLI integration — generated API commands", () => {
 
     const json = parseJson(result.stdout);
     expect(json).not.toBeNull();
-    // --raw returns { entity: { id, type, properties, ... } }
-    const entity = (json?.entity ?? json) as Record<string, unknown>;
+    // --raw returns { wiki: { id, type, properties, ... } }
+    const entity = (json?.wiki ?? json) as Record<string, unknown>;
     expect(entity?.type).toBe("wiki");
     const props = entity?.properties as Record<string, unknown>;
     expect(props?.label).toBe("CLI Smoke Test Person");

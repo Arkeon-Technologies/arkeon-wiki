@@ -39,7 +39,7 @@ type WikiResponse = {
 };
 
 type EntityResponse = {
-  entity: {
+  wiki: {
     id: string;
     type: string;
     kind?: string;
@@ -128,7 +128,7 @@ async function getEntity(apiKey: string, entityId: string) {
   const { response, body } = await getJson(`/wiki/${entityId}`, apiKey);
   if (response.status === 404 || response.status === 410) return null;
   expect(response.status).toBe(200);
-  return (body as EntityResponse).entity;
+  return (body as EntityResponse).wiki;
 }
 
 async function getIncomingRelationships(apiKey: string, entityId: string, predicate?: string) {

@@ -15,7 +15,7 @@ import { output } from "../../lib/output.js";
 const DIRECT_UPLOAD_THRESHOLD = 8 * 1024 * 1024;
 
 type EntityResponse = {
-  entity: {
+  wiki: {
     id: string;
     ver: number;
     properties?: Record<string, unknown>;
@@ -66,12 +66,12 @@ function requireEntitiesGroup(program: Command): Command {
     ?? program.command("entities").description("entities operations");
 }
 
-async function getEntity(entityId: string): Promise<EntityResponse["entity"]> {
+async function getEntity(entityId: string): Promise<EntityResponse["wiki"]> {
   const result = await apiRequest<EntityResponse>(`/wiki/${encodeURIComponent(entityId)}`, {
     method: "GET",
     auth: "optional",
   });
-  return result.entity;
+  return result.wiki;
 }
 
 async function getCurrentVersion(entityId: string): Promise<number> {

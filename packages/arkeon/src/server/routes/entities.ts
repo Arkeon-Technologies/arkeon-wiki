@@ -138,7 +138,7 @@ const getEntityRoute = createRoute({
     200: {
       description: "Entity details. When view=expanded, includes _relationships and _relationships_truncated. When view=page, returns structured links_to/linked_from/sources.",
       content: jsonContent(z.union([
-        z.object({ entity: z.union([EntitySchema, ExpandedEntitySchema]) }),
+        z.object({ wiki: z.union([EntitySchema, ExpandedEntitySchema]) }),
         PageEntitySchema,
       ])),
     },
@@ -175,7 +175,7 @@ const updateEntityRoute = createRoute({
     200: {
       description: "Entity updated. When content contains wiki links that were processed, includes placeholders, relationships_created, and resolve_warnings.",
       content: jsonContent(z.object({
-        entity: EntitySchema,
+        wiki: EntitySchema,
         placeholders: z.array(
           z.object({
             id: EntityIdParam,
@@ -512,7 +512,7 @@ wikisRouter.openapi(getEntityRoute, async (c) => {
     const relMap = await fetchRelationshipContext(sql, actor, [entityId], relLimit);
     const ctx = relMap.get(entityId);
     return c.json({
-      entity: {
+      wiki: {
         ...projectEntity(entity, { view: "full", fields: null }),
         _relationships: ctx?.items ?? [],
         _relationships_truncated: ctx?.truncated ?? false,
@@ -555,7 +555,7 @@ wikisRouter.openapi(getEntityRoute, async (c) => {
     }
 
     return c.json({
-      entity: projectEntity(entity, { view: "full", fields: null }),
+      wiki: projectEntity(entity, { view: "full", fields: null }),
       links_to,
       linked_from,
       sources,
@@ -563,7 +563,7 @@ wikisRouter.openapi(getEntityRoute, async (c) => {
     }, 200);
   }
 
-  return c.json({ entity: projectEntity(entity, projection) }, 200);
+  return c.json({ wiki: projectEntity(entity, projection) }, 200);
 });
 
 wikisRouter.openapi(updateEntityRoute, async (c) => {
@@ -609,7 +609,11 @@ wikisRouter.openapi(updateEntityRoute, async (c) => {
 
     if (currentContent !== newContent) {
       // Look up which space this wiki belongs to
-      const spaceRows = await sql`SELECT space_id FROM space_entities WHERE entity_id = ${entityId} LIMIT 1`;
+      const spTxResults = await sql.transaction([
+        ...setActorContext(sql, actor),
+        sql`SELECT space_id FROM space_entities WHERE entity_id = ${entityId} LIMIT 1`,
+      ]);
+      const spaceRows = spTxResults[spTxResults.length - 1] as Array<{ space_id: string }>;
       pipelineSpaceId = (spaceRows[0]?.space_id as string) ?? null;
       if (!pipelineSpaceId) {
         throw new ApiError(500, "internal_error", "Wiki has no space assignment");
@@ -732,7 +736,7 @@ wikisRouter.openapi(updateEntityRoute, async (c) => {
     }
 
     return c.json({
-      entity: updated,
+      wiki: updated,
       placeholders: pipelineResult.placeholders,
       relationships_created: relResult.created,
       relationships_updated: relResult.updated,
@@ -743,7 +747,7 @@ wikisRouter.openapi(updateEntityRoute, async (c) => {
     }, 200);
   }
 
-  return c.json({ entity: updated }, 200);
+  return c.json({ wiki: updated }, 200);
 });
 
 wikisRouter.openapi(deleteEntityRoute, async (c) => {
@@ -994,7 +998,7 @@ wikisRouter.openapi(mergeEntityRoute, async (c) => {
   backgroundTask(removeEntity(sourceId));
   backgroundTask(indexEntity(updated));
 
-  return c.json({ entity: updated }, 200);
+  return c.json({ wiki: updated }, 200);
 });
 
 // ---------------------------------------------------------------------------

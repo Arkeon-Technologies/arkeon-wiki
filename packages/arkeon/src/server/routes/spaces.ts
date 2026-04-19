@@ -276,25 +276,30 @@ spacesRouter.openapi(createSpaceRoute, async (c) => {
 
 spacesRouter.openapi(listSpacesRoute, async (c) => {
   const sql = createSql();
+  const actor = c.get("actor") ?? null;
   const limit = parseLimit(c, { defaultValue: 50, maxValue: 200 });
   const cursor = parseCursorParam(c);
   const q = c.req.query("q");
 
-  const rows = await sql.query(
-    `
-      SELECT *
-      FROM spaces
-      WHERE status != 'deleted'
-        AND ($1::text IS NULL OR name ILIKE '%' || $1 || '%')
-        AND ($2::timestamptz IS NULL OR created_at < $2::timestamptz)
-      ORDER BY created_at DESC
-      LIMIT $3
-    `,
-    [q ?? null, cursor?.t ?? null, limit + 1],
-  );
+  const txResults = await sql.transaction([
+    ...setActorContext(sql, actor),
+    sql.query(
+      `
+        SELECT *
+        FROM spaces
+        WHERE status != 'deleted'
+          AND ($1::text IS NULL OR name ILIKE '%' || $1 || '%')
+          AND ($2::timestamptz IS NULL OR created_at < $2::timestamptz)
+        ORDER BY created_at DESC
+        LIMIT $3
+      `,
+      [q ?? null, cursor?.t ?? null, limit + 1],
+    ),
+  ]);
 
-  const spaces = (rows as SpaceRecord[]).slice(0, limit);
-  const next = (rows as SpaceRecord[]).length > limit ? spaces[spaces.length - 1] : null;
+  const rows = txResults[txResults.length - 1] as SpaceRecord[];
+  const spaces = rows.slice(0, limit);
+  const next = rows.length > limit ? spaces[spaces.length - 1] : null;
 
   return c.json({
     spaces,

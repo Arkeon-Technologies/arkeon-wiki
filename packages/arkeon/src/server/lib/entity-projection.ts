@@ -77,6 +77,7 @@ export function projectEntity<T extends Record<string, unknown>>(entity: T, proj
         short_description: properties.short_description ?? null,
       },
       updated_at: entity.updated_at,
+      ...(entity.space_ids ? { space_ids: entity.space_ids } : {}),
     };
   }
 

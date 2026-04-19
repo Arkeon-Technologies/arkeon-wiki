@@ -375,9 +375,15 @@ export function renderRouteHelpFromSpec(spec: OpenAPISpec, method: string, path:
 function renderApiFieldLine(field: GeneratedField): string {
   const req = field.required ? "*" : "";
   const enumText = field.enumValues?.length ? ` (${field.enumValues.join("|")})` : "";
+  const constraints: string[] = [];
+  if (field.minLength != null) constraints.push(`min ${field.minLength} chars`);
+  if (field.maxLength != null) constraints.push(`max ${field.maxLength} chars`);
+  if (field.minimum != null) constraints.push(`min ${field.minimum}`);
+  if (field.maximum != null) constraints.push(`max ${field.maximum}`);
+  const constraintText = constraints.length ? ` [${constraints.join(", ")}]` : "";
   const desc = field.description || field.name;
   const name = `${field.name}${req}`;
-  return `  ${name.padEnd(22)} ${field.type.padEnd(10)} ${desc}${enumText}`;
+  return `  ${name.padEnd(22)} ${field.type.padEnd(10)} ${desc}${enumText}${constraintText}`;
 }
 
 function renderApiOperationBlock(op: GeneratedOperation): string {

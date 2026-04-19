@@ -71,10 +71,13 @@ const searchRoute = createRoute({
   },
   responses: {
     200: {
-      description: "Search results ordered by relevance. When view=expanded, each result includes _relationships and _relationships_truncated.",
+      description: "Search results ordered by relevance. When view=expanded, each result includes _relationships and _relationships_truncated. Each result includes space_ids.",
       content: jsonContent(
         z.object({
-          results: z.array(z.union([EntitySchema, ExpandedEntitySchema])),
+          results: z.array(z.union([
+            EntitySchema.extend({ space_ids: z.array(z.string()).describe("Space ULIDs this entity belongs to") }),
+            ExpandedEntitySchema.extend({ space_ids: z.array(z.string()).describe("Space ULIDs this entity belongs to") }),
+          ])),
           estimatedTotalHits: z.number().int(),
           limit: z.number().int(),
           offset: z.number().int(),
@@ -126,13 +129,16 @@ const multiSearchRoute = createRoute({
   },
   responses: {
     200: {
-      description: "Array of search result sets, one per query. When view=expanded, each result includes _relationships and _relationships_truncated.",
+      description: "Array of search result sets, one per query. When view=expanded, each result includes _relationships and _relationships_truncated. Each result includes space_ids.",
       content: jsonContent(
         z.object({
           results: z.array(
             z.object({
               q: z.string(),
-              results: z.array(z.union([EntitySchema, ExpandedEntitySchema])),
+              results: z.array(z.union([
+                EntitySchema.extend({ space_ids: z.array(z.string()).describe("Space ULIDs this entity belongs to") }),
+                ExpandedEntitySchema.extend({ space_ids: z.array(z.string()).describe("Space ULIDs this entity belongs to") }),
+              ])),
               estimatedTotalHits: z.number().int(),
               limit: z.number().int(),
               offset: z.number().int(),
@@ -180,19 +186,33 @@ searchRouter.openapi(searchRoute, async (c) => {
     return c.json({ results: [], estimatedTotalHits: 0, limit, offset }, 200);
   }
 
-  // Fetch full entities from Postgres by ID (RLS backstop)
+  // Fetch full entities from Postgres by ID (RLS backstop) + their space_ids
   const sql = createSql();
   const placeholders = meiliResult.ids.map((_, i) => `$${i + 1}`).join(", ");
+  const ctxQueries = setActorContext(sql, actor);
   const txResults = await sql.transaction([
-    ...setActorContext(sql, actor),
+    ...ctxQueries,
     sql.query(
       `SELECT * FROM entities WHERE id IN (${placeholders})`,
       meiliResult.ids,
     ),
+    sql.query(
+      `SELECT entity_id, array_agg(space_id) AS space_ids FROM space_entities WHERE entity_id IN (${placeholders}) GROUP BY entity_id`,
+      meiliResult.ids,
+    ),
   ]);
 
+  const entityRows = txResults[ctxQueries.length] as Array<Record<string, unknown>>;
+  const spaceRows = txResults[ctxQueries.length + 1] as Array<{ entity_id: string; space_ids: string[] }>;
+
+  const spaceMap = new Map<string, string[]>();
+  for (const row of spaceRows) {
+    spaceMap.set(row.entity_id, row.space_ids);
+  }
+
   const rowMap = new Map<string, Record<string, unknown>>();
-  for (const row of txResults[txResults.length - 1] as Array<Record<string, unknown>>) {
+  for (const row of entityRows) {
+    row.space_ids = spaceMap.get(String(row.id)) ?? [];
     rowMap.set(String(row.id), row);
   }
 
@@ -301,19 +321,33 @@ searchRouter.openapi(multiSearchRoute, async (c) => {
     }, 200);
   }
 
-  // Single Postgres fetch for all IDs
+  // Single Postgres fetch for all IDs + their space_ids
   const sql = createSql();
   const idArray = Array.from(allIds);
+  const ctxQueries = setActorContext(sql, actor);
   const txResults = await sql.transaction([
-    ...setActorContext(sql, actor),
+    ...ctxQueries,
     sql.query(
       `SELECT * FROM entities WHERE id = ANY($1::text[])`,
       [idArray],
     ),
+    sql.query(
+      `SELECT entity_id, array_agg(space_id) AS space_ids FROM space_entities WHERE entity_id = ANY($1::text[]) GROUP BY entity_id`,
+      [idArray],
+    ),
   ]);
 
+  const entityRows = txResults[ctxQueries.length] as Array<Record<string, unknown>>;
+  const spaceRows = txResults[ctxQueries.length + 1] as Array<{ entity_id: string; space_ids: string[] }>;
+
+  const spaceMap = new Map<string, string[]>();
+  for (const row of spaceRows) {
+    spaceMap.set(row.entity_id, row.space_ids);
+  }
+
   const rowMap = new Map<string, Record<string, unknown>>();
-  for (const row of txResults[txResults.length - 1] as Array<Record<string, unknown>>) {
+  for (const row of entityRows) {
+    row.space_ids = spaceMap.get(String(row.id)) ?? [];
     rowMap.set(String(row.id), row);
   }
 

@@ -59,7 +59,7 @@ describe("Entity Merge Batch", () => {
       `/wiki/${result.groups[0].target_id}`,
       actor.apiKey,
     );
-    const target = (targetBody as any).entity;
+    const target = (targetBody as any).wiki;
     expect(target.properties.description).toContain("architect of detente");
 
     // All non-target entities should return 410
@@ -134,8 +134,8 @@ describe("Entity Merge Batch", () => {
       `/wiki/${target.target_id}`,
       actor.apiKey,
     );
-    const props = (entityBody as any).entity.properties;
-    expect(props.label).toContain("much-longer-label"); // longest string
+    const props = (entityBody as any).wiki.properties;
+    expect(props.label).toBe("Much Longer Label"); // longest string
     expect(props.tags).toEqual(expect.arrayContaining(["a", "b", "c"])); // union
     expect(props.tags).toHaveLength(3); // no dupes
     expect(props.meta.key1).toBe("v1"); // deep merge
@@ -305,7 +305,7 @@ describe("Entity Merge Batch", () => {
 
     const targetId = (body as any).groups[0].target_id;
     const { body: entityBody } = await getJson(`/wiki/${targetId}`, actor.apiKey);
-    const props = (entityBody as any).entity.properties;
+    const props = (entityBody as any).wiki.properties;
 
     // All unique keys should be present
     expect(props.unique_to_1).toBe(true);
@@ -337,7 +337,7 @@ describe("Entity Merge Batch", () => {
 
     const targetId = (body as any).groups[0].target_id;
     const { body: entityBody } = await getJson(`/wiki/${targetId}`, actor.apiKey);
-    const meta = (entityBody as any).entity.properties.metadata;
+    const meta = (entityBody as any).wiki.properties.metadata;
 
     // Nested object keys from both entities should be preserved
     expect(meta.level1.a).toBe(1);
