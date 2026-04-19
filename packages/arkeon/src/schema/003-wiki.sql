@@ -40,7 +40,10 @@ CREATE TABLE IF NOT EXISTS space_entities (
 CREATE INDEX IF NOT EXISTS idx_space_entities_entity ON space_entities (entity_id);
 
 -- Trigger: maintain entity_count and last_activity_at on spaces
--- Only counts entities with kind='entity', not relationships
+-- Only counts entities with kind='entity', not relationships.
+-- On DELETE: the entity row may already be gone (CASCADE), so we check
+-- whether it still exists as a relationship — if it's gone or was an
+-- entity, we decrement.
 CREATE OR REPLACE FUNCTION update_space_stats() RETURNS trigger AS $$
 BEGIN
   IF TG_OP = 'INSERT' THEN
@@ -54,7 +57,9 @@ BEGIN
     END IF;
     RETURN NEW;
   ELSIF TG_OP = 'DELETE' THEN
-    IF EXISTS (SELECT 1 FROM entities WHERE id = OLD.entity_id AND kind = 'entity') THEN
+    -- If the entity is gone (CASCADE) or was kind='entity', decrement.
+    -- Only skip decrement if the entity still exists AND is a relationship.
+    IF NOT EXISTS (SELECT 1 FROM entities WHERE id = OLD.entity_id AND kind = 'relationship') THEN
       UPDATE spaces
       SET entity_count = GREATEST(entity_count - 1, 0),
           last_activity_at = NOW()
@@ -74,8 +79,9 @@ AFTER INSERT OR DELETE ON space_entities
 FOR EACH ROW EXECUTE FUNCTION update_space_stats();
 
 -- Repair existing entity_count values (recompute from actual entity-kind rows)
+-- Two-part repair: update spaces that have entities, then zero out the rest
 UPDATE spaces s
-SET entity_count = COALESCE(sub.cnt, 0)
+SET entity_count = sub.cnt
 FROM (
   SELECT se.space_id, COUNT(*) AS cnt
   FROM space_entities se
@@ -83,6 +89,16 @@ FROM (
   GROUP BY se.space_id
 ) sub
 WHERE s.id = sub.space_id AND s.entity_count != sub.cnt;
+
+-- Zero out spaces that have no entity-kind members (only relationships or empty)
+UPDATE spaces s
+SET entity_count = 0
+WHERE s.entity_count != 0
+  AND NOT EXISTS (
+    SELECT 1 FROM space_entities se
+    JOIN entities e ON e.id = se.entity_id AND e.kind = 'entity'
+    WHERE se.space_id = s.id
+  );
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON spaces TO arke_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON space_entities TO arke_app;
