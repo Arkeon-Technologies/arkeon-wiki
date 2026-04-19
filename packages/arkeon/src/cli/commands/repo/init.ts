@@ -88,13 +88,14 @@ function resolveApiUrl(opts: { apiUrl?: string; instance?: string }): string {
 
 function ensureGitignore(cwd: string): void {
   const gitignorePath = join(cwd, ".gitignore");
-  const entry = ".arkeon/state.json";
+  const entries = [".arkeon/state.json", ".arkeon/manifest.json"];
   if (existsSync(gitignorePath)) {
     const content = readFileSync(gitignorePath, "utf-8");
-    if (content.includes(entry)) return;
-    appendFileSync(gitignorePath, `\n${entry}\n`);
+    const missing = entries.filter((e) => !content.includes(e));
+    if (missing.length === 0) return;
+    appendFileSync(gitignorePath, `\n${missing.join("\n")}\n`);
   } else {
-    appendFileSync(gitignorePath, `${entry}\n`);
+    appendFileSync(gitignorePath, `${entries.join("\n")}\n`);
   }
 }
 

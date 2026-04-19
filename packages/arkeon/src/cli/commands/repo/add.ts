@@ -2,12 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `arkeon add <files/globs>` — register files as document entities in the graph.
+ * `arkeon add <files/globs>` — push files to the knowledge graph.
  *
- * Like `git add`: takes files on disk and creates corresponding document entities
- * in the bound space. If a document entity already exists for that source_file
- * with a different hash, it updates the entity's properties in place (the entity
- * ID stays stable so extracted_from relationships remain valid).
+ * Two modes:
+ *   1. **Frontmatter entity** — file has YAML frontmatter with `id` and `ver`
+ *      (typically from `arkeon pull`). Parsed into a full wiki update and sent
+ *      via PUT /wiki/{id}. The server re-runs the wiki pipeline (link
+ *      resolution, relationship diffing) automatically.
+ *   2. **Raw document** — file without frontmatter. Creates/updates a document
+ *      entity tracked by `source_file` + `source_hash` properties.
  */
 
 import type { Command } from "commander";
@@ -17,8 +20,10 @@ import { extname, join, relative } from "node:path";
 
 import { apiGet, apiPost, apiPut } from "../../lib/api-client.js";
 import { credentials } from "../../lib/credentials.js";
+import { contentHash, loadManifest, saveManifest } from "../../lib/manifest.js";
 import { output } from "../../lib/output.js";
 import { requireRepoState } from "../../lib/repo-state.js";
+import { parseEntityFile } from "../../lib/wiki-serialization.js";
 
 const IGNORE_DIRS = new Set([".arkeon", ".git", "node_modules", ".claude"]);
 
@@ -156,7 +161,7 @@ async function createDocumentWiki(
 export function registerAddCommand(program: Command): void {
   program
     .command("add")
-    .description("Register files as document entities in the graph")
+    .description("Push files to the knowledge graph (supports pulled entities and raw documents)")
     .argument("<paths...>", "File paths or glob patterns to add")
     .action(async (paths: string[]) => {
       try {
@@ -186,19 +191,25 @@ export function registerAddCommand(program: Command): void {
         // Deduplicate
         const uniqueFiles = [...new Set(resolvedFiles.map((f) => relative(cwd, join(cwd, f))))];
 
+        const manifest = loadManifest(cwd);
+        let manifestDirty = false;
         let addedCount = 0;
         let updatedCount = 0;
         let skippedCount = 0;
         const documents: Array<{ path: string; entity_id: string; action: string }> = [];
 
-        // Separate files into new (need creation) and modified (need update)
-        const toCreate: Array<{
+        // Separate files by type: frontmatter entities vs raw documents
+        const frontmatterFiles: Array<{
+          relPath: string;
+          parsed: ReturnType<typeof parseEntityFile>;
+        }> = [];
+        const rawToCreate: Array<{
           relPath: string;
           hash: string;
           ext: string;
           content: string | null;
         }> = [];
-        const toUpdate: Array<{
+        const rawToUpdate: Array<{
           relPath: string;
           hash: string;
           ext: string;
@@ -214,8 +225,32 @@ export function registerAddCommand(program: Command): void {
             continue;
           }
 
-          const hash = sha256(absPath);
           const ext = extname(relPath).toLowerCase();
+
+          // Check for YAML frontmatter with entity ID (pulled entity)
+          if (ext === ".md") {
+            const raw = readFileSync(absPath, "utf-8");
+            const parsed = parseEntityFile(raw);
+
+            if (parsed.id && parsed.ver != null) {
+              // Frontmatter entity — check if content changed since last pull
+              const manifestEntry = manifest.entries[relPath];
+              if (manifestEntry) {
+                const currentHash = contentHash(absPath);
+                if (currentHash === manifestEntry.content_hash) {
+                  skippedCount++;
+                  output.progress(`  = ${relPath} (up to date)`);
+                  continue;
+                }
+              }
+
+              frontmatterFiles.push({ relPath, parsed });
+              continue;
+            }
+          }
+
+          // Raw document path (existing behavior)
+          const hash = sha256(absPath);
           const existing = await findExistingDoc(state.api_url, apiKey, state.space_id, relPath);
 
           if (existing && existing.source_hash === hash) {
@@ -227,24 +262,56 @@ export function registerAddCommand(program: Command): void {
           const content = TEXT_EXTENSIONS.has(ext) ? readFileSync(absPath, "utf-8") : null;
 
           if (existing) {
-            // Modified — update properties in place (entity ID stays stable)
-            toUpdate.push({ relPath, hash, ext, content, entity_id: existing.entity_id, ver: existing.ver });
+            rawToUpdate.push({ relPath, hash, ext, content, entity_id: existing.entity_id, ver: existing.ver });
           } else {
-            toCreate.push({ relPath, hash, ext, content });
+            rawToCreate.push({ relPath, hash, ext, content });
           }
         }
 
-        // Create new documents through the wiki pipeline with repo tracking
-        // properties attached to the initial entity.
-        for (const file of toCreate) {
+        // --- Frontmatter entities: PUT /wiki/{id} with full parsed payload ---
+        for (const { relPath, parsed } of frontmatterFiles) {
+          const properties: Record<string, unknown> = {
+            content: parsed.content,
+            label: parsed.label,
+          };
+          if (parsed.subject_type) properties.subject_type = parsed.subject_type;
+          if (parsed.aliases) properties.aliases = parsed.aliases;
+          if (parsed.keywords) properties.keywords = parsed.keywords;
+          if (parsed.short_description) properties.short_description = parsed.short_description;
+          if (parsed.properties) Object.assign(properties, parsed.properties);
+
+          const resp = await apiPut<{ entity: EntityResult }>(
+            state.api_url,
+            `/wiki/${parsed.id}`,
+            apiKey,
+            { ver: parsed.ver, properties },
+          );
+
+          // Update manifest with new version
+          const absPath = join(cwd, relPath);
+          manifest.entries[relPath] = {
+            entity_id: parsed.id!,
+            ver: resp.entity.ver,
+            content_hash: contentHash(absPath),
+            synced_at: new Date().toISOString(),
+          };
+          manifestDirty = true;
+
+          documents.push({ path: relPath, entity_id: parsed.id!, action: "updated" });
+          output.progress(`  ~ ${relPath} (${parsed.id})`);
+          updatedCount++;
+        }
+
+        // --- Raw documents: create new ---
+        for (const file of rawToCreate) {
           const entity = await createDocumentWiki(state.api_url, apiKey, state.space_id, file);
           documents.push({ path: file.relPath, entity_id: entity.id, action: "added" });
           output.progress(`  + ${file.relPath} -> ${entity.id}`);
           addedCount++;
         }
 
-        // Update modified documents via PUT /wiki/{id}
-        for (const file of toUpdate) {
+        // --- Raw documents: update modified ---
+        for (const file of rawToUpdate) {
           const properties: Record<string, unknown> = {
             source_hash: file.hash,
             file_type: fileType(file.ext),
@@ -253,8 +320,6 @@ export function registerAddCommand(program: Command): void {
             properties.content = file.content;
           }
 
-          // PUT /wiki/{id} shallow-merges properties — omitted keys
-          // (source_file, label) are preserved, only provided keys are updated.
           await apiPut(state.api_url, `/wiki/${file.entity_id}`, apiKey, {
             ver: file.ver,
             properties,
@@ -263,6 +328,10 @@ export function registerAddCommand(program: Command): void {
           documents.push({ path: file.relPath, entity_id: file.entity_id, action: "updated" });
           output.progress(`  ~ ${file.relPath} (${file.entity_id})`);
           updatedCount++;
+        }
+
+        if (manifestDirty) {
+          saveManifest(manifest, cwd);
         }
 
         output.result({
