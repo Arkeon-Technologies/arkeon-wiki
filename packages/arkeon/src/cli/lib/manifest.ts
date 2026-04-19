@@ -16,7 +16,8 @@ export type ManifestEntry = {
   entity_id: string;
   ver: number;
   content_hash: string;
-  pulled_at: string;
+  /** When this entry was last synced from the server (pull) or pushed (add). */
+  synced_at: string;
 };
 
 export type Manifest = {
@@ -34,7 +35,48 @@ export function loadManifest(cwd: string): Manifest {
   const p = manifestPath(cwd);
   if (!existsSync(p)) return { version: 1, entries: {} };
   const raw = readFileSync(p, "utf-8");
-  return JSON.parse(raw) as Manifest;
+  const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+  // Schema validation — reject corrupted manifests
+  if (typeof parsed !== "object" || parsed === null) {
+    throw new Error("Invalid manifest: not an object");
+  }
+  if (parsed.version !== 1) {
+    throw new Error(`Invalid manifest: unsupported version ${parsed.version}`);
+  }
+  if (typeof parsed.entries !== "object" || parsed.entries === null || Array.isArray(parsed.entries)) {
+    throw new Error("Invalid manifest: entries must be an object");
+  }
+
+  // Validate each entry and reject unsafe paths
+  const entries = parsed.entries as Record<string, unknown>;
+  const validated: Record<string, ManifestEntry> = {};
+  for (const [path, entry] of Object.entries(entries)) {
+    if (!isValidManifestPath(path)) continue;
+    if (!isManifestEntry(entry)) continue;
+    validated[path] = entry;
+  }
+
+  return { version: 1, entries: validated };
+}
+
+/**
+ * Validate that a manifest path is safe — must be under wiki/ with no
+ * traversal sequences.
+ */
+function isValidManifestPath(path: string): boolean {
+  return path.startsWith("wiki/") && !path.includes("..") && !path.startsWith("/");
+}
+
+function isManifestEntry(value: unknown): value is ManifestEntry {
+  if (typeof value !== "object" || value === null) return false;
+  const obj = value as Record<string, unknown>;
+  return (
+    typeof obj.entity_id === "string" &&
+    typeof obj.ver === "number" &&
+    typeof obj.content_hash === "string" &&
+    typeof obj.synced_at === "string"
+  );
 }
 
 export function saveManifest(manifest: Manifest, cwd: string): void {

@@ -183,7 +183,7 @@ describe("pull workflow", () => {
         entity_id: entity.id,
         ver: entity.ver,
         content_hash: contentHash(absPath),
-        pulled_at: new Date().toISOString(),
+        synced_at: new Date().toISOString(),
       };
     }
 

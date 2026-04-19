@@ -73,7 +73,7 @@ describe("entityToFilePath", () => {
           entity_id: "01OTHER_ENTITY",
           ver: 1,
           content_hash: "abc",
-          pulled_at: "2026-01-01T00:00:00Z",
+          synced_at: "2026-01-01T00:00:00Z",
         },
       },
     };
@@ -97,7 +97,7 @@ describe("entityToFilePath", () => {
           entity_id: "01SAMEENTITY",
           ver: 1,
           content_hash: "abc",
-          pulled_at: "2026-01-01T00:00:00Z",
+          synced_at: "2026-01-01T00:00:00Z",
         },
       },
     };
@@ -137,7 +137,7 @@ describe("manifest I/O", () => {
           entity_id: "01ABC",
           ver: 3,
           content_hash: "deadbeef",
-          pulled_at: "2026-04-18T12:00:00Z",
+          synced_at: "2026-04-18T12:00:00Z",
         },
       },
     };
@@ -151,6 +151,75 @@ describe("manifest I/O", () => {
     expect(loaded).toEqual(manifest);
   });
 
+  test("loadManifest strips entries with unsafe paths", () => {
+    const raw = JSON.stringify({
+      version: 1,
+      entries: {
+        "wiki/concept/safe.md": {
+          entity_id: "01SAFE",
+          ver: 1,
+          content_hash: "abc",
+          synced_at: "2026-01-01T00:00:00Z",
+        },
+        "../../../etc/passwd": {
+          entity_id: "01EVIL",
+          ver: 1,
+          content_hash: "abc",
+          synced_at: "2026-01-01T00:00:00Z",
+        },
+        "/absolute/path.md": {
+          entity_id: "01ABS",
+          ver: 1,
+          content_hash: "abc",
+          synced_at: "2026-01-01T00:00:00Z",
+        },
+        "not-wiki/file.md": {
+          entity_id: "01OUT",
+          ver: 1,
+          content_hash: "abc",
+          synced_at: "2026-01-01T00:00:00Z",
+        },
+      },
+    });
+    writeFileSync(join(tmpDir, ".arkeon", "manifest.json"), raw);
+
+    const m = loadManifest(tmpDir);
+    expect(Object.keys(m.entries)).toHaveLength(1);
+    expect(m.entries["wiki/concept/safe.md"]).toBeTruthy();
+  });
+
+  test("loadManifest rejects invalid version", () => {
+    writeFileSync(
+      join(tmpDir, ".arkeon", "manifest.json"),
+      JSON.stringify({ version: 99, entries: {} }),
+    );
+    expect(() => loadManifest(tmpDir)).toThrow("unsupported version");
+  });
+
+  test("loadManifest skips entries with invalid shape", () => {
+    const raw = JSON.stringify({
+      version: 1,
+      entries: {
+        "wiki/concept/good.md": {
+          entity_id: "01GOOD",
+          ver: 1,
+          content_hash: "abc",
+          synced_at: "2026-01-01T00:00:00Z",
+        },
+        "wiki/concept/bad.md": {
+          entity_id: 123, // wrong type
+          ver: "not a number",
+        },
+        "wiki/concept/null.md": null,
+      },
+    });
+    writeFileSync(join(tmpDir, ".arkeon", "manifest.json"), raw);
+
+    const m = loadManifest(tmpDir);
+    expect(Object.keys(m.entries)).toHaveLength(1);
+    expect(m.entries["wiki/concept/good.md"]).toBeTruthy();
+  });
+
   test("findByEntityId returns matching entry", () => {
     const manifest: Manifest = {
       version: 1,
@@ -159,13 +228,13 @@ describe("manifest I/O", () => {
           entity_id: "01AAA",
           ver: 1,
           content_hash: "aaa",
-          pulled_at: "2026-01-01T00:00:00Z",
+          synced_at: "2026-01-01T00:00:00Z",
         },
         "wiki/person/b.md": {
           entity_id: "01BBB",
           ver: 2,
           content_hash: "bbb",
-          pulled_at: "2026-01-01T00:00:00Z",
+          synced_at: "2026-01-01T00:00:00Z",
         },
       },
     };

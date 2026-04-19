@@ -149,7 +149,7 @@ export function registerPullCommand(program: Command): void {
                 entity_id: entity.id,
                 ver: entity.ver,
                 content_hash: contentHash(join(cwd, filePath)),
-                pulled_at: new Date().toISOString(),
+                synced_at: new Date().toISOString(),
               };
             }
 
@@ -168,7 +168,7 @@ export function registerPullCommand(program: Command): void {
                 entity_id: entity.id,
                 ver: entity.ver,
                 content_hash: contentHash(join(cwd, filePath)),
-                pulled_at: new Date().toISOString(),
+                synced_at: new Date().toISOString(),
               };
             }
 
@@ -184,6 +184,8 @@ export function registerPullCommand(program: Command): void {
           for (const [path, entry] of Object.entries(manifest.entries)) {
             if (!remoteById.has(entry.entity_id)) {
               if (!opts.dryRun) {
+                // Safety: only delete files under wiki/ with no traversal
+                if (!path.startsWith("wiki/") || path.includes("..")) continue;
                 const absPath = join(cwd, path);
                 if (existsSync(absPath)) unlinkSync(absPath);
                 delete manifest.entries[path];

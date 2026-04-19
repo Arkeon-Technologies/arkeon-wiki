@@ -293,7 +293,7 @@ export function registerAddCommand(program: Command): void {
             entity_id: parsed.id!,
             ver: resp.entity.ver,
             content_hash: contentHash(absPath),
-            pulled_at: manifest.entries[relPath]?.pulled_at ?? new Date().toISOString(),
+            synced_at: new Date().toISOString(),
           };
           manifestDirty = true;
 
