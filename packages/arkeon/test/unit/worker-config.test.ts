@@ -157,17 +157,17 @@ describe("loadWorkersYaml", () => {
   let prevConfig: string | undefined;
 
   beforeEach(() => {
-    prevHome = process.env.ARKEON_HOME;
+    prevHome = process.env.ARKEON_WIKI_HOME;
     prevConfig = process.env.ARKEON_WORKERS_CONFIG;
     scratch = mkdtempSync(join(tmpdir(), "arkeon-worker-cfg-"));
-    process.env.ARKEON_HOME = scratch;
+    process.env.ARKEON_WIKI_HOME = scratch;
     delete process.env.ARKEON_WORKERS_CONFIG;
     resetWorkerConfigCache();
   });
 
   afterEach(() => {
-    if (prevHome !== undefined) process.env.ARKEON_HOME = prevHome;
-    else delete process.env.ARKEON_HOME;
+    if (prevHome !== undefined) process.env.ARKEON_WIKI_HOME = prevHome;
+    else delete process.env.ARKEON_WIKI_HOME;
     if (prevConfig !== undefined) process.env.ARKEON_WORKERS_CONFIG = prevConfig;
     else delete process.env.ARKEON_WORKERS_CONFIG;
     rmSync(scratch, { recursive: true, force: true });
@@ -233,15 +233,15 @@ describe("getWorkerLlmConfig", () => {
   let prevHome: string | undefined;
 
   beforeEach(() => {
-    prevHome = process.env.ARKEON_HOME;
+    prevHome = process.env.ARKEON_WIKI_HOME;
     scratch = mkdtempSync(join(tmpdir(), "arkeon-wlc-"));
-    process.env.ARKEON_HOME = scratch;
+    process.env.ARKEON_WIKI_HOME = scratch;
     resetWorkerConfigCache();
   });
 
   afterEach(() => {
-    if (prevHome !== undefined) process.env.ARKEON_HOME = prevHome;
-    else delete process.env.ARKEON_HOME;
+    if (prevHome !== undefined) process.env.ARKEON_WIKI_HOME = prevHome;
+    else delete process.env.ARKEON_WIKI_HOME;
     rmSync(scratch, { recursive: true, force: true });
     resetWorkerConfigCache();
   });
@@ -291,15 +291,15 @@ describe("getWorkerPromptConfig", () => {
   let prevHome: string | undefined;
 
   beforeEach(() => {
-    prevHome = process.env.ARKEON_HOME;
+    prevHome = process.env.ARKEON_WIKI_HOME;
     scratch = mkdtempSync(join(tmpdir(), "arkeon-wpc-"));
-    process.env.ARKEON_HOME = scratch;
+    process.env.ARKEON_WIKI_HOME = scratch;
     resetWorkerConfigCache();
   });
 
   afterEach(() => {
-    if (prevHome !== undefined) process.env.ARKEON_HOME = prevHome;
-    else delete process.env.ARKEON_HOME;
+    if (prevHome !== undefined) process.env.ARKEON_WIKI_HOME = prevHome;
+    else delete process.env.ARKEON_WIKI_HOME;
     rmSync(scratch, { recursive: true, force: true });
     resetWorkerConfigCache();
   });
