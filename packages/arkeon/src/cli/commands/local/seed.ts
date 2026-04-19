@@ -2,16 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `arkeon seed` — load the bundled Genesis knowledge graph into the
+ * `arkeon seed` — load the bundled Genesis demonstration wikis into the
  * running stack.
  *
- * Posts the bundled Genesis ops envelope to the compatibility /ops
- * endpoint using the admin key loaded from ~/.arkeon/secrets.json.
+ * Posts each bundled wiki page to POST /wiki using the admin key from
+ * ~/.arkeon/secrets.json. The pages use [[placeholder:...]] links to
+ * demonstrate how the wiki pipeline creates entities and relationships.
  */
 
 import type { Command } from "commander";
 
-import { GENESIS_OPS } from "../../../generated/assets.js";
+import { GENESIS_WIKIS } from "../../../generated/assets.js";
 import { config } from "../../lib/config.js";
 import {
   DEFAULT_API_PORT,
@@ -26,21 +27,19 @@ interface SeedOptions {
   force?: boolean;
 }
 
-interface OpsResponse {
-  format: "arke.ops/v1";
-  committed: boolean;
-  entities: Array<{ ref: string | null; id: string; action?: "created" }>;
-  edges: Array<{ ref: string | null; id: string }>;
-  stats: { entities: number; edges: number };
-  errors?: unknown[];
+interface WikiResponse {
+  wiki: { id: string; properties?: Record<string, unknown> };
+  placeholders: Array<{ id: string; label: string; status: string }>;
+  relationships_created: number;
+  resolve_warnings?: unknown[];
 }
 
 export function registerSeedCommand(program: Command): void {
   program
     .command("seed")
-    .description("Load the bundled Genesis knowledge graph via POST /ops")
-    .option("--dry-run", "Validate the envelope and return planned IDs without writing")
-    .option("--force", "Re-run even if the Genesis book entity already exists")
+    .description("Load the bundled Genesis demonstration wikis")
+    .option("--dry-run", "Validate the first wiki without writing (quick format check)")
+    .option("--force", "Re-run even if the Genesis book wiki already exists")
     .action(async (opts: SeedOptions) => {
       try {
         await runSeed(opts);
@@ -56,9 +55,6 @@ async function runSeed(opts: SeedOptions): Promise<void> {
   const secrets = loadOrCreateSecrets();
   const adminKey = secrets.adminBootstrapKey;
 
-  // Warn (not block) if the daemon doesn't look like it's running —
-  // --api-url may still point at a remote instance, so failure will
-  // surface as a fetch error below.
   const pid = readPidfile();
   const running = pid !== null && isProcessAlive(pid);
   if (!running) {
@@ -73,49 +69,73 @@ async function runSeed(opts: SeedOptions): Promise<void> {
       output.result({
         operation: "seed",
         skipped: true,
-        reason: "Genesis book entity already exists",
+        reason: "Genesis book wiki already exists",
         book_id: existing,
-        hint: "Re-run with --force to seed again (creates duplicates — see seed README).",
+        hint: "Re-run with --force to seed again (creates duplicates).",
       });
       return;
     }
   }
 
-  output.progress(
-    `[arkeon] Posting Genesis envelope (${GENESIS_OPS.ops.length} ops)${opts.dryRun ? " in dry-run mode" : ""}...`,
-  );
+  const wikis = GENESIS_WIKIS;
 
-  const url = `${apiUrl.replace(/\/$/, "")}/ops${opts.dryRun ? "?dry_run=true" : ""}`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `ApiKey ${adminKey}`,
-    },
-    body: JSON.stringify(GENESIS_OPS),
-  });
-
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as
-      | { error?: { message?: string } }
-      | null;
-    throw new Error(
-      `POST ${url} failed: ${response.status} ${response.statusText} - ${body?.error?.message ?? "no detail"}`,
+  if (opts.dryRun) {
+    output.progress(
+      `[arkeon] Dry-run: would create ${wikis.length} wiki pages.`,
     );
+    output.result({
+      operation: "seed",
+      dry_run: true,
+      committed: false,
+      wikis_planned: wikis.length,
+      labels: wikis.map((w) => w.label),
+    });
+    return;
   }
 
-  const result = (await response.json()) as OpsResponse;
-  const entitiesCreated = result.stats?.entities ?? result.entities?.length ?? 0;
-  const edgesCreated = result.stats?.edges ?? result.edges?.length ?? 0;
+  output.progress(
+    `[arkeon] Seeding ${wikis.length} Genesis wiki pages...`,
+  );
+
+  let totalPlaceholders = 0;
+  let totalRelationships = 0;
+  const createdWikis: Array<{ id: string; label: string }> = [];
+
+  for (const wiki of wikis) {
+    const url = `${apiUrl.replace(/\/$/, "")}/wiki`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `ApiKey ${adminKey}`,
+      },
+      body: JSON.stringify(wiki),
+    });
+
+    if (!response.ok) {
+      const body = (await response.json().catch(() => null)) as
+        | { error?: { message?: string } }
+        | null;
+      throw new Error(
+        `POST /wiki failed for "${wiki.label}": ${response.status} ${response.statusText} - ${body?.error?.message ?? "no detail"}`,
+      );
+    }
+
+    const result = (await response.json()) as WikiResponse;
+    createdWikis.push({ id: result.wiki.id, label: wiki.label });
+    totalPlaceholders += result.placeholders?.length ?? 0;
+    totalRelationships += result.relationships_created ?? 0;
+  }
 
   output.result({
     operation: "seed",
-    dry_run: Boolean(opts.dryRun),
-    committed: result.committed,
-    entities_created: entitiesCreated,
-    relationships_created: edgesCreated,
-    errors: result.errors ?? [],
-    next: "arkeon wiki list --filter properties.subject_type:book",
+    dry_run: false,
+    committed: true,
+    wikis_created: createdWikis.length,
+    placeholders_created: totalPlaceholders,
+    relationships_created: totalRelationships,
+    wikis: createdWikis,
+    next: "arkeon wiki list",
   });
 }
 
@@ -139,8 +159,6 @@ async function checkGenesisBook(apiUrl: string, adminKey: string): Promise<strin
 }
 
 function resolveApiUrl(): string {
-  // URL resolution order: --api-url flag (via preAction → ARKE_API_URL)
-  // then config store, then local default.
   const env = process.env.ARKE_API_URL?.trim();
   if (env) return env;
   const stored = config.get("apiUrl");

@@ -265,7 +265,7 @@ describe("Repo commands — init / diff / add / rm flow", () => {
 
   test("rm: remaining documents are unaffected", async () => {
     const docs = await listDocuments(actor.apiKey, spaceId);
-    // doc1, doc2, and the linked "Analysis" wiki remain (doc3 deleted)
+    // doc1, doc2 remain (doc3 deleted); Analysis of Book 01 also has subject_type "document"
     const labels = docs.map((d) => d.properties.label).sort();
     expect(labels).toEqual(["Analysis of Book 01", "Book 01", "Book 02"]);
   });
@@ -277,7 +277,6 @@ describe("Repo commands — init / diff / add / rm flow", () => {
     expect(status).toBe(204);
 
     const docs = await listDocuments(actor.apiKey, spaceId);
-    // Book 01 and Analysis of Book 01 remain
     expect(docs).toHaveLength(2);
     const labels = docs.map((d) => d.properties.label).sort();
     expect(labels).toEqual(["Analysis of Book 01", "Book 01"]);

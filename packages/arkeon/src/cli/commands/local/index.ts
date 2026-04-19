@@ -13,7 +13,7 @@
  *     arkeon down    — stop the daemon (alias of stop)
  *     arkeon logs    — tail the daemon log
  *     arkeon status  — pid + health + ready + LLM/seed probes
- *     arkeon seed    — load the bundled Genesis knowledge graph
+ *     arkeon seed    — load the bundled Genesis demonstration wikis
  *
  *   Foreground / debugging style:
  *     arkeon start   — same stack, attached to the terminal, Ctrl+C drains

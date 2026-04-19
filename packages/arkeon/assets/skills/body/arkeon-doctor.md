@@ -43,7 +43,7 @@ Report whether each responds with `status: "ok"` / `status: "ready"`.
 ## 4. Seed state
 
 From the `arkeon status` output, check:
-- `seed_loaded` — whether the Genesis reference data is loaded
+- `seed_loaded` — whether the Genesis demonstration wikis are loaded
 - If not loaded, suggest: `arkeon seed`
 
 ## 5. State directory

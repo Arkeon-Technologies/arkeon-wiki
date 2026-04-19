@@ -161,13 +161,6 @@ export function registerGeneratedGroup(group: Command, operations: GeneratedOper
           if (hasQuerySpaceId && !query.has("space_id")) {
             query.set("space_id", defaultSpaceId);
           }
-          // Auto-inject into ops-style defaults envelope (e.g. POST /ops)
-          if (body && typeof body.defaults === "object" && body.defaults !== null) {
-            const defaults = body.defaults as Record<string, unknown>;
-            if (defaults.space_id === undefined) {
-              defaults.space_id = defaultSpaceId;
-            }
-          }
         }
 
         const response = await apiRequest<unknown>(applyQuery(builtPath, query), {

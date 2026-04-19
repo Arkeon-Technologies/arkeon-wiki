@@ -86,40 +86,25 @@ When evaluating matches, consider:
 
 ### 5. Create cross-space relationships
 
-For each confirmed connection, create a relationship. Use the Write tool to create an ops JSON file:
+For each group of connections, create a wiki page that links the entities together:
 
-Write to `/tmp/arkeon-connect-ops.json`:
-```json
-{
-  "format": "arke.ops/v1",
-  "defaults": {},
-  "ops": [
-    {
-      "op": "relate",
-      "source": "01ENTITY_IN_SPACE_A",
-      "target": "01ENTITY_IN_SPACE_B",
-      "predicate": "same_as",
-      "detail": "Same person appearing in both theology and philosophy corpora"
-    }
-  ]
-}
-```
-
-Then submit:
 ```bash
-npx arkeon ingest post-ops --data @/tmp/arkeon-connect-ops.json
+npx arkeon wiki create --label "Connections: {SpaceA} - {SpaceB}" \
+  --subject-type "connection" \
+  --keywords "cross-space,connections" \
+  --short-description "Cross-space relationships between {SpaceA} and {SpaceB}" \
+  --content "## Cross-space connections
+
+{Entity label} in {SpaceA} is the same as [[entity:{ULID_IN_SPACE_B}]]: same person appearing in both corpora.
+
+{Entity label} in {SpaceA} relates to [[entity:{ULID_IN_SPACE_D}]]: thematic connection."
 ```
 
 Key rules:
-- Use **bare ULIDs** for both source and target (they already exist).
-- **No `source.entity_id`** on the envelope — you're not extracting from a document.
-- **No `defaults.space_id`** — cross-space relationships don't belong to a single space. If you want the relationship edge itself to live in a specific space, set `space_id` on the relate op.
-- Relationship predicates for cross-space links:
-  - `same_as` — identical entity in different spaces
-  - `related_to` — thematic or conceptual connection
-  - `influenced_by`, `references`, `preceded` — directional connections
-  - `part_of` — hierarchical connections
-- Always include a `detail` field explaining the connection.
+- Use `[[entity:ULID]]` links to reference existing entities by their IDs.
+- Group connections into one or a few wiki pages per space pair.
+- Describe each connection in prose — this becomes searchable context.
+- Each `[[entity:ULID]]` link creates a `references` relationship automatically.
 
 ### 6. Enrich thin entities
 

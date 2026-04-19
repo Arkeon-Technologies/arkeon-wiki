@@ -101,41 +101,31 @@ npx arkeon entities get {id}
 
 Look for mentions of people, works, concepts, or events from the other space.
 
-**d. Build ops file.** Collect ALL connections into a single ops file:
+**d. Create connection wikis.** For each group of connections between the two spaces, create a wiki page that links the entities together:
 
-Write to `/tmp/arkeon-connect-{spaceA}-{spaceB}.json`:
-```json
-{
-  "format": "arke.ops/v1",
-  "defaults": {},
-  "ops": [
-    {
-      "op": "relate",
-      "source": "01ENTITY_IN_SPACE_A",
-      "target": "01ENTITY_IN_SPACE_B",
-      "predicate": "same_as",
-      "detail": "Same person appearing in both spaces"
-    }
-  ]
-}
+```bash
+npx arkeon wiki create --label "Connections: {SpaceA} - {SpaceB}" \
+  --subject-type "connection" \
+  --keywords "cross-space,connections,{spaceA_name},{spaceB_name}" \
+  --short-description "Cross-space relationships between {SpaceA} and {SpaceB}" \
+  --content "## Cross-space connections
+
+{Entity A label} in {SpaceA} is the same as [[entity:{ULID_IN_SPACE_B}]]: same person appearing in both spaces.
+
+{Entity C label} in {SpaceA} is related to [[entity:{ULID_IN_SPACE_D}]]: thematic connection across corpora."
 ```
 
 Key rules:
-- Use **bare ULIDs** for both source and target (they already exist).
-- **No `source.entity_id`** on the envelope — you're not extracting from a document.
-- **No `defaults.space_id`** — cross-space relationships don't belong to a single space.
-- Relationship predicates for cross-space links:
-  - `same_as` — identical entity in different spaces
-  - `related_to` — thematic or conceptual connection
-  - `influenced_by`, `references`, `preceded` — directional connections
-  - `part_of` — hierarchical connections
-- Always include a `detail` field explaining the connection.
-- Batch ALL connections for this pair into one ops file.
+- Use `[[entity:ULID]]` links to reference existing entities by their IDs.
+- Group connections into one or a few wiki pages per space pair.
+- Describe each connection in prose — this becomes searchable context.
+- Connection types to describe:
+  - Same entity in different spaces (identity)
+  - Thematic or conceptual connections
+  - Influence, reference, or hierarchical connections
+- Each `[[entity:ULID]]` link creates a `references` relationship automatically.
 
-**e. Submit:**
-```bash
-npx arkeon ops post-ops --data @/tmp/arkeon-connect-{spaceA}-{spaceB}.json
-```
+**e. Verify connections:**
 
 **f. Enrich thin entities.** When you find the same entity in two spaces but one has a richer description, update the thinner one:
 
@@ -164,7 +154,7 @@ If entity X was linked between spaces A-B and A-C, verify the B-C link exists to
 - Cross-disciplinary concepts that unite multiple spaces
 - People or organizations referenced across many spaces
 
-Submit these as a final ops batch.
+Submit these as a final connection wiki.
 
 **c. Second-order connections.** Check if connections created by sub-agents reveal new connections. For example, if Space A's "natural law" is linked to Space B's "lex naturalis", and Space B's "lex naturalis" is linked to Space C's "divine law", then Space A's "natural law" may relate to Space C's "divine law" too.
 
