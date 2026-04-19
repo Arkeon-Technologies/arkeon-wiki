@@ -228,19 +228,6 @@ const OPERATIONS: GeneratedOperation[] = [
     bodyFields: [],
   },
   {
-    operationId: "postOps",
-    group: "ops",
-    action: "post-ops",
-    method: "POST",
-    path: "/ops",
-    summary: "Bulk ingest entities and relationships",
-    description: "Compatibility endpoint for structured ingestion. Supports `entity` and `relate` operations, `defaults.space_id`, and `source.entity_id` provenance. Wiki authoring remains the preferred path for narrative pages.",
-    auth: "required",
-    pathParams: [],
-    queryParams: [{ name: "dry_run", description: "Validate and plan IDs without writing", required: false, type: "boolean" }],
-    bodyFields: [{ name: "defaults", description: "", required: false, type: "object" }, { name: "format", description: "", required: true, type: "string", enumValues: ["arke.ops/v1"] }, { name: "ops", description: "", required: true, type: "array" }, { name: "source", description: "", required: false, type: "object" }],
-  },
-  {
     operationId: "getRelationship",
     group: "relationships",
     action: "get",
@@ -555,7 +542,7 @@ const OPERATIONS: GeneratedOperation[] = [
 ];
 
 export function registerApiCommands(program: Command, options: { skipExisting?: boolean } = {}): void {
-  for (const group of ["actors","admin","auth","graph","ops","relationships","resolve","search","spaces","wiki"]) {
+  for (const group of ["actors","admin","auth","graph","relationships","resolve","search","spaces","wiki"]) {
     const existing = program.commands.find((command) => command.name() === group);
     if (existing && options.skipExisting) {
       registerGeneratedGroup(existing, OPERATIONS.filter((operation) => operation.group === group));
