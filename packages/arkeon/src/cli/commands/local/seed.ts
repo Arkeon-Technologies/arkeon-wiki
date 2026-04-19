@@ -93,6 +93,10 @@ async function runSeed(opts: SeedOptions): Promise<void> {
     return;
   }
 
+  // Ensure a space exists — POST /wiki requires one.
+  // On a fresh stack there are no spaces, so create a default.
+  const spaceId = await ensureDefaultSpace(apiUrl, adminKey);
+
   output.progress(
     `[arkeon] Seeding ${wikis.length} Genesis wiki pages...`,
   );
@@ -109,7 +113,7 @@ async function runSeed(opts: SeedOptions): Promise<void> {
         "content-type": "application/json",
         authorization: `ApiKey ${adminKey}`,
       },
-      body: JSON.stringify(wiki),
+      body: JSON.stringify({ ...wiki, space_id: spaceId }),
     });
 
     if (!response.ok) {
@@ -156,6 +160,34 @@ async function checkGenesisBook(apiUrl: string, adminKey: string): Promise<strin
   } catch {
     return null;
   }
+}
+
+async function ensureDefaultSpace(apiUrl: string, adminKey: string): Promise<string> {
+  const base = apiUrl.replace(/\/$/, "");
+  // Check if any space exists
+  const listRes = await fetch(`${base}/spaces`, {
+    headers: { authorization: `ApiKey ${adminKey}` },
+  });
+  if (listRes.ok) {
+    const body = (await listRes.json()) as { spaces?: Array<{ id: string }> };
+    if (body.spaces && body.spaces.length > 0) {
+      return body.spaces[0]!.id;
+    }
+  }
+  // Create one
+  const createRes = await fetch(`${base}/spaces`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `ApiKey ${adminKey}`,
+    },
+    body: JSON.stringify({ name: "default" }),
+  });
+  if (!createRes.ok) {
+    throw new Error(`Failed to create default space: ${createRes.status}`);
+  }
+  const created = (await createRes.json()) as { space: { id: string } };
+  return created.space.id;
 }
 
 function resolveApiUrl(): string {
