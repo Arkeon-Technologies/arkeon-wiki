@@ -93,6 +93,47 @@ const getRelationshipRoute = createRoute({
   },
 });
 
+const GlobalRelationshipSchema = z.object({
+  id: EntityIdParam,
+  predicate: z.string(),
+  source_id: EntityIdParam,
+  target_id: EntityIdParam,
+  properties: z.record(z.string(), z.any()),
+  source: z.any(),
+  target: z.any(),
+});
+
+const listAllRelationshipsRoute = createRoute({
+  method: "get",
+  path: "/",
+  operationId: "listAllRelationships",
+  tags: ["Relationships"],
+  summary: "List all relationships with optional filtering",
+  description:
+    "Lists relationships across the entire graph. Use predicate, source_id, target_id, or space_id to narrow results. " +
+    "Each result includes source and target entity summaries.",
+  "x-arke-auth": "optional",
+  "x-arke-related": ["GET /wiki/{id}/relationships", "GET /relationships/{relId}"],
+  "x-arke-rules": [
+    "If space_id is provided, only relationships belonging to entities in that space are returned",
+  ],
+  request: {
+    query: paginationQuerySchema(50, 200).extend({
+      predicate: queryParam("predicate", z.string().optional(), "Filter by predicate string"),
+      source_id: queryParam("source_id", z.string().optional(), "Filter by source entity ID"),
+      target_id: queryParam("target_id", z.string().optional(), "Filter by target entity ID"),
+      space_id: queryParam("space_id", z.string().optional(), "Scope to relationships in a space"),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Paginated relationship list",
+      content: jsonContent(cursorResponseSchema("relationships", GlobalRelationshipSchema)),
+    },
+    ...errorResponses([400, 403]),
+  },
+});
+
 export const wikiRelationshipsRouter = createRouter();
 export const relationshipDirectRouter = createRouter();
 
@@ -162,6 +203,63 @@ wikiRelationshipsRouter.openapi(listRelationshipsRoute, async (c) => {
         [dir === "in" ? "source" : "target"]: row.counterpart,
       };
     }),
+    cursor: next ? encodeCursor({ t: next.created_at as string | Date, i: String(next.id) }) : null,
+  }, 200);
+});
+
+relationshipDirectRouter.openapi(listAllRelationshipsRoute, async (c) => {
+  const sql = createSql();
+  const predicate = c.req.query("predicate");
+  const sourceId = c.req.query("source_id");
+  const targetId = c.req.query("target_id");
+  const spaceId = c.req.query("space_id");
+  const limit = parseLimit(c, { defaultValue: 50, maxValue: 200 });
+  const cursor = parseCursorParam(c);
+
+  const actorCtx = c.get("actor");
+  const results = await sql.transaction([
+    ...setActorContext(sql, actorCtx),
+    sql.query(
+      `
+        SELECT
+          rel.id,
+          re.predicate,
+          re.source_id,
+          re.target_id,
+          rel.properties,
+          json_build_object('id', source.id, 'kind', source.kind, 'type', source.type, 'properties', source.properties) AS source,
+          json_build_object('id', target.id, 'kind', target.kind, 'type', target.type, 'properties', target.properties) AS target,
+          rel.created_at
+        FROM relationship_edges re
+        JOIN entities rel ON rel.id = re.id
+        JOIN entities source ON source.id = re.source_id
+        JOIN entities target ON target.id = re.target_id
+        WHERE ($1::text IS NULL OR re.predicate = $1)
+          AND ($2::text IS NULL OR re.source_id = $2)
+          AND ($3::text IS NULL OR re.target_id = $3)
+          AND ($4::text IS NULL OR rel.id IN (SELECT entity_id FROM space_entities WHERE space_id = $4))
+          AND ($5::timestamptz IS NULL OR (rel.created_at, rel.id) < ($5::timestamptz, $6::text))
+        ORDER BY rel.created_at DESC, rel.id DESC
+        LIMIT $7
+      `,
+      [predicate ?? null, sourceId ?? null, targetId ?? null, spaceId ?? null, cursor?.t ?? null, cursor?.i ?? null, limit + 1],
+    ),
+  ]);
+  const rows = results.at(-1) as Array<Record<string, unknown>>;
+
+  const page = rows.slice(0, limit);
+  const next = rows.length > limit ? page[page.length - 1] : null;
+
+  return c.json({
+    relationships: page.map((row) => ({
+      id: row.id,
+      predicate: row.predicate,
+      source_id: row.source_id,
+      target_id: row.target_id,
+      properties: row.properties,
+      source: row.source,
+      target: row.target,
+    })),
     cursor: next ? encodeCursor({ t: next.created_at as string | Date, i: String(next.id) }) : null,
   }, 200);
 });
