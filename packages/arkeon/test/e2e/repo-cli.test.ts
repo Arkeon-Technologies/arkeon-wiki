@@ -112,8 +112,8 @@ describe("CLI integration — init / diff / add / rm", () => {
     expect(json?.ok).toBe(true);
     const added = json?.added as Array<{ path: string }>;
     const paths = added.map((a) => a.path).sort();
-    // AGENTS.md is written by init for universal AI tool support
-    expect(paths).toEqual(["AGENTS.md", "README.md", "texts/doc-a.md", "texts/doc-b.md"]);
+    // AGENTS.md is written by init but excluded from diff via IGNORE_FILES
+    expect(paths).toEqual(["README.md", "texts/doc-a.md", "texts/doc-b.md"]);
     expect((json?.modified as unknown[])?.length).toBe(0);
     expect((json?.deleted as unknown[])?.length).toBe(0);
   });
@@ -143,8 +143,8 @@ describe("CLI integration — init / diff / add / rm", () => {
 
     const json = parseJson(result.stdout);
     expect(json?.unchanged).toBe(3);
-    // AGENTS.md is still unregistered (not added via `arkeon add`)
-    expect((json?.added as unknown[])?.length).toBe(1);
+    // AGENTS.md excluded from diff via IGNORE_FILES
+    expect((json?.added as unknown[])?.length).toBe(0);
     expect((json?.modified as unknown[])?.length).toBe(0);
     expect((json?.deleted as unknown[])?.length).toBe(0);
   });
@@ -226,9 +226,9 @@ describe("CLI integration — init / diff / add / rm", () => {
     // After rm of doc-b and successful update of doc-a:
     // - README.md: unchanged (1)
     // - doc-a.md: unchanged (1) — update ran successfully
-    // - AGENTS.md: added (1) — not registered
+    // AGENTS.md excluded from diff via IGNORE_FILES
     expect(json?.unchanged).toBe(2);
-    expect((json?.added as unknown[])?.length).toBe(1);
+    expect((json?.added as unknown[])?.length).toBe(0);
     expect((json?.modified as unknown[])?.length).toBe(0);
     expect((json?.deleted as unknown[])?.length).toBe(0);
   });
