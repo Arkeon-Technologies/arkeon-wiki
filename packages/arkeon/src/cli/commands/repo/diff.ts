@@ -32,6 +32,7 @@ type ListResponse = {
 
 const DEFAULT_EXTENSIONS = new Set([".md", ".txt", ".tex"]);
 const IGNORE_DIRS = new Set([".arkeon", ".git", "node_modules", ".claude"]);
+const IGNORE_FILES = new Set(["AGENTS.md"]);
 const DOCUMENT_FILTERS = ["properties.subject_type:document", "type:document"];
 
 function walkDir(dir: string, base: string, extensions: Set<string>): string[] {
@@ -41,6 +42,7 @@ function walkDir(dir: string, base: string, extensions: Set<string>): string[] {
       if (IGNORE_DIRS.has(entry.name)) continue;
       results.push(...walkDir(join(dir, entry.name), base, extensions));
     } else if (entry.isFile() && extensions.has(extname(entry.name).toLowerCase())) {
+      if (IGNORE_FILES.has(entry.name)) continue;
       results.push(relative(base, join(dir, entry.name)));
     }
   }

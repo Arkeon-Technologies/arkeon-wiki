@@ -10,6 +10,7 @@ import {
   AUTH_PROFILES,
   BEST_PRACTICES,
   FILTERING_HINT,
+  WORKERS,
 } from "../../../shared/index.js";
 
 const CLI_GUIDE = `# Arkeon CLI — Getting Started
@@ -120,6 +121,13 @@ Create a new actor and register it as a local profile (requires admin):
 
 Self-service registration (server routes not yet implemented):
   arkeon auth register
+
+## Worker Configuration
+
+${WORKERS}
+
+Edit ~/.arkeon-wiki/workers.yaml directly for customization.
+See the API guide for the full schema: GET /help/guide/workers
 
 ## Filtering
 

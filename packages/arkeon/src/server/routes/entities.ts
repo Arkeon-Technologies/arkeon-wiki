@@ -3,6 +3,7 @@
 
 import { createRoute, z } from "@hono/zod-openapi";
 
+import postgres from "postgres";
 import { backgroundTask } from "../lib/background";
 import { deepMergeObjects } from "../lib/properties";
 import { encodeCursor } from "../lib/cursor";
@@ -670,20 +671,39 @@ wikisRouter.openapi(updateEntityRoute, async (c) => {
   params.push(actor.id, note, now, entityId, expectedVer);
 
   // Actor context set for ownership checks
-  const results = await sql.transaction([
-    ...setActorContext(sql, actor),
-    sql.query(
-      `UPDATE entities
-       SET properties = ${propsExpr},
-           ver = ver + 1,
-           edited_by = $${editedByIdx},
-           note = $${noteIdx},
-           updated_at = $${nowIdx}::timestamptz
-       WHERE id = $${idIdx} AND ver = $${verIdx}
-       RETURNING *`,
-      params,
-    ),
-  ]);
+  let results;
+  try {
+    results = await sql.transaction([
+      ...setActorContext(sql, actor),
+      sql.query(
+        `UPDATE entities
+         SET properties = ${propsExpr},
+             ver = ver + 1,
+             edited_by = $${editedByIdx},
+             note = $${noteIdx},
+             updated_at = $${nowIdx}::timestamptz
+         WHERE id = $${idIdx} AND ver = $${verIdx}
+         RETURNING *`,
+        params,
+      ),
+    ]);
+  } catch (err) {
+    // RLS denial (42501) may mask a CAS conflict — check version before surfacing 403
+    if (err instanceof postgres.PostgresError && err.code === "42501") {
+      const existsResult = await sql.transaction([
+        ...setActorContext(sql, actor),
+        sql`SELECT ver FROM entities WHERE id = ${entityId} LIMIT 1`,
+      ]);
+      const fresh = (existsResult[existsResult.length - 1] as Array<{ ver: number }>)[0];
+      if (fresh && fresh.ver !== expectedVer) {
+        throw new ApiError(409, "cas_conflict", "Version mismatch", {
+          entity_id: entityId,
+          expected_ver: expectedVer,
+        });
+      }
+    }
+    throw err;
+  }
 
   const updated = (results[results.length - 1] as EntityRecord[])[0];
   if (!updated) {
