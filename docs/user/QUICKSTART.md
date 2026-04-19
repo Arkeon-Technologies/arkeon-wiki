@@ -25,8 +25,8 @@ cached after that.
 arkeon seed
 ```
 
-Seeds the Genesis demo graph: 76 entities and ~220 relationships spanning
-history, science, and philosophy.
+Seeds a few Genesis demonstration wiki pages that showcase the wiki pipeline,
+including placeholder links that automatically create stub entities.
 
 ## Explore
 

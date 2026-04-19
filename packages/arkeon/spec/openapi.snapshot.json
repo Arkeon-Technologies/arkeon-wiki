@@ -2205,261 +2205,6 @@
         "x-arke-rules": []
       }
     },
-    "/ops": {
-      "post": {
-        "description": "Compatibility endpoint for structured ingestion. Supports `entity` and `relate` operations, `defaults.space_id`, and `source.entity_id` provenance. Wiki authoring remains the preferred path for narrative pages.",
-        "operationId": "postOps",
-        "parameters": [
-          {
-            "description": "Validate and plan IDs without writing",
-            "in": "query",
-            "name": "dry_run",
-            "required": false,
-            "schema": {
-              "description": "Validate and plan IDs without writing",
-              "type": [
-                "boolean",
-                "null"
-              ]
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "defaults": {
-                    "properties": {
-                      "space_id": {
-                        "description": "ULID string",
-                        "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                        "type": "string"
-                      }
-                    },
-                    "type": "object"
-                  },
-                  "format": {
-                    "enum": [
-                      "arke.ops/v1"
-                    ],
-                    "type": "string"
-                  },
-                  "ops": {
-                    "items": {
-                      "$ref": "#/components/schemas/JsonObject"
-                    },
-                    "maxItems": 1000,
-                    "minItems": 1,
-                    "type": "array"
-                  },
-                  "source": {
-                    "properties": {
-                      "entity_id": {
-                        "description": "ULID string",
-                        "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                        "type": "string"
-                      }
-                    },
-                    "type": "object"
-                  }
-                },
-                "required": [
-                  "format",
-                  "ops"
-                ],
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "committed": {
-                      "type": "boolean"
-                    },
-                    "edges": {
-                      "items": {
-                        "properties": {
-                          "id": {
-                            "description": "ULID string",
-                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                            "type": "string"
-                          },
-                          "predicate": {
-                            "type": "string"
-                          },
-                          "ref": {
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "source": {
-                            "description": "ULID string",
-                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                            "type": "string"
-                          },
-                          "target": {
-                            "description": "ULID string",
-                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "ref",
-                          "id",
-                          "source",
-                          "predicate",
-                          "target"
-                        ],
-                        "type": "object"
-                      },
-                      "type": "array"
-                    },
-                    "entities": {
-                      "items": {
-                        "properties": {
-                          "action": {
-                            "enum": [
-                              "created"
-                            ],
-                            "type": "string"
-                          },
-                          "id": {
-                            "description": "ULID string",
-                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
-                            "type": "string"
-                          },
-                          "label": {
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "ref": {
-                            "type": [
-                              "string",
-                              "null"
-                            ]
-                          },
-                          "type": {
-                            "type": "string"
-                          }
-                        },
-                        "required": [
-                          "ref",
-                          "id",
-                          "type",
-                          "label",
-                          "action"
-                        ],
-                        "type": "object"
-                      },
-                      "type": "array"
-                    },
-                    "errors": {
-                      "items": {},
-                      "type": "array"
-                    },
-                    "format": {
-                      "enum": [
-                        "arke.ops/v1"
-                      ],
-                      "type": "string"
-                    },
-                    "stats": {
-                      "properties": {
-                        "edges": {
-                          "type": "integer"
-                        },
-                        "entities": {
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "entities",
-                        "edges"
-                      ],
-                      "type": "object"
-                    }
-                  },
-                  "required": [
-                    "format",
-                    "committed",
-                    "entities",
-                    "edges",
-                    "stats"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Ops committed or dry-run planned"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Bad request"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Authentication required"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Forbidden"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Not found"
-          }
-        },
-        "summary": "Bulk ingest entities and relationships",
-        "tags": [
-          "Ops"
-        ],
-        "x-arke-auth": "required",
-        "x-arke-rules": [
-          "If defaults.space_id is provided, the space must exist",
-          "source.entity_id creates extracted_from relationships from every created entity and relationship to the source entity"
-        ]
-      }
-    },
     "/relationships/{relId}": {
       "get": {
         "operationId": "getRelationship",
@@ -4136,7 +3881,7 @@
                     "type": "array"
                   },
                   "content": {
-                    "description": "Markdown body. Typed [[links]] in the content are parsed and turned into relationships when the wiki is published.\n\nFour link forms — all wrapped in double square brackets:\n  [[entity:ULID]]                         Hard reference to an existing visible entity.\n  [[resolve:\"Label\"|\"Description\"]]       Let the server find a match via Meilisearch + LLM judge. Soft-degrades to placeholder on miss or when no LLM is configured; never fails the request.\n  [[placeholder:\"Label\"|\"Description\"]]   Unwritten stub. Not queued. Leave it, or fill it in later.\n  [[assign:\"Label\"|\"Description\"]]        Hand off to the background drafter. Queued for auto-drafting.\n\nLabels must be double-quoted. Description is optional for resolve/placeholder/assign but recommended — it gives the resolver and future drafters context. Entity IDs are unquoted ULIDs.\n\nEvery parsed link materializes as a `references` relationship from the published wiki to the target (or to a newly-minted placeholder). The wiki page itself is the canonical graph entity for its subject.\n\nChoosing between resolve / placeholder / assign: use `resolve` when the thing probably already exists and you want the server to find it; use `placeholder` when you want a stub but don't want anything auto-drafted; use `assign` to hand off actual drafting to a background worker.\n\nCaveat: the parser scans every `[[...]]` pair in the content, including inside fenced code blocks. To discuss link syntax in prose, use alternative delimiters (e.g. `<<entity:id>>`). See GET /help/guide/wiki for a worked example.",
+                    "description": "Markdown body. Typed [[links]] in the content are parsed and turned into relationships when the wiki is published.\n\nFour link forms — all wrapped in double square brackets:\n  [[entity:ULID]]                         Hard reference to an existing visible entity.\n  [[resolve:\"Label\"|\"Description\"]]       Let the server find a match via Meilisearch + LLM judge. Soft-degrades to placeholder on miss or when no LLM is configured; never fails the request.\n  [[placeholder:\"Label\"|\"Description\"]]   Unwritten stub. Not queued. Leave it, or fill it in later.\n  [[assign:\"Label\"|\"Description\"]]        Hand off to the background drafter. Queued for auto-drafting.\n\nLabels must be double-quoted. Description is optional for resolve/placeholder/assign but recommended — it gives the resolver and future drafters context. Entity IDs are unquoted ULIDs.\n\nEvery parsed link materializes as a `references` relationship from the published wiki to the target (or to a newly-minted placeholder). The wiki page itself is the canonical graph entity for its subject.\n\nChoosing between resolve / placeholder / assign: use `resolve` when the thing probably already exists and you want the server to find it; use `placeholder` when you want a stub but don't want anything auto-drafted; use `assign` to hand off actual drafting to a background worker.\n\nAfter processing, the stored entity has two content fields: `properties.content` (resolved — all links rewritten to `[[entity:ULID]]`) and `properties.submitted_content` (the original input with unresolved link syntax preserved). The same applies when updating content via PUT.\n\nCaveat: the parser scans every `[[...]]` pair in the content, including inside fenced code blocks. To discuss link syntax in prose, use alternative delimiters (e.g. `<<entity:id>>`). See GET /help/guide/wiki for a worked example.",
                     "minLength": 1,
                     "type": "string"
                   },
@@ -4592,11 +4337,84 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EntityResponse"
+                  "properties": {
+                    "entity": {
+                      "$ref": "#/components/schemas/Entity"
+                    },
+                    "placeholders": {
+                      "description": "Placeholders minted from wiki links in updated content. Only present when content was processed through the wiki link pipeline.",
+                      "items": {
+                        "properties": {
+                          "id": {
+                            "description": "ULID string",
+                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "enum": [
+                              "placeholder",
+                              "assigned"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "label",
+                          "status"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "relationships_created": {
+                      "description": "Number of new reference relationships created. Only present when content was processed.",
+                      "type": "integer"
+                    },
+                    "relationships_removed": {
+                      "description": "Number of reference relationships removed (target no longer in content). Only present when content was processed.",
+                      "type": "integer"
+                    },
+                    "relationships_updated": {
+                      "description": "Number of existing reference relationships updated (span_text changed). Only present when content was processed.",
+                      "type": "integer"
+                    },
+                    "resolve_warnings": {
+                      "description": "Emitted when [[resolve:...]] links soft-degrade to placeholders.",
+                      "items": {
+                        "properties": {
+                          "label": {
+                            "type": "string"
+                          },
+                          "reason": {
+                            "enum": [
+                              "llm_not_configured",
+                              "no_match"
+                            ],
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "label",
+                          "reason"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "entity"
+                  ],
+                  "type": "object"
                 }
               }
             },
-            "description": "Entity updated"
+            "description": "Entity updated. When content contains wiki links that were processed, includes placeholders, relationships_created, and resolve_warnings."
           },
           "400": {
             "content": {
@@ -4662,7 +4480,8 @@
           "Only the owner or an admin may update",
           "Optimistic concurrency: must pass current ver to update",
           "Properties are shallow-merged: only provided keys are updated, omitted keys are preserved",
-          "remove_properties deletes keys by name after the merge, so removals take precedence over additions"
+          "remove_properties deletes keys by name after the merge, so removals take precedence over additions",
+          "When properties.content is updated on a wiki, typed [[links]] are parsed and resolved — new placeholders are minted, relationships are created/updated/removed, and [[assign:...]] links are queued for background drafting"
         ]
       }
     },
