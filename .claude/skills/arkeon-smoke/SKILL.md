@@ -2,25 +2,36 @@
 name: arkeon-smoke
 description: "End-to-end smoke test: discover what's available, design realistic user flows, test them, report results."
 disable-model-invocation: true
-allowed-tools: "Bash(arkeon *, npx arkeon *, npx tsx *, curl *, mkdir *, rm -rf /tmp/arkeon-smoke*, ls *, cat *), Read, Write, Glob, Grep"
+allowed-tools: "Bash(arkeon-wiki *, npx arkeon-wiki *, npx tsx *, curl *, mkdir *, rm -rf /tmp/arkeon-smoke*, ls *, cat *, which *), Read, Write, Glob, Grep"
 ---
 
 # Arkeon Smoke Test
 
 Comprehensive, exploratory smoke test of arkeon-wiki. Instead of a fixed checklist, this skill discovers what's available and tests realistic user workflows.
 
+## Phase 0: Detect CLI
+
+Determine how to invoke the CLI:
+
+```bash
+which arkeon-wiki 2>/dev/null && echo "global" || echo "checkout"
+```
+
+- If `arkeon-wiki` is on PATH, use `arkeon-wiki` for all commands.
+- If not (repo checkout), use `npx tsx packages/arkeon/src/index.ts`.
+
+Set a variable or alias for the rest of the test. The CLI binary is `arkeon-wiki`, not `arkeon`.
+
 ## Phase 1: Discovery
 
 Before testing anything, understand what's available:
 
-1. **Check stack health**: `arkeon status`
-2. **Read the docs**: `arkeon guide` and `arkeon docs --format cli` to learn every available command
-3. **Read the API**: `arkeon docs --format api` to learn every endpoint
+1. **Check stack health**: `arkeon-wiki status`
+2. **Read the docs**: `arkeon-wiki guide` and `arkeon-wiki docs --format cli` to learn every available command
+3. **Read the API**: `arkeon-wiki docs --format api` to learn every endpoint
 4. **Inventory the features**: Make a list of all commands and endpoints, grouped by workflow
 
-If the stack isn't running, start it: `arkeon up && arkeon seed`
-
-If running from a repo checkout, use `npx tsx packages/arkeon/src/index.ts` instead of `arkeon`.
+If the stack isn't running, start it: `arkeon-wiki up && arkeon-wiki seed`
 
 ## Phase 2: Design Flows
 
