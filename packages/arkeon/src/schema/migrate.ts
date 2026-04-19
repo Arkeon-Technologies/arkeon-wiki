@@ -29,7 +29,7 @@ export interface MigrateOptions {
    * Password to assign to the arke_app role. Substituted into
    * 001-foundation.sql via the :'arke_app_password' template token. Defaults
    * to the legacy "arke" password for ad-hoc local dev runs; the CLI
-   * passes the value from ~/.arkeon/secrets.json at start time.
+   * passes the value from ~/.arkeon-wiki/secrets.json at start time.
    */
   arkeAppPassword?: string;
 }

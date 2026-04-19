@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `arkeon logs [prefixes...]` — tail ~/.arkeon/arkeon.log with an
+ * `arkeon logs [prefixes...]` — tail ~/.arkeon-wiki/arkeon.log with an
  * optional prefix filter ([meili], [api], [retention], [queue], etc.).
  *
  * Prefixes are the [foo] tags the daemon writes itself plus anything

@@ -14,7 +14,7 @@ arkeon init
 arkeon up
 ```
 
-`arkeon init` generates secrets and a state directory at `~/.arkeon/`.
+`arkeon init` generates secrets and a state directory at `~/.arkeon-wiki/`.
 `arkeon up` starts embedded Postgres, Meilisearch, and the API as a
 background daemon. First run downloads a Meilisearch binary (~100 MB) —
 cached after that.
@@ -55,10 +55,10 @@ arkeon search "philosophy" # Full-text search
 
 ## State directory
 
-All state lives in `~/.arkeon/` (override with `ARKEON_HOME`):
+All state lives in `~/.arkeon-wiki/` (override with `ARKEON_WIKI_HOME`):
 
 ```
-~/.arkeon/
+~/.arkeon-wiki/
   bin/meilisearch       # downloaded once
   data/postgres/        # embedded Postgres cluster
   data/meili/           # Meilisearch index

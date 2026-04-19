@@ -24,11 +24,11 @@ npm install
 npx tsx packages/arkeon/src/index.ts start    # bring up the full stack
 ```
 
-First run downloads a Meilisearch binary into `~/.arkeon/bin/` (one-time, ~100MB), initializes an embedded Postgres cluster in `~/.arkeon/data/postgres/`, runs migrations in-process, and starts the API on `http://localhost:8000`. The admin API key is generated on first start and printed to the console (and persisted in `~/.arkeon/secrets.json` for subsequent starts).
+First run downloads a Meilisearch binary into `~/.arkeon-wiki/bin/` (one-time, ~100MB), initializes an embedded Postgres cluster in `~/.arkeon-wiki/data/postgres/`, runs migrations in-process, and starts the API on `http://localhost:8000`. The admin API key is generated on first start and printed to the console (and persisted in `~/.arkeon-wiki/secrets.json` for subsequent starts).
 
 `Ctrl+C` drains gracefully. From another terminal: `arkeon-wiki status`, `arkeon-wiki stop`, `arkeon-wiki reset`.
 
-State lives in `~/.arkeon/` by default (override with `ARKEON_HOME`). `arkeon-wiki reset` wipes data but keeps secrets + binary; `arkeon-wiki reset --hard` wipes everything.
+State lives in `~/.arkeon-wiki/` by default (override with `ARKEON_WIKI_HOME`). `arkeon-wiki reset` wipes data but keeps secrets + binary; `arkeon-wiki reset --hard` wipes everything.
 
 ## Workspace Commands
 
@@ -48,7 +48,7 @@ Local-mode defaults are fine out of the box — secrets are generated on first r
 - `DATABASE_URL` — point at an external Postgres instead of embedded
 - `MEILI_URL` / `MEILI_MASTER_KEY` — point at an external Meilisearch
 - `STORAGE_BACKEND=s3` — switch from local filesystem to S3/R2/MinIO
-- `ARKEON_HOME` — override the `~/.arkeon` state directory
+- `ARKEON_WIKI_HOME` — override the `~/.arkeon-wiki` state directory
 
 ## One package, one deps list
 
@@ -84,13 +84,13 @@ cd packages/arkeon && npm pack
 cd /tmp && mkdir smoke && cd smoke
 npm init -y
 npm install /path/to/arkeon-<version>.tgz
-ARKEON_HOME=./state npx arkeon-wiki init
-ARKEON_HOME=./state npx arkeon-wiki up
-ARKEON_HOME=./state npx arkeon-wiki seed
-ARKEON_HOME=./state npx arkeon-wiki status
+ARKEON_WIKI_HOME=./state npx arkeon-wiki init
+ARKEON_WIKI_HOME=./state npx arkeon-wiki up
+ARKEON_WIKI_HOME=./state npx arkeon-wiki seed
+ARKEON_WIKI_HOME=./state npx arkeon-wiki status
 curl http://localhost:8000/health
 curl http://localhost:8000/explore
-ARKEON_HOME=./state npx arkeon-wiki down
+ARKEON_WIKI_HOME=./state npx arkeon-wiki down
 ```
 
 Do not skip this step.

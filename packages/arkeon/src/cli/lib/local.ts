@@ -69,7 +69,7 @@ export interface InitLlmFlags {
  * assumes a non-interactive caller (deployment script or LLM agent).
  *
  * Per-step overrides (resolve/exists/draft/dedup) are set by hand-editing
- * ~/.arkeon/llm.json after init — see docs/dev/WIKI_PIPELINE.md.
+ * ~/.arkeon-wiki/llm.json after init — see docs/dev/WIKI_PIPELINE.md.
  *
  * Throws Error with a message naming the missing flags on partial input,
  * or naming the offending URL on base-URL validation failure.

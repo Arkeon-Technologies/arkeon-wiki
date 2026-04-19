@@ -33,6 +33,6 @@ npx arkeon status          # Show running state, URLs, and version
 
 - Single Node.js process, no Docker required
 - Embedded Postgres (via `embedded-postgres`) and Meilisearch binary
-- State stored in `~/.arkeon/` (override with `ARKEON_HOME`)
+- State stored in `~/.arkeon-wiki/` (override with `ARKEON_WIKI_HOME`)
 - Spaces provide multi-tenant isolation; entities and relationships are scoped to spaces
 - Classification levels (0-4) gate read access; write access requires level + ACL

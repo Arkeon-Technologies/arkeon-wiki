@@ -51,7 +51,7 @@ From the `arkeon status` output, check:
 Check the state directory exists and has the expected structure:
 
 ```bash
-ls -la ~/.arkeon/
+ls -la ~/.arkeon-wiki/
 ```
 
 Verify:
@@ -59,7 +59,7 @@ Verify:
 - `data/postgres/` exists (embedded Postgres data)
 - `bin/` exists (Meilisearch binary)
 
-If `ARKEON_HOME` is set, check that directory instead.
+If `ARKEON_WIKI_HOME` is set, check that directory instead.
 
 ## 6. Repo binding (if applicable)
 

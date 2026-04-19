@@ -6,7 +6,7 @@
  * running stack.
  *
  * Posts each bundled wiki page to POST /wiki using the admin key from
- * ~/.arkeon/secrets.json. The pages use [[placeholder:...]] links to
+ * ~/.arkeon-wiki/secrets.json. The pages use [[placeholder:...]] links to
  * demonstrate how the wiki pipeline creates entities and relationships.
  */
 

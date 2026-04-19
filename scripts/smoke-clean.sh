@@ -6,7 +6,7 @@
 # Usage: ./scripts/smoke-clean.sh [--keep]
 #   --keep    Don't delete the scratch directory afterward (for debugging)
 #
-# WARNING: This wipes ~/.arkeon (embedded Postgres data, Meilisearch
+# WARNING: This wipes ~/.arkeon-wiki (embedded Postgres data, Meilisearch
 # binary, secrets). If you have data you care about, back it up first.
 
 set -euo pipefail
@@ -40,7 +40,7 @@ cleanup() {
   step "Cleanup"
   # Stop Arkeon if running in the scratch env
   if [ -f "$SCRATCH/state/pids/api.pid" ] 2>/dev/null; then
-    ARKEON_HOME="$SCRATCH/state" npx arkeon down 2>/dev/null || true
+    ARKEON_WIKI_HOME="$SCRATCH/state" npx arkeon down 2>/dev/null || true
   fi
   # Also try killing by port in case graceful shutdown fails
   lsof -ti :$PORT 2>/dev/null | xargs kill -9 2>/dev/null || true
@@ -77,12 +77,12 @@ if npm list -g arkeon 2>/dev/null | grep -q arkeon; then
 fi
 
 # Wipe Arkeon home directory
-if [ -d "$HOME/.arkeon" ]; then
-  echo "Wiping ~/.arkeon..."
-  rm -rf "$HOME/.arkeon"
-  pass "~/.arkeon removed"
+if [ -d "$HOME/.arkeon-wiki" ]; then
+  echo "Wiping ~/.arkeon-wiki..."
+  rm -rf "$HOME/.arkeon-wiki"
+  pass "~/.arkeon-wiki removed"
 else
-  echo "~/.arkeon does not exist, nothing to wipe"
+  echo "~/.arkeon-wiki does not exist, nothing to wipe"
 fi
 
 pass "Clean slate established"
@@ -146,7 +146,7 @@ pass "arkeon installed from tarball"
 # Phase 5: Run the full lifecycle
 # ---------------------------------------------------------------
 step "Phase 5: Lifecycle test"
-export ARKEON_HOME="$SCRATCH/state"
+export ARKEON_WIKI_HOME="$SCRATCH/state"
 
 echo "arkeon init..."
 npx arkeon init || fail "arkeon init"
@@ -202,7 +202,7 @@ echo "arkeon seed..."
 ADMIN_KEY=$(grep "Admin API key" "$LOGFILE" | tail -1 | awk '{print $NF}')
 if [ -z "$ADMIN_KEY" ]; then
   # Try reading from secrets.json
-  ADMIN_KEY=$(cat "$ARKEON_HOME/secrets.json" 2>/dev/null | grep -o '"adminKey":"[^"]*"' | cut -d'"' -f4)
+  ADMIN_KEY=$(cat "$ARKEON_WIKI_HOME/secrets.json" 2>/dev/null | grep -o '"adminKey":"[^"]*"' | cut -d'"' -f4)
 fi
 
 if [ -n "$ADMIN_KEY" ]; then

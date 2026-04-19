@@ -1,6 +1,6 @@
 #!/bin/bash
 # CI-safe pack smoke test: build a tarball, install it in a scratch
-# directory, and run the full lifecycle — without touching ~/.arkeon
+# directory, and run the full lifecycle — without touching ~/.arkeon-wiki
 # or the developer's running instance.
 #
 # Usage: ./scripts/smoke-pack.sh [--keep] [--skip-build]
@@ -9,7 +9,7 @@
 #                  when CI already built the package)
 #
 # Unlike smoke-clean.sh, this script:
-#   - Never wipes ~/.arkeon or global state
+#   - Never wipes ~/.arkeon-wiki or global state
 #   - Uses unique ports (19000/19433/19700) to avoid conflicts
 #   - Validates tarball contents before installing
 #   - Tests CLI commands (status, seed, entities, actors, docs)
@@ -46,13 +46,13 @@ PG_PORT=19433
 MEILI_PORT=19700
 
 # Allow CI to point at a cached Meilisearch binary directory
-MEILI_CACHE_DIR="${MEILI_CACHE_DIR:-$HOME/.arkeon/bin}"
+MEILI_CACHE_DIR="${MEILI_CACHE_DIR:-$HOME/.arkeon-wiki/bin}"
 
 cleanup() {
   step "Cleanup"
   # Stop Arkeon if running in the scratch env (HOME override for Conf isolation)
   if [ -f "$SCRATCH/state/pids/api.pid" ] 2>/dev/null; then
-    HOME="$SCRATCH" ARKEON_HOME="$SCRATCH/state" npx arkeon-wiki down 2>/dev/null || true
+    HOME="$SCRATCH" ARKEON_WIKI_HOME="$SCRATCH/state" npx arkeon-wiki down 2>/dev/null || true
   fi
   # Also try killing by port in case graceful shutdown fails
   lsof -ti :$PORT 2>/dev/null | xargs kill -9 2>/dev/null || true
@@ -141,12 +141,12 @@ pass "arkeon-wiki installed and binary resolves"
 # Phase 5: Run the full lifecycle
 # ---------------------------------------------------------------
 step "Phase 4: Lifecycle test"
-export ARKEON_HOME="$SCRATCH/state"
+export ARKEON_WIKI_HOME="$SCRATCH/state"
 
 # Pre-populate Meilisearch binary cache if available
 if [ -d "$MEILI_CACHE_DIR" ] && [ "$(ls -A "$MEILI_CACHE_DIR" 2>/dev/null)" ]; then
-  mkdir -p "$ARKEON_HOME/bin"
-  cp -a "$MEILI_CACHE_DIR"/* "$ARKEON_HOME/bin/" 2>/dev/null || true
+  mkdir -p "$ARKEON_WIKI_HOME/bin"
+  cp -a "$MEILI_CACHE_DIR"/* "$ARKEON_WIKI_HOME/bin/" 2>/dev/null || true
   echo "Pre-populated Meilisearch binary from cache"
 fi
 
@@ -227,7 +227,7 @@ step "Phase 6: CLI command tests"
 # Extract admin key for authenticated commands
 ADMIN_KEY=$(grep "Admin API key" "$LOGFILE" | tail -1 | awk '{print $NF}')
 if [ -z "$ADMIN_KEY" ]; then
-  ADMIN_KEY=$(cat "$ARKEON_HOME/secrets.json" 2>/dev/null | grep -o '"adminKey":"[^"]*"' | cut -d'"' -f4)
+  ADMIN_KEY=$(cat "$ARKEON_WIKI_HOME/secrets.json" 2>/dev/null | grep -o '"adminKey":"[^"]*"' | cut -d'"' -f4)
 fi
 
 if [ -z "$ADMIN_KEY" ]; then

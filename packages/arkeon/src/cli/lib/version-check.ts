@@ -4,7 +4,7 @@
 /**
  * Non-blocking version check. On every CLI invocation:
  *
- *   1. Read ~/.arkeon/version-check.json (cached latest version + timestamp)
+ *   1. Read ~/.arkeon-wiki/version-check.json (cached latest version + timestamp)
  *   2. If cache is fresh (<24h) and a newer version exists, print a warning
  *   3. If cache is stale or missing, spawn a background `npm view` to refresh it
  *
@@ -26,7 +26,7 @@ interface VersionCache {
 }
 
 function cachePath(): string {
-  return join(process.env.ARKEON_HOME ?? join(homedir(), ".arkeon"), CHECK_FILE);
+  return join(process.env.ARKEON_WIKI_HOME ?? join(homedir(), ".arkeon-wiki"), CHECK_FILE);
 }
 
 function readCache(): VersionCache | null {
@@ -41,7 +41,7 @@ function readCache(): VersionCache | null {
 
 function writeCache(latest: string): void {
   try {
-    const dir = process.env.ARKEON_HOME ?? join(homedir(), ".arkeon");
+    const dir = process.env.ARKEON_WIKI_HOME ?? join(homedir(), ".arkeon-wiki");
     mkdirSync(dir, { recursive: true });
     const data: VersionCache = { checked_at: new Date().toISOString(), latest };
     writeFileSync(cachePath(), JSON.stringify(data) + "\n");

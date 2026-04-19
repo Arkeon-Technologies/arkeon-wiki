@@ -112,7 +112,7 @@ When the stack is running, the API is also self-documenting:
 
 ## Configuration
 
-All state lives in `~/.arkeon/` by default (override with `ARKEON_HOME`).
+All state lives in `~/.arkeon-wiki/` by default (override with `ARKEON_WIKI_HOME`).
 For external Postgres/Meilisearch and other configuration options, see
 the [quickstart](docs/user/QUICKSTART.md).
 
