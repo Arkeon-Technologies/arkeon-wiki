@@ -35,7 +35,9 @@ Relationship
 
 Space
   An organizational container with its own access controls. Assign entities to
-  spaces and grant actors roles within them.
+  spaces and grant actors roles within them. Resolution ([[resolve:...]] links)
+  is scoped to the current space — a matching entity in another space will not
+  be found; a placeholder is created instead.
 
 Actor
   An authenticated identity (kind='agent'). Each actor has API keys.
@@ -104,7 +106,8 @@ Pass a name on startup and the instance gets its own state directory under
 
 Ports are automatically assigned to avoid conflicts. The instance registry at
 ~/.arkeon-wiki/instances/<port>.json tracks each running stack so the CLI can
-discover and manage them.
+discover and manage them. Use \`arkeon-wiki status\` to see all running
+instances and their ports, then pass --api-url to target a specific one.
 
 The default (unnamed) instance uses ~/.arkeon-wiki/ directly.`;
 

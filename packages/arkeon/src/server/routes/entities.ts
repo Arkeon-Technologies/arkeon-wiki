@@ -108,11 +108,12 @@ const listEntitiesRoute = createRoute({
   path: "/",
   operationId: "listWikis",
   tags: ["Wiki"],
-  summary: "List entities with filtering, sorting, and cursor pagination",
+  summary: "List wiki entities with filtering, sorting, and cursor pagination",
   "x-arke-auth": "optional",
   "x-arke-related": ["GET /search", "GET /wiki/{id}"],
   "x-arke-rules": [
     "If space_id is provided, only entities belonging to that space are returned",
+    "Relationships (kind=relationship) are always excluded — use GET /relationships to list them",
   ],
   request: {
     query: ListEntitiesQuery,
@@ -257,7 +258,7 @@ const bulkDeleteEntitiesRoute = createRoute({
     "Requires at least one of filter or space_id",
     "Capped at 1000 entities per call — returns 400 if more match",
     "RLS enforces per-entity permission checks — only entities you can delete are deleted",
-    "Relationships are excluded unless explicitly filtered by kind",
+    "Relationships are always excluded — use dedicated relationship endpoints",
   ],
   request: { query: BulkDeleteQuery },
   responses: {
@@ -473,9 +474,7 @@ wikisRouter.openapi(listEntitiesRoute, async (c) => {
   const sort = parseSort(c.req.query("sort"), ["updated_at", "created_at"], "updated_at");
 
   const userFilter = c.req.query("filter");
-  const hasKindFilter = userFilter?.split(",").some((expr) => /^kind(!:|!\?|>=|<=|>|<|:|\?)/.test(expr.trim()));
-  const implicitFilter = hasKindFilter ? undefined : "kind!:relationship";
-  const filter = implicitFilter ? mergeFilters(implicitFilter, userFilter) : userFilter;
+  const filter = mergeFilters("kind!:relationship", userFilter);
 
   const spaceId = c.req.query("space_id");
   const listing = buildEntityListingQuery({ filter, limit, cursor, sort, order, spaceId });
@@ -802,10 +801,8 @@ wikisRouter.openapi(bulkDeleteEntitiesRoute, async (c) => {
     throw new ApiError(400, "invalid_query", "At least one of filter or space_id is required");
   }
 
-  // Same implicit filter as GET /wiki — exclude relationships unless explicitly filtered
-  const hasKindFilter = userFilter?.split(",").some((expr) => /^kind(!:|!\?|>=|<=|>|<|:|\?)/.test(expr.trim()));
-  const implicitFilter = hasKindFilter ? undefined : "kind!:relationship";
-  const filter = implicitFilter ? mergeFilters(implicitFilter, userFilter) : userFilter;
+  // Always exclude relationships — use dedicated relationship endpoints
+  const filter = mergeFilters("kind!:relationship", userFilter);
 
   const { whereSql, params } = buildEntityFilterWhere({ filter, spaceId });
 

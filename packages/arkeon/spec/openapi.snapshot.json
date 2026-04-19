@@ -2205,6 +2205,238 @@
         "x-arke-rules": []
       }
     },
+    "/relationships": {
+      "get": {
+        "description": "Lists relationships across the entire graph. Use predicate, source_id, target_id, or space_id to narrow results. Each result includes source and target entity summaries.",
+        "operationId": "listAllRelationships",
+        "parameters": [
+          {
+            "description": "Max results (default 50, max 200)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Max results (default 50, max 200)",
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Pagination cursor",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "Pagination cursor",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by predicate string",
+            "in": "query",
+            "name": "predicate",
+            "required": false,
+            "schema": {
+              "description": "Filter by predicate string",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by source entity ID",
+            "in": "query",
+            "name": "source_id",
+            "required": false,
+            "schema": {
+              "description": "Filter by source entity ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by target entity ID",
+            "in": "query",
+            "name": "target_id",
+            "required": false,
+            "schema": {
+              "description": "Filter by target entity ID",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Scope to relationships in a space",
+            "in": "query",
+            "name": "space_id",
+            "required": false,
+            "schema": {
+              "description": "Scope to relationships in a space",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "cursor": {
+                      "description": "Opaque pagination cursor",
+                      "example": "eyJ0Ijoi...",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "relationships": {
+                      "items": {
+                        "properties": {
+                          "id": {
+                            "description": "ULID string",
+                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                            "type": "string"
+                          },
+                          "predicate": {
+                            "type": "string"
+                          },
+                          "properties": {
+                            "additionalProperties": {},
+                            "type": "object"
+                          },
+                          "source": {
+                            "description": "Summary of the related entity (id, kind, type, properties)",
+                            "properties": {
+                              "id": {
+                                "description": "ULID string",
+                                "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "properties": {
+                                "additionalProperties": {},
+                                "type": "object"
+                              },
+                              "type": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "type",
+                              "properties"
+                            ],
+                            "type": "object"
+                          },
+                          "source_id": {
+                            "description": "ULID string",
+                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                            "type": "string"
+                          },
+                          "target": {
+                            "description": "Summary of the related entity (id, kind, type, properties)",
+                            "properties": {
+                              "id": {
+                                "description": "ULID string",
+                                "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "properties": {
+                                "additionalProperties": {},
+                                "type": "object"
+                              },
+                              "type": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "type",
+                              "properties"
+                            ],
+                            "type": "object"
+                          },
+                          "target_id": {
+                            "description": "ULID string",
+                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "predicate",
+                          "source_id",
+                          "target_id",
+                          "properties",
+                          "source",
+                          "target"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "relationships",
+                    "cursor"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Paginated relationship list"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          }
+        },
+        "summary": "List all relationships with optional filtering",
+        "tags": [
+          "Relationships"
+        ],
+        "x-arke-auth": "optional",
+        "x-arke-related": [
+          "GET /wiki/{id}/relationships",
+          "GET /relationships/{relId}"
+        ],
+        "x-arke-rules": [
+          "If space_id is provided, only relationships belonging to entities in that space are returned"
+        ]
+      }
+    },
     "/relationships/{relId}": {
       "get": {
         "operationId": "getRelationship",
@@ -2241,14 +2473,74 @@
                       "additionalProperties": {},
                       "type": "object"
                     },
-                    "source": {},
+                    "source": {
+                      "description": "Summary of the related entity (id, kind, type, properties)",
+                      "properties": {
+                        "id": {
+                          "description": "ULID string",
+                          "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string"
+                        },
+                        "properties": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "type": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "kind",
+                        "type",
+                        "properties"
+                      ],
+                      "type": "object"
+                    },
                     "source_id": {
                       "description": "ULID string",
                       "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
                       "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
                       "type": "string"
                     },
-                    "target": {},
+                    "target": {
+                      "description": "Summary of the related entity (id, kind, type, properties)",
+                      "properties": {
+                        "id": {
+                          "description": "ULID string",
+                          "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string"
+                        },
+                        "properties": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "type": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "kind",
+                        "type",
+                        "properties"
+                      ],
+                      "type": "object"
+                    },
                     "target_id": {
                       "description": "ULID string",
                       "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
@@ -2261,7 +2553,9 @@
                     "predicate",
                     "source_id",
                     "target_id",
-                    "properties"
+                    "properties",
+                    "source",
+                    "target"
                   ],
                   "type": "object"
                 }
@@ -3771,7 +4065,7 @@
           "Requires at least one of filter or space_id",
           "Capped at 1000 entities per call — returns 400 if more match",
           "RLS enforces per-entity permission checks — only entities you can delete are deleted",
-          "Relationships are excluded unless explicitly filtered by kind"
+          "Relationships are always excluded — use dedicated relationship endpoints"
         ]
       },
       "get": {
@@ -3926,7 +4220,7 @@
             "description": "Forbidden"
           }
         },
-        "summary": "List entities with filtering, sorting, and cursor pagination",
+        "summary": "List wiki entities with filtering, sorting, and cursor pagination",
         "tags": [
           "Wiki"
         ],
@@ -3936,7 +4230,8 @@
           "GET /wiki/{id}"
         ],
         "x-arke-rules": [
-          "If space_id is provided, only entities belonging to that space are returned"
+          "If space_id is provided, only entities belonging to that space are returned",
+          "Relationships (kind=relationship) are always excluded — use GET /relationships to list them"
         ]
       },
       "post": {
@@ -5309,14 +5604,74 @@
                             "additionalProperties": {},
                             "type": "object"
                           },
-                          "source": {},
+                          "source": {
+                            "description": "Summary of the related entity (id, kind, type, properties)",
+                            "properties": {
+                              "id": {
+                                "description": "ULID string",
+                                "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "properties": {
+                                "additionalProperties": {},
+                                "type": "object"
+                              },
+                              "type": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "type",
+                              "properties"
+                            ],
+                            "type": "object"
+                          },
                           "source_id": {
                             "description": "ULID string",
                             "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
                             "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
                             "type": "string"
                           },
-                          "target": {},
+                          "target": {
+                            "description": "Summary of the related entity (id, kind, type, properties)",
+                            "properties": {
+                              "id": {
+                                "description": "ULID string",
+                                "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "properties": {
+                                "additionalProperties": {},
+                                "type": "object"
+                              },
+                              "type": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "type",
+                              "properties"
+                            ],
+                            "type": "object"
+                          },
                           "target_id": {
                             "description": "ULID string",
                             "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
