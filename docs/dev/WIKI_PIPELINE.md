@@ -124,29 +124,65 @@ duplicates that deterministic label/alias checks missed. High-confidence cases
 can be routed to merge/review; uncertain cases should remain separate because
 false merges are worse than duplicate pages.
 
-## LLM Configuration
+## Worker Configuration
 
-All LLM-using steps share `server/lib/llm.ts`.
+Workers are configured via `~/.arkeon-wiki/workers.yaml` (override path with
+`ARKEON_WORKERS_CONFIG`). Each worker can have its own LLM provider/model,
+custom prompt, and operational settings. The file is optional — everything
+works with env vars or `llm.json` alone.
 
-Config file: `~/.arkeon-wiki/llm.json` (override with `WIKI_LLM_CONFIG_PATH`)
+```yaml
+llm:
+  provider: openai
+  base_url: https://api.openai.com/v1
+  api_key: sk-...
+  model: gpt-5.4-nano
 
-```json
-{
-  "default": {
-    "provider": "openai",
-    "base_url": "https://api.openai.com/v1",
-    "api_key": "sk-...",
-    "model": "gpt-5.4-nano"
-  },
-  "draft": { "model": "gpt-5.4-nano", "max_tokens": 8000 },
-  "dedup": { "model": "gpt-5.4-nano", "max_tokens": 16000 }
-}
+workers:
+  extractor:
+    enabled: true
+    prompt_mode: append        # replace | prepend | append
+    prompt: null               # custom text merged with built-in prompt
+    llm:
+      model: gpt-5.4-nano
+    steps:
+      resolve: { model: gpt-5.4-nano, max_tokens: 256 }
+      exists:  { model: gpt-5.4-nano, max_tokens: 512 }
+
+  drafter:
+    enabled: true
+    poll_interval: 10s
+    batch_size: 5
+    max_depth: 2
+    llm: { model: gpt-4o, max_tokens: 8000 }
 ```
 
-Resolution order:
+### Workers
 
-1. Step-specific model env var, such as `WIKI_RESOLVE_MODEL`.
-2. Step block in `llm.json`.
-3. `default` block in `llm.json`.
-4. `OPENAI_API_KEY` / `OPENAI_BASE_URL`.
-5. Hardcoded per-step defaults.
+| Worker | Type | Description |
+|---|---|---|
+| **extractor** | sync | Resolves `[[resolve:...]]` links during `POST /wiki` via Meilisearch + LLM judge |
+| **drafter** | background | Polls `wiki_draft_queue`, drafts wiki content for `[[assign:...]]` placeholders |
+
+Future workers (consolidator, cross-space connector) will be added to this
+file when implemented.
+
+### Prompt customization
+
+Each worker accepts `prompt` + `prompt_mode`:
+
+- **replace**: fully replaces the built-in system prompt
+- **prepend**: user text goes before the built-in prompt
+- **append**: user text goes after the built-in prompt (most common)
+- `prompt: null` or omitted: use built-in unchanged
+
+### LLM resolution order
+
+1. Per-step env var (`WIKI_RESOLVE_MODEL`, etc.) — model only
+2. `workers.yaml` step config (extractor only)
+3. `workers.yaml` worker-level `llm` block
+4. `workers.yaml` top-level `llm` block
+5. `llm.json` step block (legacy fallback)
+6. `llm.json` `"default"` block (legacy fallback)
+7. `OPENAI_API_KEY` / `OPENAI_BASE_URL`
+8. Hardcoded per-step defaults

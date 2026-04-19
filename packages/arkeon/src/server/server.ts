@@ -24,6 +24,7 @@ import { createApp, openApiConfig } from "./app.js";
 import { ensureBootstrap } from "./lib/bootstrap.js";
 import { ensureMeiliIndex, isMeilisearchConfigured } from "./lib/meilisearch.js";
 import { startRetention, stopRetention } from "./lib/retention.js";
+import { startWorkers, stopWorkers } from "./lib/worker-registry.js";
 
 export interface ArkeonApiConfig {
   /** TCP port to bind. Default: process.env.PORT ?? 8000 */
@@ -113,11 +114,7 @@ export async function startApi(config: ArkeonApiConfig = {}): Promise<ArkeonApi>
   });
 
   startRetention();
-
-  // TODO(phase-2): Start wiki background processors here:
-  //   - Draft worker: polls wiki_draft_queue, calls POST /wiki with depth+1
-  //   - Dedup poller: watches published wikis, finds duplicate labels/aliases, dispatches edits
-  // Pattern: use setInterval like retention.ts, or a dedicated poller
+  await startWorkers();
 
   const address = server.address() as AddressInfo;
 
@@ -126,6 +123,7 @@ export async function startApi(config: ArkeonApiConfig = {}): Promise<ArkeonApi>
       opts.drainTimeoutMs ?? (Number(process.env.DRAIN_TIMEOUT_MS) || 320_000);
 
     const drainPromise = (async () => {
+      stopWorkers();
       stopRetention();
       await new Promise<void>((resolve, reject) =>
         server.close((err) => (err ? reject(err) : resolve())),
