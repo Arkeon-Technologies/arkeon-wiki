@@ -173,11 +173,18 @@ describe("CLI integration — init / diff / add / rm", () => {
     expect(modified[0]!.entity_id).toBeTruthy();
   });
 
-  // The `add` command update path works (verified manually) but the CLI
-  // output includes nested JSON in the `documents` array. The greedy
-  // parseJson regex grabs a malformed span. Needs a smarter JSON parser
-  // or --raw flag support on repo commands.
-  test.skip("add updates modified files in place (parseJson regex issue)", () => {});
+  test("add updates modified files in place", () => {
+    // doc-a.md was modified in the previous test (appendFileSync).
+    // Re-adding should update the existing entity in place.
+    const result = arkeon("add texts/doc-a.md", testDir);
+    expect(result.ok).toBe(true);
+
+    const json = parseJson(result.stdout);
+    expect(json).not.toBeNull();
+    expect(json?.operation).toBe("add");
+    expect(json?.updated).toBe(1);
+    expect(json?.added).toBe(0);
+  });
 
   // --- delete ---
 
@@ -216,14 +223,13 @@ describe("CLI integration — init / diff / add / rm", () => {
     expect(result.ok).toBe(true);
 
     const json = parseJson(result.stdout);
-    // doc-a.md stays modified because the "add updates" test is skipped
-    // (server bug: PUT content update can't find space). So we have:
+    // After rm of doc-b and successful update of doc-a:
     // - README.md: unchanged (1)
-    // - doc-a.md: modified (1) — update was skipped
+    // - doc-a.md: unchanged (1) — update ran successfully
     // - AGENTS.md: added (1) — not registered
-    expect(json?.unchanged).toBe(1);
+    expect(json?.unchanged).toBe(2);
     expect((json?.added as unknown[])?.length).toBe(1);
-    expect((json?.modified as unknown[])?.length).toBe(1);
+    expect((json?.modified as unknown[])?.length).toBe(0);
     expect((json?.deleted as unknown[])?.length).toBe(0);
   });
 
