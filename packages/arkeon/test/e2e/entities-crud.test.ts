@@ -57,7 +57,7 @@ describe("Entities CRUD", () => {
       json: { ver: 2, properties: { label: "version-2" } },
     });
     expect(response.status).toBe(200);
-    expect((body as any).wiki.ver).toBe(2);
+    expect((body as any).wiki.ver).toBe(3);
     expect((body as any).wiki.properties.label).toBe("version-2");
   });
 

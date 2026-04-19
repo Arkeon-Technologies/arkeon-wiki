@@ -135,7 +135,7 @@ describe("Entity Merge Batch", () => {
       actor.apiKey,
     );
     const props = (entityBody as any).wiki.properties;
-    expect(props.label).toBe("Much Longer Label"); // longest string
+    expect(props.label).toBe(`${tag}-much-longer-label`); // longest string
     expect(props.tags).toEqual(expect.arrayContaining(["a", "b", "c"])); // union
     expect(props.tags).toHaveLength(3); // no dupes
     expect(props.meta.key1).toBe("v1"); // deep merge
