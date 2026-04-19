@@ -69,7 +69,7 @@ export function isNewer(remote: string, local: string): boolean {
  */
 function spawnBackgroundCheck(): void {
   try {
-    const child = spawn("npm", ["view", "arkeon", "version", "--json"], {
+    const child = spawn("npm", ["view", "arkeon-wiki", "version", "--json"], {
       detached: true,
       stdio: ["ignore", "pipe", "ignore"],
     });
@@ -102,7 +102,7 @@ export function checkForUpdate(currentVersion: string): void {
       if (age < CHECK_INTERVAL_MS) {
         // Cache is fresh — warn if newer version exists
         if (isNewer(cache.latest, currentVersion)) {
-          const msg = `\x1b[33mUpdate available: arkeon ${cache.latest} (current: ${currentVersion}). Run \`arkeon update\` to update.\x1b[0m`;
+          const msg = `\x1b[33mUpdate available: arkeon-wiki ${cache.latest} (current: ${currentVersion}). Run \`arkeon-wiki update\` to update.\x1b[0m`;
           process.stderr.write(msg + "\n");
         }
         return;
