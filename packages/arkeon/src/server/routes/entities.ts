@@ -608,13 +608,13 @@ wikisRouter.openapi(updateEntityRoute, async (c) => {
     const currentContent = currentEntity?.properties?.content;
 
     if (currentContent !== newContent) {
-      // Look up which space this wiki belongs to
-      const spTxResults = await sql.transaction([
+      // Look up which space this wiki belongs to (actor context needed for RLS)
+      const spaceResults = await sql.transaction([
         ...setActorContext(sql, actor),
         sql`SELECT space_id FROM space_entities WHERE entity_id = ${entityId} LIMIT 1`,
       ]);
-      const spaceRows = spTxResults[spTxResults.length - 1] as Array<{ space_id: string }>;
-      pipelineSpaceId = (spaceRows[0]?.space_id as string) ?? null;
+      const spaceRows = spaceResults[spaceResults.length - 1] as Array<{ space_id: string }>;
+      pipelineSpaceId = spaceRows[0]?.space_id ?? null;
       if (!pipelineSpaceId) {
         throw new ApiError(500, "internal_error", "Wiki has no space assignment");
       }
