@@ -90,6 +90,11 @@ arkeon <resource> <action> [args]
 arkeon entities create --type concept --properties '{"label":"distributed systems"}'
 arkeon relationships list --source-id <id>
 arkeon spaces list
+
+# Manage auth profiles (for multi-actor workflows)
+arkeon auth profiles           # list profiles for this instance
+arkeon auth use <name>         # switch active profile
+arkeon auth add <name>         # create new actor + profile (admin)
 ```
 
 ## Reference
@@ -113,6 +118,7 @@ When the stack is running, the API is also self-documenting:
 ## Configuration
 
 All state lives in `~/.arkeon-wiki/` by default (override with `ARKEON_WIKI_HOME`).
+Configure LLM workers for link resolution and auto-drafting via `~/.arkeon-wiki/workers.yaml`. See [Advanced Configuration](docs/ADVANCED.md) for the full schema.
 For external Postgres/Meilisearch and other configuration options, see
 the [quickstart](docs/user/QUICKSTART.md).
 
@@ -155,7 +161,6 @@ npm test -w packages/arkeon            # Unit tests
 | [Classification](docs/dev/CLASSIFICATION.md) | 5-tier read/write access control |
 | [Filtering](docs/dev/FILTERING.md) | Query syntax for list endpoints |
 | [Entity refs](docs/dev/ENTITY_REFS.md) | Entity reference conventions |
-| [Ingest ops](docs/dev/INGEST_OPS.md) | Bulk ingestion via POST /ops |
 | [Files](docs/dev/FILES.md) | Binary content storage (S3/local) |
 | [Error contract](docs/dev/ERROR_CONTRACT.md) | JSON error response shape |
 | [SDK](docs/dev/SDK.md) | TypeScript SDK usage |

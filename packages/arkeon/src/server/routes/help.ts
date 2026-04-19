@@ -105,6 +105,8 @@ available as a command. Use --help on any command for full options.
 GET /help                         Full route index with auth & summary
 GET /help/GET/wiki/{id}           Detailed docs for any specific route
 GET /help/guide/wiki              Authoring wikis with typed links
+GET /help/guide/auth              Authentication and profiles
+GET /help/guide/workers           Worker and LLM configuration
 GET /help/guide/explorer          Explorer graph + screenshot server docs
 GET /llms.txt                     Machine-readable route index
 `;
@@ -322,6 +324,170 @@ GET  /wiki/{id}                     Read the published wiki as an entity
 GET  /wiki/{id}/relationships       See the materialized edges
 `;
 
+const AUTH_GUIDE = `# Arkeon — Authentication & Profiles
+
+## Authentication Model
+
+Arkeon uses API keys to authenticate requests. Every request must include
+an \`X-API-Key\` header. Keys are tied to actors — each actor can have
+multiple keys, but each key belongs to exactly one actor.
+
+Actors represent identities in the system. An actor has a kind ("agent"),
+a label, and optional properties. Admin actors can manage other actors;
+non-admin actors can read/write entities within their access level.
+
+## Self-Service Registration
+
+Agents can register themselves without an admin. The flow uses Ed25519
+keypair authentication:
+
+1. Generate an Ed25519 keypair locally (the CLI does this automatically).
+2. Request a proof-of-work challenge from the server:
+     GET /auth/challenge?pub=<base64-public-key>
+   The server returns a challenge string and a difficulty target.
+3. Solve the PoW challenge (find a nonce where SHA-256 of
+   challenge+nonce has the required leading zero bits).
+4. Submit registration:
+     POST /auth/register
+     {
+       "pub": "<base64-public-key>",
+       "challenge": "<challenge-string>",
+       "nonce": "<solution>",
+       "signature": "<Ed25519 signature of challenge>",
+       "label": "My Agent"
+     }
+   The server verifies the signature and PoW solution, creates an actor,
+   and returns an API key.
+
+The private key is stored locally in \`~/.arkeon-wiki/credentials.json\`.
+Never share it — it is your recovery mechanism.
+
+## Key Recovery
+
+If you lose your API key but still have your private key:
+
+1. Request a challenge:
+     GET /auth/challenge?pub=<base64-public-key>
+2. Sign the challenge with your stored private key:
+     POST /auth/recover
+     {
+       "pub": "<base64-public-key>",
+       "challenge": "<challenge-string>",
+       "signature": "<Ed25519 signature of challenge>"
+     }
+   The server issues a new API key for the actor associated with that
+   public key. The old key is revoked.
+
+## Auth Profiles
+
+Profiles let you maintain per-repo actor identities. Each profile stores
+the actor name, API key, and instance URL.
+
+### CLI Commands
+
+  arkeon-wiki auth register         Self-register a new actor (keypair + PoW)
+  arkeon-wiki auth recover          Recover API key using stored private key
+  arkeon-wiki auth set-api-key <k>  Set API key directly (e.g. admin-issued)
+  arkeon-wiki auth status           Show current auth state and actor info
+  arkeon-wiki auth whoami           Alias for auth status
+  arkeon-wiki auth logout           Clear current auth credentials
+  arkeon-wiki auth profiles         List all saved profiles
+  arkeon-wiki auth use <name>       Switch to a named profile
+  arkeon-wiki auth add <name>       Create a new named profile
+  arkeon-wiki auth remove <name>    Delete a named profile
+
+### Auth Priority Chain
+
+When resolving which API key to use, the CLI checks in order:
+
+  1. ARKE_API_KEY environment variable (highest priority)
+  2. Per-repo actor key stored in .arkeon/state.json
+  3. Global credentials in ~/.arkeon-wiki/credentials.json
+
+The first non-empty value wins. Use env vars for CI/scripts, per-repo
+keys for project-specific identities, and global credentials as the
+default fallback.
+`;
+
+const WORKERS_GUIDE = `# Arkeon — Worker & LLM Configuration
+
+## Overview
+
+Workers are background processes that use LLMs to extract entities,
+draft wikis, and resolve links. Their behavior is controlled by a YAML
+config file.
+
+## File Location
+
+  Default:   ~/.arkeon-wiki/workers.yaml
+  Override:  ARKEON_WORKERS_CONFIG=/path/to/workers.yaml
+
+If the file does not exist, built-in defaults are used for all settings.
+
+## Full Schema
+
+  # Global LLM defaults — every worker inherits these unless overridden.
+  llm:
+    provider: openai
+    base_url: https://api.openai.com/v1
+    api_key: sk-...
+    model: gpt-4o
+    max_tokens: 4096
+
+  workers:
+    extractor:
+      enabled: true
+      prompt_mode: append
+      prompt: "Domain-specific extraction rules..."
+      llm: { model: gpt-4o-mini }
+      steps:
+        resolve: { model: gpt-4o-mini, max_tokens: 256 }
+        exists: { model: gpt-4o-mini, max_tokens: 512 }
+    drafter:
+      enabled: true
+      poll_interval: 10s
+      batch_size: 5
+      max_depth: 2
+      llm: { model: gpt-4o, max_tokens: 8000 }
+
+## Resolution Priority
+
+LLM settings resolve from most specific to least specific:
+
+  step > worker > global > hardcoded defaults
+
+For example, if the extractor's "resolve" step sets model: gpt-4o-mini,
+that overrides the extractor-level model, which overrides the global
+model. Any field not set at a given level falls through to the next.
+
+## Prompt Modes
+
+The prompt_mode field controls how a worker's custom prompt interacts
+with the built-in system prompt:
+
+  replace   Full override — your prompt replaces the built-in prompt
+            entirely. Use when you need complete control.
+  prepend   Your prompt is inserted before the built-in prompt.
+            Good for adding context or domain rules.
+  append    Your prompt is added after the built-in prompt (default).
+            Good for supplementary instructions.
+
+## Duration Strings
+
+The poll_interval field accepts human-readable duration strings:
+
+  ms   milliseconds   (e.g. 500ms)
+  s    seconds        (e.g. 10s)
+  m    minutes        (e.g. 2m)
+  h    hours          (e.g. 1h)
+
+## Hot Reload
+
+The config file is cached by mtime + file size. Edits take effect
+without restarting the server — the next worker tick picks up changes
+automatically.
+`;
+
 const EXPLORER_GUIDE = `# Arkeon — Explorer & Visual Inspection
 
 ## What is the Explorer?
@@ -419,6 +585,14 @@ export function createHelpRouter(getSpec: () => { paths?: Record<string, unknown
   helpRouter.get("/guide/admin", (c) => {
     requireActor(c);
     return c.text(ADMIN_GUIDE, 200, TEXT_HEADERS);
+  });
+
+  helpRouter.get("/guide/auth", (c) => {
+    return c.text(AUTH_GUIDE, 200, TEXT_HEADERS);
+  });
+
+  helpRouter.get("/guide/workers", (c) => {
+    return c.text(WORKERS_GUIDE, 200, TEXT_HEADERS);
   });
 
   helpRouter.get("/guide/explorer", (c) => {

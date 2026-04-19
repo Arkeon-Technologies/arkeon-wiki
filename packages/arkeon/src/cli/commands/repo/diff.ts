@@ -15,6 +15,7 @@ import { extname, join, relative } from "node:path";
 
 import { apiGet } from "../../lib/api-client.js";
 import { credentials } from "../../lib/credentials.js";
+import { loadManifest } from "../../lib/manifest.js";
 import { output } from "../../lib/output.js";
 import { requireRepoState } from "../../lib/repo-state.js";
 
@@ -107,8 +108,11 @@ export async function computeDiff(cwd: string, extensions?: Set<string>): Promis
   if (!actorId) throw new Error("No ingestor actor in state. Run `arkeon init` first.");
   const apiKey = credentials.requireActorKey(actorId);
 
-  // Get document entities from the graph
+  // Get document entities from the graph (tracks raw-document adds via source_file)
   const graphDocs = await fetchDocumentEntities(state.api_url, apiKey, state.space_id);
+
+  // Load manifest (tracks pulled entities)
+  const manifest = loadManifest(cwd);
 
   // Walk disk
   const exts = extensions ?? DEFAULT_EXTENSIONS;
@@ -124,8 +128,20 @@ export async function computeDiff(cwd: string, extensions?: Set<string>): Promis
   for (const relPath of files) {
     seen.add(relPath);
     const hash = sha256(join(cwd, relPath));
-    const graphEntry = graphDocs.get(relPath);
 
+    // Check manifest first — pulled entities are tracked here, not via source_file
+    const manifestEntry = manifest.entries[relPath];
+    if (manifestEntry) {
+      if (hash !== manifestEntry.content_hash) {
+        modified.push({ path: relPath, sha256: hash, entity_id: manifestEntry.entity_id });
+      } else {
+        unchanged++;
+      }
+      continue;
+    }
+
+    // Fall through to graph lookup for raw-document entities
+    const graphEntry = graphDocs.get(relPath);
     if (!graphEntry) {
       added.push({ path: relPath, sha256: hash });
     } else if (graphEntry.source_hash !== hash) {
@@ -139,6 +155,13 @@ export async function computeDiff(cwd: string, extensions?: Set<string>): Promis
   for (const [sourceFile, entry] of graphDocs) {
     if (!seen.has(sourceFile)) {
       deleted.push({ path: sourceFile, entity_id: entry.entity_id });
+    }
+  }
+
+  // Manifest entries not on disk are also deleted
+  for (const [path, entry] of Object.entries(manifest.entries)) {
+    if (!seen.has(path)) {
+      deleted.push({ path, entity_id: entry.entity_id });
     }
   }
 

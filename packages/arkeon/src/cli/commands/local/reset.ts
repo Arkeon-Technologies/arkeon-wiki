@@ -28,6 +28,7 @@ import {
   readPidfile,
   removePidfile,
 } from "../../lib/local-runtime.js";
+import { loadRepoState } from "../../lib/repo-state.js";
 
 interface ResetOptions {
   hard?: boolean;
@@ -75,5 +76,21 @@ export function registerResetCommand(program: Command): void {
         console.log(`Removed ${target}`);
       }
       console.log("Done.");
+
+      // Warn if repo state references the destroyed instance
+      const repoState = loadRepoState();
+      if (repoState) {
+        const url = repoState.api_url;
+        const isLocal = url.includes("localhost") || url.includes("127.0.0.1");
+        if (isLocal) {
+          console.log("");
+          console.log(
+            "Warning: .arkeon/state.json in this repo still references the destroyed instance.",
+          );
+          console.log(
+            "Run `arkeon init` to re-initialize, or delete .arkeon/state.json manually.",
+          );
+        }
+      }
     });
 }

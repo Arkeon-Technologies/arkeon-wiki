@@ -280,7 +280,7 @@ export function registerAddCommand(program: Command): void {
           if (parsed.short_description) properties.short_description = parsed.short_description;
           if (parsed.properties) Object.assign(properties, parsed.properties);
 
-          const resp = await apiPut<{ entity: EntityResult }>(
+          const resp = await apiPut<{ wiki: EntityResult }>(
             state.api_url,
             `/wiki/${parsed.id}`,
             apiKey,
@@ -291,7 +291,7 @@ export function registerAddCommand(program: Command): void {
           const absPath = join(cwd, relPath);
           manifest.entries[relPath] = {
             entity_id: parsed.id!,
-            ver: resp.entity.ver,
+            ver: resp.wiki.ver,
             content_hash: contentHash(absPath),
             synced_at: new Date().toISOString(),
           };

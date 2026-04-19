@@ -82,3 +82,53 @@ Entity columns: kind, type, arke_id, ver, owner_id,
 edited_by, created_at, updated_at
 
 Property paths: label:Neuroscience, metadata.source:arxiv, year>2020`;
+
+export const AUTH_PROFILES = `\
+Profiles are per-repo actor identities bound to an Arkeon instance. Each
+profile maps to an actor on the graph and carries its own API key.
+
+Switching profiles changes the active actor for the current repo — all
+subsequent operations run as that actor with its permissions.
+
+Adding a profile creates a new actor on the graph and registers it locally.
+This requires admin privileges. The admin profile is needed for cross-space
+operations and actor management.
+
+Profiles are stored in the instance actor registry, keyed by the instance
+host and port. Multiple repos can share profiles for the same instance.`;
+
+export const INSTANCES = `\
+Named instances allow running multiple isolated Arkeon stacks on one machine.
+Pass a name on startup and the instance gets its own state directory under
+~/.arkeon-wiki/<name>/ — separate database, search index, secrets, and config.
+
+Ports are automatically assigned to avoid conflicts. The instance registry at
+~/.arkeon-wiki/instances/<port>.json tracks each running stack so the CLI can
+discover and manage them.
+
+The default (unnamed) instance uses ~/.arkeon-wiki/ directly.`;
+
+export const WORKERS = `\
+Worker configuration lives in ~/.arkeon-wiki/workers.yaml (override the path
+with ARKEON_WORKERS_CONFIG).
+
+The top-level llm block sets global LLM defaults: provider, api_key, model,
+base_url, and max_tokens. These apply to every worker unless overridden.
+
+Individual workers are configured under the workers key. The four workers are:
+  extractor    Parses raw documents into entities and relationships
+  drafter      Generates wiki articles from graph neighborhoods
+  consolidator Merges duplicate entities
+  connector    Discovers missing relationships
+
+Each worker supports: enabled (boolean), llm overrides (same fields as the
+global block), prompt_mode (replace, prepend, or append), and prompt (custom
+text). Background workers (drafter, consolidator) also accept poll_interval
+(duration strings like 10s, 5m) and batch_size.
+
+The extractor supports per-step overrides under a steps key (e.g., resolve,
+exists) for fine-grained control over individual extraction stages.
+
+Resolution priority: step config > worker llm > global llm > hardcoded
+defaults. The legacy llm.json file still works as the lowest-priority
+fallback.`;

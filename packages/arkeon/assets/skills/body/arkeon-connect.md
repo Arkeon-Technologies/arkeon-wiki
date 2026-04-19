@@ -17,7 +17,13 @@ If there's no admin profile, set one up:
 npx arkeon auth profiles
 ```
 
-If "admin" is not listed, you need the admin bootstrap key from the instance's `secrets.json`.
+If "admin" is not listed, register the admin profile using the bootstrap key:
+
+```bash
+cat ~/.arkeon-wiki/secrets.json | grep admin_api_key   # find the key
+npx arkeon auth set-api-key <key>                      # store it as your default key
+npx arkeon auth add admin                              # create a named "admin" profile
+```
 
 ## Workflow
 
