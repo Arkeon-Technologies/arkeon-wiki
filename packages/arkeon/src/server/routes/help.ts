@@ -336,47 +336,18 @@ Actors represent identities in the system. An actor has a kind ("agent"),
 a label, and optional properties. Admin actors can manage other actors;
 non-admin actors can read/write entities within their access level.
 
-## Self-Service Registration
+## Self-Service Registration (not yet available)
 
-Agents can register themselves without an admin. The flow uses Ed25519
-keypair authentication:
+The CLI includes commands for self-registration via Ed25519 + proof-of-work
+(\`arkeon-wiki auth register\`, \`arkeon-wiki auth recover\`), but the server
+endpoints they call are not yet implemented. These commands will work once
+the server routes land.
 
-1. Generate an Ed25519 keypair locally (the CLI does this automatically).
-2. Request a proof-of-work challenge from the server:
-     GET /auth/challenge?pub=<base64-public-key>
-   The server returns a challenge string and a difficulty target.
-3. Solve the PoW challenge (find a nonce where SHA-256 of
-   challenge+nonce has the required leading zero bits).
-4. Submit registration:
-     POST /auth/register
-     {
-       "pub": "<base64-public-key>",
-       "challenge": "<challenge-string>",
-       "nonce": "<solution>",
-       "signature": "<Ed25519 signature of challenge>",
-       "label": "My Agent"
-     }
-   The server verifies the signature and PoW solution, creates an actor,
-   and returns an API key.
+Until then, new actors must be created by an admin via \`POST /actors\` or
+\`arkeon-wiki auth add <name>\` (which calls POST /actors under the hood).
 
-The private key is stored locally in \`~/.arkeon-wiki/credentials.json\`.
-Never share it — it is your recovery mechanism.
-
-## Key Recovery
-
-If you lose your API key but still have your private key:
-
-1. Request a challenge:
-     GET /auth/challenge?pub=<base64-public-key>
-2. Sign the challenge with your stored private key:
-     POST /auth/recover
-     {
-       "pub": "<base64-public-key>",
-       "challenge": "<challenge-string>",
-       "signature": "<Ed25519 signature of challenge>"
-     }
-   The server issues a new API key for the actor associated with that
-   public key. The old key is revoked.
+If you have an admin-issued API key, store it directly:
+  arkeon-wiki auth set-api-key <your-key>
 
 ## Auth Profiles
 
@@ -385,8 +356,8 @@ the actor name, API key, and instance URL.
 
 ### CLI Commands
 
-  arkeon-wiki auth register         Self-register a new actor (keypair + PoW)
-  arkeon-wiki auth recover          Recover API key using stored private key
+  arkeon-wiki auth register         Self-register (not yet available — server routes pending)
+  arkeon-wiki auth recover          Recover API key (not yet available — server routes pending)
   arkeon-wiki auth set-api-key <k>  Set API key directly (e.g. admin-issued)
   arkeon-wiki auth status           Show current auth state and actor info
   arkeon-wiki auth whoami           Alias for auth status

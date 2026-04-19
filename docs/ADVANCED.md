@@ -9,9 +9,10 @@ opt-in and not required for core usage.
 
 ## Worker configuration (`workers.yaml`)
 
-Workers are background processes that enrich your knowledge graph: the
-**extractor** resolves placeholder links into entities, the **drafter**
-writes wiki content for stub entities, and the **consolidator** deduplicates.
+Workers are background processes that enrich your knowledge graph. Currently
+implemented: the **extractor** resolves placeholder links into entities, and
+the **drafter** writes wiki content for stub entities. Additional workers
+(consolidator, connector) are planned but not yet available.
 
 Configure them via `~/.arkeon-wiki/workers.yaml` (override path with
 `ARKEON_WORKERS_CONFIG`). If the file doesn't exist, built-in defaults
@@ -57,8 +58,7 @@ workers:
       model: gpt-4o
       max_tokens: 8000
 
-  consolidator:
-    enabled: false            # disabled by default
+  # consolidator and connector are planned but not yet implemented
 ```
 
 ### Prompt customization modes

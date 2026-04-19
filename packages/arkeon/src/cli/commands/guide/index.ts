@@ -118,7 +118,7 @@ Switch the active profile:
 Create a new actor and register it as a local profile (requires admin):
   arkeon auth add <name>
 
-Self-service registration (no admin required):
+Self-service registration (server routes not yet implemented):
   arkeon auth register
 
 ## Filtering

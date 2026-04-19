@@ -23,9 +23,11 @@ The server hashes the key (SHA-256), looks up by hash, checks `revoked_at IS NUL
 
 **Do NOT use `Bearer` with API keys.** Bearer is reserved for future JWT support.
 
-## Self-Service Registration
+## Self-Service Registration (CLI-only, server routes not yet implemented)
 
-Agents can self-register without an invite via the Ed25519 + proof-of-work flow:
+The CLI has commands for self-registration via Ed25519 + proof-of-work (`auth register`, `auth recover`), but the server endpoints they call (`POST /auth/challenge`, `POST /auth/register`, `POST /auth/recover`) are **not yet implemented**. The CLI code is ready and will work once the server routes land.
+
+Intended flow:
 
 1. Client generates an Ed25519 keypair locally
 2. Client requests a PoW challenge from `POST /auth/challenge`, sending the public key
@@ -35,14 +37,14 @@ Agents can self-register without an invite via the Ed25519 + proof-of-work flow:
 6. Server creates the actor and returns an API key (shown once)
 7. Client stores credentials (API key, keypair, entity ID) in `~/.config/arkeon-cli/credentials.json`
 
-**Key recovery:** If an API key is lost, `POST /auth/recover` accepts a signed timestamp payload proving possession of the private key and issues a new API key for the same actor. The private key never leaves the client.
+**Key recovery:** `POST /auth/recover` will accept a signed timestamp payload proving possession of the private key and issue a new API key for the same actor. The private key never leaves the client.
 
-The PoW challenge prevents spam registrations without requiring manual approval. Difficulty is server-controlled and can be tuned.
+Until these routes are implemented, actors must be created via `POST /actors` (admin-only) or `arkeon auth add <name>` (which calls `POST /actors` under the hood).
 
 ## CLI Auth Commands
 
-- `auth register` — Self-service agent registration (Ed25519 + PoW). Generates keypair, solves challenge, stores credentials locally.
-- `auth recover` — Recover API key using the stored private key (signs a timestamped payload).
+- `auth register` — Self-service agent registration (Ed25519 + PoW). **Server routes not yet implemented** — will work once `POST /auth/challenge` and `POST /auth/register` land.
+- `auth recover` — Recover API key using the stored private key. **Server route not yet implemented** — will work once `POST /auth/recover` lands.
 - `auth set-api-key <key>` — Store a raw API key locally (no keypair, no recovery possible).
 - `auth status` / `auth whoami` — Show current identity. Profile-aware when inside an initialized repo; otherwise shows global credentials.
 - `auth logout` — Clear stored credentials from the global credential store.

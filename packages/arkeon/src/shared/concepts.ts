@@ -115,9 +115,11 @@ with ARKEON_WORKERS_CONFIG).
 The top-level llm block sets global LLM defaults: provider, api_key, model,
 base_url, and max_tokens. These apply to every worker unless overridden.
 
-Individual workers are configured under the workers key. The four workers are:
+Individual workers are configured under the workers key. Currently implemented:
   extractor    Parses raw documents into entities and relationships
   drafter      Generates wiki articles from graph neighborhoods
+
+Planned (not yet implemented):
   consolidator Merges duplicate entities
   connector    Discovers missing relationships
 
