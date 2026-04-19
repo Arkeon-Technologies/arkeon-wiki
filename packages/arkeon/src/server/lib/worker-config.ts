@@ -148,6 +148,91 @@ const WORKER_DEFAULTS: Record<WorkerName, {
   },
 };
 
+// ── Validation ─────────────────────────────────────────────────────
+
+const VALID_PROMPT_MODES = new Set(["replace", "prepend", "append"]);
+
+function assertType(value: unknown, expected: string, path: string): void {
+  if (expected === "string" && typeof value !== "string") {
+    throw new Error(`[worker-config] ${path} must be a string, got ${typeof value}`);
+  }
+  if (expected === "number") {
+    if (typeof value !== "number" || Number.isNaN(value)) {
+      throw new Error(`[worker-config] ${path} must be a number, got ${JSON.stringify(value)}`);
+    }
+  }
+  if (expected === "boolean" && typeof value !== "boolean") {
+    throw new Error(`[worker-config] ${path} must be a boolean, got ${typeof value}`);
+  }
+}
+
+function validateLlmConfig(obj: Record<string, unknown>, prefix: string): void {
+  if (obj.provider !== undefined) assertType(obj.provider, "string", `${prefix}.provider`);
+  if (obj.base_url !== undefined) assertType(obj.base_url, "string", `${prefix}.base_url`);
+  if (obj.api_key !== undefined) assertType(obj.api_key, "string", `${prefix}.api_key`);
+  if (obj.model !== undefined) assertType(obj.model, "string", `${prefix}.model`);
+  if (obj.max_tokens !== undefined) assertType(obj.max_tokens, "number", `${prefix}.max_tokens`);
+}
+
+function validatePromptConfig(obj: Record<string, unknown>, prefix: string): void {
+  if (obj.prompt_mode !== undefined) {
+    assertType(obj.prompt_mode, "string", `${prefix}.prompt_mode`);
+    if (!VALID_PROMPT_MODES.has(obj.prompt_mode as string)) {
+      throw new Error(
+        `[worker-config] ${prefix}.prompt_mode must be one of: replace, prepend, append — got "${obj.prompt_mode}"`,
+      );
+    }
+  }
+  if (obj.prompt !== undefined && obj.prompt !== null) {
+    assertType(obj.prompt, "string", `${prefix}.prompt`);
+  }
+}
+
+function validateWorkerBlock(obj: unknown, prefix: string): void {
+  if (obj === undefined || obj === null) return;
+  if (typeof obj !== "object") {
+    throw new Error(`[worker-config] ${prefix} must be a mapping, got ${typeof obj}`);
+  }
+  const w = obj as Record<string, unknown>;
+  if (w.enabled !== undefined) assertType(w.enabled, "boolean", `${prefix}.enabled`);
+  if (w.poll_interval !== undefined) assertType(w.poll_interval, "string", `${prefix}.poll_interval`);
+  if (w.batch_size !== undefined) assertType(w.batch_size, "number", `${prefix}.batch_size`);
+  if (w.max_depth !== undefined) assertType(w.max_depth, "number", `${prefix}.max_depth`);
+  if (w.similarity_threshold !== undefined) assertType(w.similarity_threshold, "number", `${prefix}.similarity_threshold`);
+  if (w.llm !== undefined) {
+    if (typeof w.llm !== "object" || w.llm === null) {
+      throw new Error(`[worker-config] ${prefix}.llm must be a mapping`);
+    }
+    validateLlmConfig(w.llm as Record<string, unknown>, `${prefix}.llm`);
+  }
+  validatePromptConfig(w, prefix);
+}
+
+function validateWorkersYaml(raw: Record<string, unknown> | null, filePath: string): WorkersYaml | null {
+  if (!raw) return null;
+
+  if (raw.llm !== undefined) {
+    if (typeof raw.llm !== "object" || raw.llm === null) {
+      throw new Error(`[worker-config] ${filePath}: llm must be a mapping`);
+    }
+    validateLlmConfig(raw.llm as Record<string, unknown>, "llm");
+  }
+
+  if (raw.workers !== undefined) {
+    if (typeof raw.workers !== "object" || raw.workers === null) {
+      throw new Error(`[worker-config] ${filePath}: workers must be a mapping`);
+    }
+    const workers = raw.workers as Record<string, unknown>;
+    for (const name of ["extractor", "drafter", "consolidator", "connector"]) {
+      if (workers[name] !== undefined) {
+        validateWorkerBlock(workers[name], `workers.${name}`);
+      }
+    }
+  }
+
+  return raw as unknown as WorkersYaml;
+}
+
 // ── YAML loading (mtime-cached) ────────────────────────────────────
 
 function arkeonHome(): string {
@@ -186,16 +271,21 @@ export function loadWorkersYaml(): WorkersYaml | null {
     return _yamlCache.value;
   }
 
+  const raw = readFileSync(path, "utf-8");
+  let parsed: unknown;
   try {
-    const raw = readFileSync(path, "utf-8");
-    const parsed = yaml.load(raw) as WorkersYaml;
-    _yamlCache = { value: parsed, path, mtimeMs: stat.mtimeMs, size: stat.size };
-    return parsed;
+    parsed = yaml.load(raw);
   } catch (err) {
-    console.warn(`[worker-config] failed to parse ${path}:`, (err as Error).message);
-    _yamlCache = { value: null, path, mtimeMs: stat.mtimeMs, size: stat.size };
-    return null;
+    throw new Error(`[worker-config] invalid YAML in ${path}: ${(err as Error).message}`);
   }
+
+  if (parsed !== null && typeof parsed !== "object") {
+    throw new Error(`[worker-config] ${path} must be a YAML mapping, got ${typeof parsed}`);
+  }
+
+  const validated = validateWorkersYaml(parsed as Record<string, unknown> | null, path);
+  _yamlCache = { value: validated, path, mtimeMs: stat.mtimeMs, size: stat.size };
+  return validated;
 }
 
 /** For tests: forget cached YAML. */
@@ -255,7 +345,7 @@ export function resolveWorkerConfig(name: WorkerName, yamlConfig?: WorkersYaml |
 
   // Prompt
   const prompt: ResolvedWorkerConfig["prompt"] = {
-    mode: workerCfg?.prompt_mode ?? "replace",
+    mode: workerCfg?.prompt_mode ?? "append",
     text: workerCfg?.prompt ?? null,
   };
 
@@ -362,13 +452,13 @@ export function getWorkerPromptConfig(step: string): ResolvedWorkerConfig["promp
     const extCfg = workerCfg as ExtractorConfig;
     const stepCfg = extCfg.steps?.[step as "resolve" | "exists"];
     if (stepCfg?.prompt) {
-      return { mode: stepCfg.prompt_mode ?? "replace", text: stepCfg.prompt };
+      return { mode: stepCfg.prompt_mode ?? "append", text: stepCfg.prompt };
     }
   }
 
   // Worker-level prompt
   if (workerCfg.prompt) {
-    return { mode: workerCfg.prompt_mode ?? "replace", text: workerCfg.prompt };
+    return { mode: workerCfg.prompt_mode ?? "append", text: workerCfg.prompt };
   }
 
   return null;
