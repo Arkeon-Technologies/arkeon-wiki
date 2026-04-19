@@ -7,12 +7,12 @@
  * Manages the three things `arkeon start` needs to turn up a working
  * Arkeon instance with no Docker and no system-installed services:
  *
- *   1. ~/.arkeon/           — state directory (data, binaries, secrets, pidfile)
- *   2. embedded Postgres    — runs as a child process, data in ~/.arkeon/data/postgres
- *   3. Meilisearch          — binary downloaded on first run, data in ~/.arkeon/data/meili
+ *   1. ~/.arkeon-wiki/      — state directory (data, binaries, secrets, pidfile)
+ *   2. embedded Postgres    — runs as a child process, data in ~/.arkeon-wiki/data/postgres
+ *   3. Meilisearch          — binary downloaded on first run, data in ~/.arkeon-wiki/data/meili
  *
  * Plus secrets (ADMIN_BOOTSTRAP_KEY, ENCRYPTION_KEY, MEILI_MASTER_KEY) that
- * are generated on first run and persisted in ~/.arkeon/secrets.json so
+ * are generated on first run and persisted in ~/.arkeon-wiki/secrets.json so
  * subsequent starts don't rotate keys on users.
  *
  * This module is runtime-only — it doesn't import the API server or
@@ -45,13 +45,13 @@ import EmbeddedPostgres from "embedded-postgres";
 // =====================================================================
 //
 // Paths are exposed as getter functions rather than module-level constants
-// so that commands can set `process.env.ARKEON_HOME` (or its --data-dir
+// so that commands can set `process.env.ARKEON_WIKI_HOME` (or its --data-dir
 // CLI equivalent) at action time and have the subsequent calls observe
 // the override. Constants captured at module import time would lock in
-// whatever ARKEON_HOME was when the CLI first loaded this module.
+// whatever ARKEON_WIKI_HOME was when the CLI first loaded this module.
 
 function arkeonHome(): string {
-  return process.env.ARKEON_HOME ?? join(homedir(), ".arkeon");
+  return process.env.ARKEON_WIKI_HOME ?? join(homedir(), ".arkeon-wiki");
 }
 
 export function arkeonDir(): string { return arkeonHome(); }
@@ -597,7 +597,7 @@ export function fmtPgUrl(
 // Pending LLM config (written by `arkeon init`, consumed by `arkeon up`)
 // =====================================================================
 //
-// LLM provider settings persisted at ~/.arkeon/llm.json (mode 0600).
+// LLM provider settings persisted at ~/.arkeon-wiki/llm.json (mode 0600).
 // Read directly by the server (see server/lib/llm.ts). `arkeon init
 // --llm-*` writes the `default` block; users can hand-edit the file to
 // set per-step overrides for the wiki pipeline (resolve, exists, draft,

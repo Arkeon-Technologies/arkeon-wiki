@@ -5,12 +5,12 @@
  * `arkeon reset` — wipe local state so the next `arkeon start` begins
  * from a fresh, empty cluster.
  *
- * By default, `reset` removes the data directories (~/.arkeon/data/)
+ * By default, `reset` removes the data directories (~/.arkeon-wiki/data/)
  * but leaves secrets and the Meilisearch binary intact — that way the
  * user keeps their admin API key and doesn't re-download the 100MB
  * binary on the next start.
  *
- * `--hard` wipes the whole ~/.arkeon/ directory including secrets and
+ * `--hard` wipes the whole ~/.arkeon-wiki/ directory including secrets and
  * the downloaded binary. Use when you want truly from-zero state.
  *
  * Refuses to run if arkeon is currently running (we'd be deleting files

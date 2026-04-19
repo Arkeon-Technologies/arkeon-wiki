@@ -22,7 +22,7 @@ npx tsx packages/arkeon/src/index.ts up
 
 This:
 - Starts embedded Postgres + Meilisearch + API server
-- Registers the instance at `~/.arkeon/instances/<port>.json`
+- Registers the instance at `~/.arkeon-wiki/instances/<port>.json`
 - Registers the "admin" profile in the instance actor registry
 - Stores the admin key in the CLI credential store
 - Polls `/health` until ready (up to 120s — first run downloads ~100MB Meilisearch binary)
@@ -31,7 +31,7 @@ For **named instances** (parallel stacks):
 ```bash
 npx tsx packages/arkeon/src/index.ts up --name my-feature
 ```
-Each named instance gets its own `ARKEON_HOME` at `~/.arkeon/<name>/`, its own port, and its own data.
+Each named instance gets its own `ARKEON_WIKI_HOME` at `~/.arkeon-wiki/<name>/`, its own port, and its own data.
 
 Check it's running:
 ```bash
@@ -51,7 +51,7 @@ Gracefully drains the API, stops Meilisearch, stops Postgres. No orphan processe
 ```bash
 npx tsx packages/arkeon/src/index.ts reset --force
 ```
-Wipes `~/.arkeon/data/` but preserves secrets and Meilisearch binary. Use `--hard` to wipe everything.
+Wipes `~/.arkeon-wiki/data/` but preserves secrets and Meilisearch binary. Use `--hard` to wipe everything.
 
 ### `status`
 
@@ -70,14 +70,14 @@ npx tsx packages/arkeon/src/index.ts up --name "$WORKTREE_NAME"
 ```
 
 This gives each worktree:
-- Its own `ARKEON_HOME` at `~/.arkeon/<name>/` (Postgres data, Meilisearch, secrets)
+- Its own `ARKEON_WIKI_HOME` at `~/.arkeon-wiki/<name>/` (Postgres data, Meilisearch, secrets)
 - Its own port (auto-selected, avoids collisions)
-- Its own entry in `~/.arkeon/instances/` and its own actor registry
+- Its own entry in `~/.arkeon-wiki/instances/` and its own actor registry
 - Running its own branch's built code
 
 Always run `arkeon init`, `arkeon auth`, and all other commands **from the same worktree** that started the instance. Don't cross worktree/instance boundaries.
 
-Main tree (not a worktree) uses the default instance: `~/.arkeon/`, port 8000.
+Main tree (not a worktree) uses the default instance: `~/.arkeon-wiki/`, port 8000.
 
 ## Repo Binding and Auth
 
@@ -124,10 +124,10 @@ The resolution chain: `ARKE_API_KEY` env (override) -> repo `state.actors` (per-
 ### `test`
 
 1. Ensure the stack is running (`arkeon up` if not).
-2. Get admin key from `~/.arkeon/secrets.json`.
+2. Get admin key from `~/.arkeon-wiki/secrets.json`.
 3. Run e2e tests:
    ```bash
-   ADMIN_KEY=$(cat ~/.arkeon/secrets.json | python3 -c "import sys,json; print(json.load(sys.stdin)['adminBootstrapKey'])")
+   ADMIN_KEY=$(cat ~/.arkeon-wiki/secrets.json | python3 -c "import sys,json; print(json.load(sys.stdin)['adminBootstrapKey'])")
    E2E_BASE_URL=http://localhost:8000 \
    ADMIN_BOOTSTRAP_KEY="$ADMIN_KEY" \
    npm run test:e2e -w packages/arkeon
@@ -135,7 +135,7 @@ The resolution chain: `ARKE_API_KEY` env (override) -> repo `state.actors` (per-
 
 For named instances, adjust the port and secrets path:
 ```bash
-ADMIN_KEY=$(cat ~/.arkeon/<name>/secrets.json | python3 -c "import sys,json; print(json.load(sys.stdin)['adminBootstrapKey'])")
+ADMIN_KEY=$(cat ~/.arkeon-wiki/<name>/secrets.json | python3 -c "import sys,json; print(json.load(sys.stdin)['adminBootstrapKey'])")
 E2E_BASE_URL=http://localhost:<port> \
 ADMIN_BOOTSTRAP_KEY="$ADMIN_KEY" \
 npm run test:e2e -w packages/arkeon
@@ -143,7 +143,7 @@ npm run test:e2e -w packages/arkeon
 
 ## Notes
 
-- First run downloads the Meilisearch binary (~100MB) into `~/.arkeon/bin/`. Cached after that.
-- Secrets are generated on first run and stored in `$ARKEON_HOME/secrets.json`. `reset` preserves them; `reset --hard` wipes them.
+- First run downloads the Meilisearch binary (~100MB) into `~/.arkeon-wiki/bin/`. Cached after that.
+- Secrets are generated on first run and stored in `$ARKEON_WIKI_HOME/secrets.json`. `reset` preserves them; `reset --hard` wipes them.
 - After schema SQL changes, `reset` and restart — migrations are idempotent but a fresh cluster is the reliable way to exercise the full chain.
-- The instance registry at `~/.arkeon/instances/` is cleaned up on `arkeon down`. Stale entries from crashed processes are pruned by `arkeon status`.
+- The instance registry at `~/.arkeon-wiki/instances/` is cleaned up on `arkeon down`. Stale entries from crashed processes are pruned by `arkeon status`.

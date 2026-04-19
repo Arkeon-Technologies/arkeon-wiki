@@ -4,7 +4,7 @@
 # Prereqs:
 #   - An LLM API key, via one of:
 #       * OPENAI_API_KEY env var
-#       * ~/.arkeon/llm.json (written by `arkeon init --llm-*`)
+#       * ~/.arkeon-wiki/llm.json (written by `arkeon init --llm-*`)
 #   - Either a running `arkeon up` daemon, or let this script spin up a
 #     fresh scratch stack on isolated ports.
 #
@@ -37,7 +37,7 @@ for arg in "$@"; do
 done
 
 # --- Preflight: LLM config check ---
-if [ -z "${OPENAI_API_KEY:-}" ] && [ ! -f "${HOME}/.arkeon/llm.json" ]; then
+if [ -z "${OPENAI_API_KEY:-}" ] && [ ! -f "${HOME}/.arkeon-wiki/llm.json" ]; then
   fail "No LLM config. Set OPENAI_API_KEY or run: arkeon init --llm-provider openai --llm-base-url https://api.openai.com/v1 --llm-api-key sk-... --llm-model gpt-5.4-nano"
 fi
 
@@ -74,14 +74,14 @@ pass "Explorer build"
 
 step "Starting scratch Arkeon stack on ports ${API_PORT}/${PG_PORT}/${MEILI_PORT}"
 # Pass OPENAI_API_KEY through to the child process so the server can use it.
-# If the user has ~/.arkeon/llm.json instead, that's picked up automatically
-# via ARKEON_HOME (scratch dir) — but we don't want to leak the user's real
+# If the user has ~/.arkeon-wiki/llm.json instead, that's picked up automatically
+# via ARKEON_WIKI_HOME (scratch dir) — but we don't want to leak the user's real
 # llm.json into the scratch run, so we copy it in if it exists.
-if [ -f "${HOME}/.arkeon/llm.json" ] && [ -z "${OPENAI_API_KEY:-}" ]; then
-  cp "${HOME}/.arkeon/llm.json" "${SCRATCH_DIR}/llm.json"
+if [ -f "${HOME}/.arkeon-wiki/llm.json" ] && [ -z "${OPENAI_API_KEY:-}" ]; then
+  cp "${HOME}/.arkeon-wiki/llm.json" "${SCRATCH_DIR}/llm.json"
 fi
 
-ARKEON_HOME="$SCRATCH_DIR" nohup npx tsx packages/arkeon/src/index.ts start \
+ARKEON_WIKI_HOME="$SCRATCH_DIR" nohup npx tsx packages/arkeon/src/index.ts start \
   --port "$API_PORT" --pg-port "$PG_PORT" --meili-port "$MEILI_PORT" \
   > "$LOGFILE" 2>&1 &
 echo $! > "$PIDFILE"

@@ -33,7 +33,7 @@ program
   .option("--space-id <id>", "Override default space ID for this process")
   .option(
     "--data-dir <path>",
-    "Root directory for Arkeon state (overrides ARKEON_HOME; affects all local commands)",
+    "Root directory for Arkeon state (overrides ARKEON_WIKI_HOME; affects all local commands)",
   );
 
 program.hook("preAction", (command) => {
@@ -49,7 +49,7 @@ program.hook("preAction", (command) => {
     process.env.ARKE_SPACE_ID = options.spaceId;
   }
   if (options.dataDir) {
-    process.env.ARKEON_HOME = options.dataDir;
+    process.env.ARKEON_WIKI_HOME = options.dataDir;
   }
   syncSkillsIfNeeded(pkg.version);
   checkForUpdate(pkg.version);

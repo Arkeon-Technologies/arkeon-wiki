@@ -61,7 +61,7 @@ export ARKE_API_KEY="ak_..."
 export ARKE_SPACE_ID="01ABC..."   # optional: default space
 ```
 
-Override the state directory with `ARKEON_HOME` (default: `~/.arkeon/`).
+Override the state directory with `ARKEON_WIKI_HOME` (default: `~/.arkeon-wiki/`).
 
 ## License
 

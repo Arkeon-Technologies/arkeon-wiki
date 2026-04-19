@@ -8,7 +8,7 @@
  *   - A running Arkeon stack (e.g. `arkeon up`)
  *   - E2E_BASE_URL pointing at it (defaults to http://localhost:8000)
  *   - ADMIN_BOOTSTRAP_KEY set to the admin API key
- *   - An LLM provider configured via ~/.arkeon/llm.json or OPENAI_API_KEY
+ *   - An LLM provider configured via ~/.arkeon-wiki/llm.json or OPENAI_API_KEY
  *
  * Run with:
  *   npm run test:manual -w packages/arkeon

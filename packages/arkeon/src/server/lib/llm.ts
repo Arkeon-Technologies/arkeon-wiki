@@ -9,7 +9,7 @@
  *
  *   1. Per-step env vars: WIKI_RESOLVE_MODEL, WIKI_EXISTS_MODEL,
  *      WIKI_DRAFT_MODEL, WIKI_DEDUP_MODEL (model only)
- *   2. Step block in $ARKEON_HOME/llm.json (or WIKI_LLM_CONFIG_PATH)
+ *   2. Step block in $ARKEON_WIKI_HOME/llm.json (or WIKI_LLM_CONFIG_PATH)
  *   3. Default block in the same file
  *   4. Base env vars: OPENAI_API_KEY, OPENAI_BASE_URL (for api_key + base_url)
  *   5. Hardcoded defaults per step (cheap models for resolve/exists,
@@ -84,7 +84,7 @@ const DEFAULT_MAX_TOKENS: Record<LlmStep, number> = {
 };
 
 function arkeonHome(): string {
-  return process.env.ARKEON_HOME ?? join(homedir(), ".arkeon");
+  return process.env.ARKEON_WIKI_HOME ?? join(homedir(), ".arkeon-wiki");
 }
 
 function configPath(): string {

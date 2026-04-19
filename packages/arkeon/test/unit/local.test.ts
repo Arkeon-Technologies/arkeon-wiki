@@ -123,7 +123,7 @@ describe("buildLlmConfigFromFlags", () => {
 });
 
 // ---------------------------------------------------------------------------
-// LLM config roundtrip (writes to ~/.arkeon/llm.json with 0600)
+// LLM config roundtrip (writes to ~/.arkeon-wiki/llm.json with 0600)
 // ---------------------------------------------------------------------------
 
 describe("LLM config", () => {
@@ -131,14 +131,14 @@ describe("LLM config", () => {
   let prevHome: string | undefined;
 
   beforeEach(() => {
-    prevHome = process.env.ARKEON_HOME;
+    prevHome = process.env.ARKEON_WIKI_HOME;
     scratch = mkdtempSync(join(tmpdir(), "arkeon-cli-test-"));
-    process.env.ARKEON_HOME = scratch;
+    process.env.ARKEON_WIKI_HOME = scratch;
   });
 
   afterEach(() => {
-    if (prevHome !== undefined) process.env.ARKEON_HOME = prevHome;
-    else delete process.env.ARKEON_HOME;
+    if (prevHome !== undefined) process.env.ARKEON_WIKI_HOME = prevHome;
+    else delete process.env.ARKEON_WIKI_HOME;
     rmSync(scratch, { recursive: true, force: true });
   });
 
@@ -212,14 +212,14 @@ describe("secrets", () => {
   let prevHome: string | undefined;
 
   beforeEach(() => {
-    prevHome = process.env.ARKEON_HOME;
+    prevHome = process.env.ARKEON_WIKI_HOME;
     scratch = mkdtempSync(join(tmpdir(), "arkeon-cli-test-"));
-    process.env.ARKEON_HOME = scratch;
+    process.env.ARKEON_WIKI_HOME = scratch;
   });
 
   afterEach(() => {
-    if (prevHome !== undefined) process.env.ARKEON_HOME = prevHome;
-    else delete process.env.ARKEON_HOME;
+    if (prevHome !== undefined) process.env.ARKEON_WIKI_HOME = prevHome;
+    else delete process.env.ARKEON_WIKI_HOME;
     rmSync(scratch, { recursive: true, force: true });
   });
 
@@ -255,18 +255,18 @@ describe("secrets", () => {
     expect(mode).toBe(0o600);
   });
 
-  test("consecutive ARKEON_HOME scopes generate independent secret sets", () => {
+  test("consecutive ARKEON_WIKI_HOME scopes generate independent secret sets", () => {
     const first = loadOrCreateSecrets();
     // Point at a different dir — must not reuse the first one's keys.
     const otherScratch = mkdtempSync(join(tmpdir(), "arkeon-cli-test-"));
-    const prev = process.env.ARKEON_HOME;
-    process.env.ARKEON_HOME = otherScratch;
+    const prev = process.env.ARKEON_WIKI_HOME;
+    process.env.ARKEON_WIKI_HOME = otherScratch;
     try {
       const second = loadOrCreateSecrets();
       expect(second.adminBootstrapKey).not.toBe(first.adminBootstrapKey);
       expect(second.pgPassword).not.toBe(first.pgPassword);
     } finally {
-      process.env.ARKEON_HOME = prev;
+      process.env.ARKEON_WIKI_HOME = prev;
       rmSync(otherScratch, { recursive: true, force: true });
     }
   });

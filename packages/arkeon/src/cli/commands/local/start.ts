@@ -6,7 +6,7 @@
  *
  * Flow:
  *   1. Refuse to start if an instance is already running (pidfile check).
- *   2. Create ~/.arkeon/, load or generate secrets.
+ *   2. Create ~/.arkeon-wiki/, load or generate secrets.
  *   3. Ensure the Meilisearch binary is downloaded and executable.
  *   4. Start embedded Postgres.
  *   6. Run migrations.
@@ -160,7 +160,7 @@ async function runStart(options: StartOptions): Promise<void> {
 
   // --- Postgres ---
   // In embedded mode (default) we boot a Postgres cluster inside
-  // ~/.arkeon/data/postgres. In external mode the user is responsible
+  // ~/.arkeon-wiki/data/postgres. In external mode the user is responsible
   // for provisioning the database; we only run migrations against it.
   let dbAppUrl: string;
   let migrationUrl: string;
@@ -249,7 +249,7 @@ async function runStart(options: StartOptions): Promise<void> {
   const { startApi } = await import("../../../server/server.js");
   const storageDir = filesDataDir();
   // Thread storage location via env so src/server/lib/storage.ts
-  // writes uploaded files into the ~/.arkeon state dir rather than the
+  // writes uploaded files into the ~/.arkeon-wiki state dir rather than the
   // process cwd.
   process.env.STORAGE_BACKEND = process.env.STORAGE_BACKEND ?? "local";
   process.env.STORAGE_DIR = process.env.STORAGE_DIR ?? storageDir;

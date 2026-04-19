@@ -16,7 +16,7 @@ fail() { echo -e "${RED}FAIL${NC}: $1"; exit 1; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# A scratch ARKEON_HOME so we don't stomp on the developer's real ~/.arkeon
+# A scratch ARKEON_WIKI_HOME so we don't stomp on the developer's real ~/.arkeon-wiki
 SCRATCH_DIR="$(mktemp -d -t arkeon-test-XXXXXX)"
 PIDFILE="/tmp/arkeon-test-local.$$.pid"
 LOGFILE="/tmp/arkeon-test-local.$$.log"
@@ -47,7 +47,7 @@ npm run build -w packages/explorer || fail "Explorer build"
 pass "Explorer build"
 
 step "Starting Arkeon stack"
-ARKEON_HOME="$SCRATCH_DIR" nohup npx tsx packages/arkeon/src/index.ts start \
+ARKEON_WIKI_HOME="$SCRATCH_DIR" nohup npx tsx packages/arkeon/src/index.ts start \
   --port 8000 --pg-port 15433 --meili-port 17700 \
   > "$LOGFILE" 2>&1 &
 echo $! > "$PIDFILE"

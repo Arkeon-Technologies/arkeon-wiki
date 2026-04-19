@@ -44,7 +44,7 @@ function resolveAdminKey(apiUrl: string): string {
   const registryKey = resolveAdminKeyForUrl(apiUrl);
   if (registryKey) return registryKey;
 
-  // 3. Default ARKEON_HOME secrets.json (fallback for single-stack setups)
+  // 3. Default ARKEON_WIKI_HOME secrets.json (fallback for single-stack setups)
   const secrets = readSecrets();
   if (secrets?.adminBootstrapKey) return secrets.adminBootstrapKey;
 

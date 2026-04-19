@@ -7,11 +7,11 @@
  *
  * Shape of the flow:
  *   1. Refuse if a live daemon already owns the pidfile
- *   2. Ensure ~/.arkeon, load or generate secrets
+ *   2. Ensure ~/.arkeon-wiki, load or generate secrets
  *   3. Spawn `arkeon start` as a detached child with stdio piped to
- *      ~/.arkeon/arkeon.log (append). The child writes the pidfile
+ *      ~/.arkeon-wiki/arkeon.log (append). The child writes the pidfile
  *      once the API is listening. The daemon reads LLM config from
- *      ~/.arkeon/llm.json directly — no threading needed here.
+ *      ~/.arkeon-wiki/llm.json directly — no threading needed here.
  *   4. Poll http://localhost:<port>/health with a 120s deadline.
  *      On timeout, tail the log and surface it.
  *   5. Save credentials so subsequent `arkeon entities list` etc. are
@@ -66,7 +66,7 @@ export function registerUpCommand(program: Command): void {
   program
     .command("up")
     .description("Start the Arkeon stack as a detached background daemon, wait for health")
-    .option("--name <name>", "Named instance — auto-picks ports and isolates state in ~/.arkeon/<name>/")
+    .option("--name <name>", "Named instance — auto-picks ports and isolates state in ~/.arkeon-wiki/<name>/")
     .option("--port <port>", `API port (default: ${DEFAULT_API_PORT})`)
     .option("--pg-port <port>", `Embedded Postgres port (default: ${DEFAULT_PG_PORT})`)
     .option("--meili-port <port>", `Meilisearch port (default: ${DEFAULT_MEILI_PORT})`)
@@ -93,7 +93,7 @@ async function runUp(opts: UpOptions): Promise<void> {
     }
   }
 
-  // Resolve ports and ARKEON_HOME
+  // Resolve ports and ARKEON_WIKI_HOME
   let apiPort: number;
   let pgPort: number;
   let meiliPort: number;
@@ -115,10 +115,10 @@ async function runUp(opts: UpOptions): Promise<void> {
       }
     }
 
-    // Named instances get isolated state under ~/.arkeon/<name>/
-    process.env.ARKEON_HOME = process.env.ARKEON_HOME ?? join(homedir(), ".arkeon", instanceName);
+    // Named instances get isolated state under ~/.arkeon-wiki/<name>/
+    process.env.ARKEON_WIKI_HOME = process.env.ARKEON_WIKI_HOME ?? join(homedir(), ".arkeon-wiki", instanceName);
     output.progress(`[arkeon] Starting named instance "${instanceName}" — API=${apiPort}, PG=${pgPort}, Meili=${meiliPort}`);
-    output.progress(`[arkeon] State dir: ${process.env.ARKEON_HOME}`);
+    output.progress(`[arkeon] State dir: ${process.env.ARKEON_WIKI_HOME}`);
   } else {
     apiPort = Number(opts.port ?? DEFAULT_API_PORT);
     pgPort = Number(opts.pgPort ?? DEFAULT_PG_PORT);
@@ -179,8 +179,8 @@ async function runUp(opts: UpOptions): Promise<void> {
   // before entry.args, `npx` would interpret it as one of its own
   // flags and fail.
   const entry = findCliEntry();
-  const dataDirArgs = process.env.ARKEON_HOME
-    ? ["--data-dir", process.env.ARKEON_HOME]
+  const dataDirArgs = process.env.ARKEON_WIKI_HOME
+    ? ["--data-dir", process.env.ARKEON_WIKI_HOME]
     : [];
   const childArgs = [
     ...entry.args,
@@ -212,7 +212,7 @@ async function runUp(opts: UpOptions): Promise<void> {
     }
   }
 
-  // LLM config is read directly from ~/.arkeon/llm.json by the daemon
+  // LLM config is read directly from ~/.arkeon-wiki/llm.json by the daemon
   // (see packages/arkeon/src/server/lib/llm.ts). Nothing to thread.
 
   const child = spawn(entry.cmd, childArgs, {

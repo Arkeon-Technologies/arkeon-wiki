@@ -33,7 +33,7 @@ const resolveSubjectRoute = createRoute({
   "x-arke-auth": "required",
   "x-arke-related": ["POST /wiki", "GET /search"],
   "x-arke-rules": [
-    "Returns 503 if no LLM provider is configured (see ~/.arkeon/llm.json)",
+    "Returns 503 if no LLM provider is configured (see ~/.arkeon-wiki/llm.json)",
   ],
   request: {
     body: {

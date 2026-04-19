@@ -128,7 +128,7 @@ false merges are worse than duplicate pages.
 
 All LLM-using steps share `server/lib/llm.ts`.
 
-Config file: `~/.arkeon/llm.json` (override with `WIKI_LLM_CONFIG_PATH`)
+Config file: `~/.arkeon-wiki/llm.json` (override with `WIKI_LLM_CONFIG_PATH`)
 
 ```json
 {

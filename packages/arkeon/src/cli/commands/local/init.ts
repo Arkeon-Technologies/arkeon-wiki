@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `arkeon init` — create ~/.arkeon, generate secrets, optionally stage
+ * `arkeon init` — create ~/.arkeon-wiki, generate secrets, optionally stage
  * LLM config. Does not start services.
  *
  * Flow:
@@ -39,8 +39,8 @@ interface InitOptions extends InitLlmFlags {
 export function registerInitCommand(program: Command): void {
   program
     .command("init")
-    .description("Create ~/.arkeon, generate secrets, optionally stage an LLM provider config")
-    .option("--force", "Rotate all secrets even if ~/.arkeon/secrets.json already exists")
+    .description("Create ~/.arkeon-wiki, generate secrets, optionally stage an LLM provider config")
+    .option("--force", "Rotate all secrets even if ~/.arkeon-wiki/secrets.json already exists")
     .option(
       "--llm-provider <name>",
       "LLM provider label (free-form, e.g. openai, anthropic, openrouter, local)",
@@ -94,7 +94,7 @@ export function registerInitCommand(program: Command): void {
             ? { provider: llm.default.provider, base_url: llm.default.base_url, model: llm.default.model }
             : null,
           llm_hint: llm
-            ? "Per-step overrides (resolve/exists/draft/dedup) can be hand-edited in ~/.arkeon/llm.json."
+            ? "Per-step overrides (resolve/exists/draft/dedup) can be hand-edited in ~/.arkeon-wiki/llm.json."
             : "No LLM provider configured. Pass --llm-provider, --llm-base-url, --llm-api-key, --llm-model to stage one.",
           next: "arkeon up",
         });

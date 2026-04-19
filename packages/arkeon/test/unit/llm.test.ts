@@ -17,13 +17,13 @@ describe("llm config resolution", () => {
   let prevDraftModel: string | undefined;
 
   beforeEach(() => {
-    prevHome = process.env.ARKEON_HOME;
+    prevHome = process.env.ARKEON_WIKI_HOME;
     prevApiKey = process.env.OPENAI_API_KEY;
     prevBaseUrl = process.env.OPENAI_BASE_URL;
     prevResolveModel = process.env.WIKI_RESOLVE_MODEL;
     prevDraftModel = process.env.WIKI_DRAFT_MODEL;
     scratch = mkdtempSync(join(tmpdir(), "arkeon-llm-test-"));
-    process.env.ARKEON_HOME = scratch;
+    process.env.ARKEON_WIKI_HOME = scratch;
     delete process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_BASE_URL;
     delete process.env.WIKI_RESOLVE_MODEL;
@@ -32,8 +32,8 @@ describe("llm config resolution", () => {
   });
 
   afterEach(() => {
-    if (prevHome !== undefined) process.env.ARKEON_HOME = prevHome;
-    else delete process.env.ARKEON_HOME;
+    if (prevHome !== undefined) process.env.ARKEON_WIKI_HOME = prevHome;
+    else delete process.env.ARKEON_WIKI_HOME;
     if (prevApiKey !== undefined) process.env.OPENAI_API_KEY = prevApiKey;
     if (prevBaseUrl !== undefined) process.env.OPENAI_BASE_URL = prevBaseUrl;
     if (prevResolveModel !== undefined) process.env.WIKI_RESOLVE_MODEL = prevResolveModel;

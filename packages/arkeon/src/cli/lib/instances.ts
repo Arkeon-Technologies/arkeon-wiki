@@ -8,7 +8,7 @@
  * other commands (e.g., `arkeon init` in a different directory) can
  * discover running stacks and resolve their admin keys.
  *
- * Registry lives at ~/.arkeon/instances/<port>.json, one file per
+ * Registry lives at ~/.arkeon-wiki/instances/<port>.json, one file per
  * running stack. Cleaned up on `arkeon down`/`arkeon stop`.
  */
 
@@ -26,7 +26,7 @@ export interface StackInstance {
 }
 
 function instancesDir(): string {
-  return join(homedir(), ".arkeon", "instances");
+  return join(homedir(), ".arkeon-wiki", "instances");
 }
 
 function instancePath(port: number): string {
@@ -174,7 +174,7 @@ export function registryKeyFromUrl(apiUrl: string): string {
 
 /**
  * Resolve the admin key for a given API URL by finding the instance's
- * ARKEON_HOME and reading its secrets.json.
+ * ARKEON_WIKI_HOME and reading its secrets.json.
  */
 export function resolveAdminKeyForUrl(apiUrl: string): string | null {
   const instance = findInstanceByUrl(apiUrl);
