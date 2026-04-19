@@ -45,12 +45,36 @@ import {
 } from "../lib/schemas";
 import { setActorContext } from "../lib/actor-context";
 import { createSql } from "../lib/sql";
+import type { Actor } from "../types";
 import {
   processWikiContent,
   fetchWikiReferences,
   diffWikiReferences,
   applyRelationshipDiff,
 } from "../lib/wiki-pipeline";
+
+/** Throw 409 if the entity's current ver differs from expectedVer, or 404 if it doesn't exist. */
+async function throwIfCasConflict(
+  sql: ReturnType<typeof createSql>,
+  actor: Actor,
+  entityId: string,
+  expectedVer: number,
+): Promise<void> {
+  const existsResult = await sql.transaction([
+    ...setActorContext(sql, actor),
+    sql`SELECT ver FROM entities WHERE id = ${entityId} LIMIT 1`,
+  ]);
+  const fresh = (existsResult[existsResult.length - 1] as Array<{ ver: number }>)[0];
+  if (!fresh) {
+    throw new ApiError(404, "not_found", "Entity not found");
+  }
+  if (fresh.ver !== expectedVer) {
+    throw new ApiError(409, "cas_conflict", "Version mismatch", {
+      entity_id: entityId,
+      expected_ver: expectedVer,
+    });
+  }
+}
 
 type VersionRow = {
   entity_id?: string;
@@ -690,17 +714,7 @@ wikisRouter.openapi(updateEntityRoute, async (c) => {
   } catch (err) {
     // RLS denial (42501) may mask a CAS conflict — check version before surfacing 403
     if (err instanceof postgres.PostgresError && err.code === "42501") {
-      const existsResult = await sql.transaction([
-        ...setActorContext(sql, actor),
-        sql`SELECT ver FROM entities WHERE id = ${entityId} LIMIT 1`,
-      ]);
-      const fresh = (existsResult[existsResult.length - 1] as Array<{ ver: number }>)[0];
-      if (fresh && fresh.ver !== expectedVer) {
-        throw new ApiError(409, "cas_conflict", "Version mismatch", {
-          entity_id: entityId,
-          expected_ver: expectedVer,
-        });
-      }
+      await throwIfCasConflict(sql, actor, entityId, expectedVer);
     }
     throw err;
   }
@@ -708,21 +722,8 @@ wikisRouter.openapi(updateEntityRoute, async (c) => {
   const updated = (results[results.length - 1] as EntityRecord[])[0];
   if (!updated) {
     // Distinguish CAS conflict from permission denial
-    const existsResult = await sql.transaction([
-      ...setActorContext(sql, actor),
-      sql`SELECT ver FROM entities WHERE id = ${entityId} LIMIT 1`,
-    ]);
-    const fresh = (existsResult[existsResult.length - 1] as Array<{ ver: number }>)[0];
-    if (fresh) {
-      if (fresh.ver !== expectedVer) {
-        throw new ApiError(409, "cas_conflict", "Version mismatch", {
-          entity_id: entityId,
-          expected_ver: expectedVer,
-        });
-      }
-      throw new ApiError(403, "forbidden", "You do not have write access on this entity");
-    }
-    throw new ApiError(404, "not_found", "Entity not found");
+    await throwIfCasConflict(sql, actor, entityId, expectedVer);
+    throw new ApiError(403, "forbidden", "You do not have write access on this entity");
   }
 
   // Version snapshot
