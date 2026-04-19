@@ -20,6 +20,13 @@ import {
 } from "../lib/schemas";
 import { createSql } from "../lib/sql";
 
+const EntitySummarySchema = z.object({
+  id: EntityIdParam,
+  kind: z.string(),
+  type: z.string().nullable(),
+  properties: z.record(z.string(), z.any()),
+}).describe("Summary of the related entity (id, kind, type, properties)");
+
 const RelationshipSummarySchema = z.object({
   id: EntityIdParam,
   predicate: z.string(),
@@ -27,8 +34,8 @@ const RelationshipSummarySchema = z.object({
   target_id: EntityIdParam,
   direction: z.enum(["in", "out"]).describe("Whether this entity is the source (out) or target (in)"),
   properties: z.record(z.string(), z.any()),
-  source: z.any().optional(),
-  target: z.any().optional(),
+  source: EntitySummarySchema.optional(),
+  target: EntitySummarySchema.optional(),
 });
 
 const listRelationshipsRoute = createRoute({
@@ -84,8 +91,8 @@ const getRelationshipRoute = createRoute({
           source_id: EntityIdParam,
           target_id: EntityIdParam,
           properties: z.record(z.string(), z.any()),
-          source: z.any(),
-          target: z.any(),
+          source: EntitySummarySchema,
+          target: EntitySummarySchema,
         }),
       ),
     },
@@ -99,8 +106,8 @@ const GlobalRelationshipSchema = z.object({
   source_id: EntityIdParam,
   target_id: EntityIdParam,
   properties: z.record(z.string(), z.any()),
-  source: z.any(),
-  target: z.any(),
+  source: EntitySummarySchema,
+  target: EntitySummarySchema,
 });
 
 const listAllRelationshipsRoute = createRoute({

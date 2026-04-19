@@ -2303,14 +2303,74 @@
                             "additionalProperties": {},
                             "type": "object"
                           },
-                          "source": {},
+                          "source": {
+                            "description": "Summary of the related entity (id, kind, type, properties)",
+                            "properties": {
+                              "id": {
+                                "description": "ULID string",
+                                "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "properties": {
+                                "additionalProperties": {},
+                                "type": "object"
+                              },
+                              "type": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "type",
+                              "properties"
+                            ],
+                            "type": "object"
+                          },
                           "source_id": {
                             "description": "ULID string",
                             "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
                             "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
                             "type": "string"
                           },
-                          "target": {},
+                          "target": {
+                            "description": "Summary of the related entity (id, kind, type, properties)",
+                            "properties": {
+                              "id": {
+                                "description": "ULID string",
+                                "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "properties": {
+                                "additionalProperties": {},
+                                "type": "object"
+                              },
+                              "type": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "type",
+                              "properties"
+                            ],
+                            "type": "object"
+                          },
                           "target_id": {
                             "description": "ULID string",
                             "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
@@ -2323,7 +2383,9 @@
                           "predicate",
                           "source_id",
                           "target_id",
-                          "properties"
+                          "properties",
+                          "source",
+                          "target"
                         ],
                         "type": "object"
                       },
@@ -2411,14 +2473,74 @@
                       "additionalProperties": {},
                       "type": "object"
                     },
-                    "source": {},
+                    "source": {
+                      "description": "Summary of the related entity (id, kind, type, properties)",
+                      "properties": {
+                        "id": {
+                          "description": "ULID string",
+                          "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string"
+                        },
+                        "properties": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "type": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "kind",
+                        "type",
+                        "properties"
+                      ],
+                      "type": "object"
+                    },
                     "source_id": {
                       "description": "ULID string",
                       "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
                       "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
                       "type": "string"
                     },
-                    "target": {},
+                    "target": {
+                      "description": "Summary of the related entity (id, kind, type, properties)",
+                      "properties": {
+                        "id": {
+                          "description": "ULID string",
+                          "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "type": "string"
+                        },
+                        "properties": {
+                          "additionalProperties": {},
+                          "type": "object"
+                        },
+                        "type": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "kind",
+                        "type",
+                        "properties"
+                      ],
+                      "type": "object"
+                    },
                     "target_id": {
                       "description": "ULID string",
                       "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
@@ -2431,7 +2553,9 @@
                     "predicate",
                     "source_id",
                     "target_id",
-                    "properties"
+                    "properties",
+                    "source",
+                    "target"
                   ],
                   "type": "object"
                 }
@@ -5480,14 +5604,74 @@
                             "additionalProperties": {},
                             "type": "object"
                           },
-                          "source": {},
+                          "source": {
+                            "description": "Summary of the related entity (id, kind, type, properties)",
+                            "properties": {
+                              "id": {
+                                "description": "ULID string",
+                                "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "properties": {
+                                "additionalProperties": {},
+                                "type": "object"
+                              },
+                              "type": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "type",
+                              "properties"
+                            ],
+                            "type": "object"
+                          },
                           "source_id": {
                             "description": "ULID string",
                             "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
                             "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
                             "type": "string"
                           },
-                          "target": {},
+                          "target": {
+                            "description": "Summary of the related entity (id, kind, type, properties)",
+                            "properties": {
+                              "id": {
+                                "description": "ULID string",
+                                "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string"
+                              },
+                              "properties": {
+                                "additionalProperties": {},
+                                "type": "object"
+                              },
+                              "type": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "type",
+                              "properties"
+                            ],
+                            "type": "object"
+                          },
                           "target_id": {
                             "description": "ULID string",
                             "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
