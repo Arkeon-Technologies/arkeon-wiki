@@ -7,6 +7,9 @@ export {
   AUTHENTICATION,
   BEST_PRACTICES,
   FILTERING_HINT,
+  AUTH_PROFILES,
+  INSTANCES,
+  WORKERS,
 } from "./concepts.js";
 
 export {

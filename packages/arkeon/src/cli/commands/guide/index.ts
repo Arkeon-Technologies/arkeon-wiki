@@ -7,6 +7,7 @@ import {
   WHAT_IS_ARKEON,
   CORE_CONCEPTS,
   AUTHENTICATION,
+  AUTH_PROFILES,
   BEST_PRACTICES,
   FILTERING_HINT,
 } from "../../../shared/index.js";
@@ -37,16 +38,48 @@ Or use environment variables:
 ## Your First Workflow
 
 1. Create an entity
-   arkeon entities create --type note --properties '{"title":"Hello","body":"My first entity."}'
+   arkeon wiki create --type note --properties '{"title":"Hello","body":"My first entity."}'
 
 2. List entities
-   arkeon entities list
+   arkeon wiki list
 
 3. Create a relationship (source entity is the path argument, target is a flag)
    arkeon relationships create <source-entity-id> --predicate references --target-id <target-entity-id>
 
 4. Search
    arkeon search query --q hello
+
+## Working with Files
+
+Arkeon can ingest and manage files on disk, keeping them in sync with the
+knowledge graph.
+
+Initialize a repo:
+  arkeon init <space-name>
+
+This binds the current directory to a space and creates .arkeon/state.json
+to track the binding.
+
+Ingest files into the graph:
+  arkeon add <paths>
+
+Raw documents are posted to the wiki pipeline. Files with YAML frontmatter
+are treated as entity definitions and upserted directly.
+
+Download graph entities to disk:
+  arkeon pull
+
+Writes wiki entities as wiki/<type>/<slug>.md files with YAML frontmatter.
+You can then edit these files locally and push changes back.
+
+Compare disk state with the graph:
+  arkeon diff
+
+Remove documents and their extracted children:
+  arkeon rm <paths>
+
+The typical workflow is: pull entities, edit on disk, then add the changed
+files to push updates back to the graph.
 
 ## Working Within a Space
 
@@ -71,6 +104,22 @@ Override priority: --space-id flag > ARKE_SPACE_ID env var > config set-space
 View or clear your space config:
   arkeon config get-space
   arkeon config clear-space
+
+## Auth Profiles
+
+${AUTH_PROFILES}
+
+List profiles for the current instance:
+  arkeon auth profiles
+
+Switch the active profile:
+  arkeon auth use <name>
+
+Create a new actor and register it as a local profile (requires admin):
+  arkeon auth add <name>
+
+Self-service registration (server routes not yet implemented):
+  arkeon auth register
 
 ## Filtering
 

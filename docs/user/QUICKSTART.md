@@ -82,6 +82,64 @@ arkeon up
 Embedded services are skipped when external URLs are set. Migrations
 still run on startup.
 
+## Working with wikis
+
+### Creating wikis via the CLI
+
+Create a wiki entity directly:
+
+```bash
+arkeon wiki create --label "Claude Shannon" --type person \
+  --body "Father of information theory."
+```
+
+### The pull-edit-push workflow
+
+Pull entities to disk as Markdown files with YAML frontmatter, edit
+locally, then push changes back:
+
+```bash
+arkeon pull "information theory"    # downloads matching entities to wiki/
+# edit the files in wiki/ with your editor
+arkeon diff                         # see what changed
+arkeon add wiki/                    # push edits back to the graph
+```
+
+Pulled files include `id` and `ver` in their frontmatter. The `ver`
+field enables optimistic concurrency — the server rejects updates if
+someone else modified the entity since you pulled it.
+
+### Adding raw documents
+
+Add Markdown, text, or LaTeX files without frontmatter. The wiki
+pipeline extracts entities and relationships automatically:
+
+```bash
+arkeon add papers/          # ingest all documents in papers/
+arkeon add notes.md         # ingest a single file
+```
+
+## Configuration priority
+
+### Space selection
+
+When multiple spaces exist, the active space resolves in this order:
+
+1. `ARKE_SPACE_ID` environment variable
+2. `.arkeon/state.json` `space_id` (per-repo, set by `arkeon init`)
+3. `arkeon config set-space` (global default)
+
+### Authentication
+
+API key resolution order:
+
+1. `ARKE_API_KEY` environment variable
+2. Per-repo actor key (from `.arkeon/state.json` actors + instance registry)
+3. Global credential store (`~/.config/arkeon-cli/credentials.json`)
+
+For most local usage, `arkeon init` sets up the per-repo actor key
+automatically and you never need to think about this.
+
 ## What's next
 
 - [API documentation](http://localhost:8000/llms.txt) — full API reference

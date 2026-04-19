@@ -7,6 +7,77 @@ opt-in and not required for core usage.
 
 ---
 
+## Worker configuration (`workers.yaml`)
+
+Workers are background processes that enrich your knowledge graph. Currently
+implemented: the **extractor** resolves placeholder links into entities, and
+the **drafter** writes wiki content for stub entities. Additional workers
+(consolidator, connector) are planned but not yet available.
+
+Configure them via `~/.arkeon-wiki/workers.yaml` (override path with
+`ARKEON_WORKERS_CONFIG`). If the file doesn't exist, built-in defaults
+apply.
+
+### Global LLM settings
+
+The top-level `llm:` block sets the default LLM for all workers:
+
+```yaml
+llm:
+  provider: openai          # openai | anthropic | openrouter
+  base_url: https://api.openai.com/v1
+  api_key: sk-...
+  model: gpt-4o
+  max_tokens: 4096
+```
+
+This supersedes `llm.json` (which still works as a lower-priority fallback).
+
+### Per-worker settings
+
+Each worker can be individually configured under `workers:`:
+
+```yaml
+workers:
+  extractor:
+    enabled: true
+    prompt_mode: append       # prepend | append | replace
+    prompt: "Extra domain rules for extraction..."
+    llm:
+      model: gpt-4o-mini     # override model for this worker
+    steps:
+      resolve: { model: gpt-4o-mini, max_tokens: 256 }
+      exists:  { model: gpt-4o-mini, max_tokens: 512 }
+
+  drafter:
+    enabled: true
+    poll_interval: 10s        # how often to check for work
+    batch_size: 5             # entities per batch
+    max_depth: 2              # link-follow depth
+    llm:
+      model: gpt-4o
+      max_tokens: 8000
+
+  # consolidator and connector are planned but not yet implemented
+```
+
+### Prompt customization modes
+
+- **`append`** (default) — your custom prompt is added after the built-in prompt
+- **`prepend`** — your custom prompt is added before the built-in prompt
+- **`replace`** — your custom prompt completely replaces the built-in prompt
+
+### LLM resolution priority
+
+When a worker makes an LLM call, the model/config resolves in order:
+
+1. Per-step config (e.g., `workers.extractor.steps.resolve`)
+2. Per-worker `llm` block (e.g., `workers.extractor.llm`)
+3. Top-level `llm` block
+4. `llm.json` fallback (legacy)
+
+---
+
 ## Rate limiting (not implemented)
 
 Arkeon currently ships **without any in-process rate limiting**. This is
