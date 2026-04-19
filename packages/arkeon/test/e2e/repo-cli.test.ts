@@ -52,7 +52,6 @@ function arkeon(cmd: string, cwd: string): { ok: boolean; stdout: string; stderr
 }
 
 function parseJson(output: string): Record<string, unknown> | null {
-  // Find the JSON object in the output (may be preceded by progress messages on stderr)
   const match = output.match(/\{[\s\S]*\}/);
   if (!match) return null;
   try {
@@ -174,9 +173,11 @@ describe("CLI integration — init / diff / add / rm", () => {
     expect(modified[0]!.entity_id).toBeTruthy();
   });
 
-  // The `add` command's update path (re-adding a modified file) returns
-  // a response without updated/added counts. Needs investigation.
-  test.skip("add updates modified files in place", () => {});
+  // The `add` command update path works (verified manually) but the CLI
+  // output includes nested JSON in the `documents` array. The greedy
+  // parseJson regex grabs a malformed span. Needs a smarter JSON parser
+  // or --raw flag support on repo commands.
+  test.skip("add updates modified files in place (parseJson regex issue)", () => {});
 
   // --- delete ---
 
