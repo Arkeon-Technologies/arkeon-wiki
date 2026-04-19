@@ -27,9 +27,7 @@ describe("Spaces", () => {
     expect(space.name).toContain("test-space");
   });
 
-  // The GET /spaces endpoint does not set actor context before querying,
-  // so RLS blocks all rows. Skip until the server is fixed.
-  test.skip("List spaces (server: missing actor context in list handler)", async () => {
+  test("List spaces", async () => {
     await createSpace(actor.apiKey, uniqueName("list-space"));
     const { response, body } = await getJson("/spaces", actor.apiKey);
     expect(response.status).toBe(200);
@@ -54,8 +52,17 @@ describe("Spaces", () => {
     expect((body as any).entities.length).toBeGreaterThanOrEqual(2);
   });
 
-  // DELETE /spaces/{id}/entities/{entityId} queries space_entities without
-  // actor context, so RLS blocks the query and returns 404.
-  // Skip until the server sets actor context for the space_entities lookups.
-  test.skip("Remove entity from space (server: missing actor context in DELETE handler)", async () => {});
+  test("Remove entity from space", async () => {
+    const space = await createSpace(actor.apiKey, uniqueName("remove-space"));
+    const entity = await createEntity(actor.apiKey, "note", {
+      label: uniqueName("removable"),
+    });
+    await addEntityToSpace(actor.apiKey, space.id, entity.id);
+
+    const { response } = await apiRequest(`/spaces/${space.id}/entities/${entity.id}`, {
+      method: "DELETE",
+      apiKey: actor.apiKey,
+    });
+    expect(response.status).toBe(204);
+  });
 });

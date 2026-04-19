@@ -174,11 +174,9 @@ describe("CLI integration — init / diff / add / rm", () => {
     expect(modified[0]!.entity_id).toBeTruthy();
   });
 
-  // PUT /wiki/{id} with content update queries space_entities without actor
-  // context, so RLS blocks the query and the update fails with
-  // "Wiki has no space assignment". Skip until the server sets actor context
-  // for the space_entities lookup in the PUT handler.
-  test.skip("add updates modified files in place (server: missing actor context in PUT space lookup)", () => {});
+  // The `add` command's update path (re-adding a modified file) returns
+  // a response without updated/added counts. Needs investigation.
+  test.skip("add updates modified files in place", () => {});
 
   // --- delete ---
 

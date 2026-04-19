@@ -61,13 +61,25 @@ function parseJson(output: string): Record<string, unknown> | null {
 describe("CLI integration — generated API commands", () => {
   // --- seed ---
 
-  // The seed command reads the admin key from ~/.arkeon/secrets.json and
-  // does not accept a --space-id flag. When the admin actor has access to
-  // multiple spaces (common after e2e test runs), it fails with
-  // "ambiguous_default_space". Skip until the seed command is updated to
-  // either accept --space-id or auto-create its own space.
-  test.skip("seed loads Genesis knowledge graph (requires single-space admin)", () => {});
-  test.skip("seed is idempotent (requires single-space admin)", () => {});
+  test("seed loads Genesis knowledge graph", () => {
+    const result = arkeon("seed --force");
+    expect(result.ok).toBe(true);
+
+    const json = parseJson(result.stdout);
+    expect(json).not.toBeNull();
+    expect(json?.operation).toBe("seed");
+    expect(json?.wikis_created).toBeGreaterThan(0);
+  });
+
+  test("seed is idempotent (second run skips)", () => {
+    const result = arkeon("seed");
+    expect(result.ok).toBe(true);
+
+    const json = parseJson(result.stdout);
+    expect(json).not.toBeNull();
+    expect(json?.operation).toBe("seed");
+    expect(json?.skipped).toBe(true);
+  });
 
   // --- wiki ---
 
@@ -82,9 +94,18 @@ describe("CLI integration — generated API commands", () => {
     expect(entities.length).toBeGreaterThan(0);
   });
 
-  // This test depends on seed data (books) which requires a single-space
-  // admin. Skip until seed is fixed.
-  test.skip("wiki list --filter subject_type filters by subject type (requires seed)", () => {});
+  test("wiki list --filter subject_type filters by subject type", () => {
+    const result = arkeon('wiki list --filter "properties.subject_type:book" --raw');
+    expect(result.ok).toBe(true);
+
+    const json = parseJson(result.stdout);
+    expect(json).not.toBeNull();
+    const entities = json?.entities as Array<{ properties: { subject_type: string } }>;
+    expect(entities.length).toBeGreaterThan(0);
+    for (const entity of entities) {
+      expect(entity.properties.subject_type).toBe("book");
+    }
+  });
 
   let createdEntityId: string | undefined;
   let cliSpaceId: string | undefined;
