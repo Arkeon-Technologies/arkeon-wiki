@@ -117,7 +117,7 @@ describe("serialization against real API entities", () => {
     const { response, body } = await getJson(`/wiki/${wikiIds[0]}?view=full`, actorKey);
     expect(response.status).toBe(200);
 
-    const entity = (body as any).entity;
+    const entity = (body as any).wiki;
     const md = serializeEntity(entity);
 
     // Should have frontmatter
@@ -130,7 +130,7 @@ describe("serialization against real API entities", () => {
 
   test("round-trip: serialize then parse preserves fields", async () => {
     const { body } = await getJson(`/wiki/${wikiIds[1]}?view=full`, actorKey);
-    const entity = (body as any).entity;
+    const entity = (body as any).wiki;
 
     const md = serializeEntity(entity);
     const parsed = parseEntityFile(md);
@@ -242,7 +242,7 @@ describe("add workflow for frontmatter entities", () => {
     });
 
     expect(response.status).toBe(200);
-    const updated = (body as any).entity;
+    const updated = (body as any).wiki;
     expect(updated.ver).toBeGreaterThan(parsed.ver!);
 
     // Verify server has the new content
@@ -250,7 +250,7 @@ describe("add workflow for frontmatter entities", () => {
       `/wiki/${wikiIds[0]}?view=full`,
       actorKey,
     );
-    const serverEntity = (fetchBody as any).entity;
+    const serverEntity = (fetchBody as any).wiki;
     expect(serverEntity.properties.content).toContain("second law");
     // submitted_content should also have the new text
     expect(serverEntity.properties.submitted_content).toContain("second law");
@@ -340,7 +340,7 @@ describe("add workflow for frontmatter entities", () => {
 describe("uncategorized entities", () => {
   test("entity without subject_type gets _uncategorized directory", async () => {
     const { body } = await getJson(`/wiki/${wikiIds[2]}?view=full`, actorKey);
-    const entity = (body as any).entity;
+    const entity = (body as any).wiki;
 
     const { entityToFilePath } = await import("../../src/cli/lib/manifest");
     const manifest = loadManifest(testDir);
