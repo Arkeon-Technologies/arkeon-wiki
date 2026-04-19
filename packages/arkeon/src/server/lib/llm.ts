@@ -9,30 +9,22 @@
  *
  *   1. Per-step env vars: WIKI_RESOLVE_MODEL, WIKI_EXISTS_MODEL,
  *      WIKI_DRAFT_MODEL, WIKI_DEDUP_MODEL (model only)
- *   2. Step block in $ARKEON_WIKI_HOME/llm.json (or WIKI_LLM_CONFIG_PATH)
- *   3. Default block in the same file
- *   4. Base env vars: OPENAI_API_KEY, OPENAI_BASE_URL (for api_key + base_url)
- *   5. Hardcoded defaults per step (cheap models for resolve/exists,
+ *   2. workers.yaml step/worker/global LLM config
+ *   3. Step block in $ARKEON_WIKI_HOME/llm.json (or WIKI_LLM_CONFIG_PATH)
+ *   4. Default block in the same file
+ *   5. Base env vars: OPENAI_API_KEY, OPENAI_BASE_URL (for api_key + base_url)
+ *   6. Hardcoded defaults per step (cheap models for resolve/exists,
  *      stronger models for draft/dedup)
  *
- * File shape:
- *
- *   {
- *     "default": {
- *       "provider": "openai",
- *       "base_url": "https://api.openai.com/v1",
- *       "api_key": "sk-...",
- *       "model": "gpt-5.4-nano"
- *     },
- *     "draft": { "model": "gpt-4o", "max_tokens": 8000 },
- *     "dedup": { "model": "gpt-4o", "max_tokens": 16000 }
- *   }
+ * workers.yaml is the primary config surface and subsumes llm.json.
+ * llm.json continues to work as a lower-priority fallback.
  */
 
 import OpenAI from "openai";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { getWorkerLlmConfig } from "./worker-config.js";
 
 export type LlmStep = "resolve" | "exists" | "draft" | "dedup";
 
@@ -146,26 +138,32 @@ const _clientCache = new Map<string, ResolvedLlm>();
  * Throws if no api_key can be resolved from any source.
  */
 export function getLlmClient(step: LlmStep): ResolvedLlm {
+  // workers.yaml config (step > worker > global)
+  const workerLlm = getWorkerLlmConfig(step) ?? {};
+
+  // llm.json fallback
   const file = loadConfigFile();
   const fileDefault = file?.default ?? {};
   const fileStep = file?.[step] ?? {};
 
-  // Step-specific model env var wins. No per-step base_url/api_key env vars —
-  // if you need different providers per step, use the config file.
+  // Step-specific model env var wins over everything except explicit
+  // workers.yaml settings. No per-step base_url/api_key env vars —
+  // if you need different providers per step, use workers.yaml.
   const envStepModel = process.env[`WIKI_${step.toUpperCase()}_MODEL`];
   const envApiKey = process.env.OPENAI_API_KEY;
   const envBaseUrl = process.env.OPENAI_BASE_URL;
 
-  const apiKey = fileStep.api_key ?? fileDefault.api_key ?? envApiKey;
-  const baseUrl = fileStep.base_url ?? fileDefault.base_url ?? envBaseUrl;
-  const model = envStepModel ?? fileStep.model ?? fileDefault.model ?? DEFAULT_MODEL[step];
-  const maxTokens = fileStep.max_tokens ?? fileDefault.max_tokens ?? DEFAULT_MAX_TOKENS[step];
+  // Resolution chain: env step model > workers.yaml > llm.json step > llm.json default > env > hardcoded
+  const apiKey = workerLlm.api_key ?? fileStep.api_key ?? fileDefault.api_key ?? envApiKey;
+  const baseUrl = workerLlm.base_url ?? fileStep.base_url ?? fileDefault.base_url ?? envBaseUrl;
+  const model = envStepModel ?? workerLlm.model ?? fileStep.model ?? fileDefault.model ?? DEFAULT_MODEL[step];
+  const maxTokens = workerLlm.max_tokens ?? fileStep.max_tokens ?? fileDefault.max_tokens ?? DEFAULT_MAX_TOKENS[step];
 
   if (!apiKey) {
     throw new Error(
       `LLM configuration missing for step "${step}". Set OPENAI_API_KEY in ` +
-      `the environment, write ${configPath()} with a default.api_key, or run ` +
-      `\`arkeon init --llm-provider ... --llm-base-url ... --llm-api-key ... --llm-model ...\`.`,
+      `the environment, write ${configPath()} with a default.api_key, or ` +
+      `configure it in workers.yaml.`,
     );
   }
 
@@ -188,6 +186,11 @@ export function getLlmClient(step: LlmStep): ResolvedLlm {
  * wiki with [[resolve:...]] links) rather than 500 deep in the pipeline.
  */
 export function isLlmConfigured(): boolean {
+  // Check workers.yaml first
+  const workerLlm = getWorkerLlmConfig("resolve");
+  if (workerLlm?.api_key) return true;
+
+  // Fall back to llm.json + env
   const file = loadConfigFile();
   const key =
     file?.default?.api_key ??

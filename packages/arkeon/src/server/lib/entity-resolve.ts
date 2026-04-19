@@ -41,6 +41,7 @@ import { withTransaction } from "./sql";
 import { setActorContext } from "./actor-context";
 import { getLlmClient, type LlmStep } from "./llm";
 import { buildCandidateQueries, strictNormalizeLabel } from "./label-match";
+import { getWorkerPromptConfig, buildPrompt } from "./worker-config";
 import type { Actor } from "../types";
 
 export interface ResolutionSubject {
@@ -248,6 +249,10 @@ async function llmJudge(
 ): Promise<EntityMatch[]> {
   const { client, model, maxTokens } = getLlmClient(llmStep);
 
+  // Apply user prompt customization from workers.yaml if configured
+  const promptConfig = getWorkerPromptConfig(llmStep);
+  const systemPrompt = promptConfig ? buildPrompt(JUDGE_PROMPT, promptConfig) : JUDGE_PROMPT;
+
   const input = {
     target: {
       label: subject.label,
@@ -271,7 +276,7 @@ async function llmJudge(
     const response = await client.chat.completions.create({
       model,
       messages: [
-        { role: "system", content: JUDGE_PROMPT },
+        { role: "system", content: systemPrompt },
         { role: "user", content: JSON.stringify(input) },
       ],
       response_format: { type: "json_object" },
