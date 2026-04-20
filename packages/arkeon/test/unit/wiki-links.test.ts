@@ -8,7 +8,7 @@ import { parseWikiLinks, WikiLinkParseError } from "../../src/server/lib/wiki-li
 describe("wiki link parsing", () => {
   test("parses typed links and demotes assign→placeholder at max depth", () => {
     const content = [
-      "Known [[entity:01ABC_def-123]].",
+      "Known [[entity:01ARSKM3X5BCG9K7QJ4VZW6YE0]].",
       "Resolve [[resolve:\"Matt Connelly\"|\"Columbia historian\"]].",
       "Placeholder [[placeholder:\"Mosaic Theory\"|\"classification concept\"]].",
       "Assign [[assign:\"Open Concept\"|\"worker should draft\"]].",
@@ -18,7 +18,7 @@ describe("wiki link parsing", () => {
 
     // At depth >= maxDepth, assign is demoted to placeholder.
     expect(links.map((l) => l.type)).toEqual(["entity", "resolve", "placeholder", "placeholder"]);
-    expect(links[0]!.id).toBe("01ABC_def-123");
+    expect(links[0]!.id).toBe("01ARSKM3X5BCG9K7QJ4VZW6YE0");
     expect(links[1]!.label).toBe("Matt Connelly");
     expect(links[1]!.description).toBe("Columbia historian");
     expect(links[2]!.label).toBe("Mosaic Theory");
@@ -27,11 +27,11 @@ describe("wiki link parsing", () => {
   });
 
   test("strips display label from entity links (LLM pipe syntax)", () => {
-    const content = "See [[entity:01KP123ABC|Renaissance Art]] for details.";
+    const content = "See [[entity:01ARSKM3X5BCG9K7QJ4VZW6YE0|Renaissance Art]] for details.";
     const links = parseWikiLinks(content, 0, 2);
     expect(links).toHaveLength(1);
     expect(links[0]!.type).toBe("entity");
-    expect(links[0]!.id).toBe("01KP123ABC");
+    expect(links[0]!.id).toBe("01ARSKM3X5BCG9K7QJ4VZW6YE0");
   });
 
   test("demotes entity link with label instead of ULID to resolve", () => {
@@ -40,6 +40,16 @@ describe("wiki link parsing", () => {
     expect(links).toHaveLength(1);
     expect(links[0]!.type).toBe("resolve");
     expect(links[0]!.label).toBe("Renaissance Art");
+  });
+
+  test("demotes single-word entity label (not a ULID) to resolve", () => {
+    const content = "See [[entity:Michelangelo]] and [[entity:NATO]].";
+    const links = parseWikiLinks(content, 0, 2);
+    expect(links).toHaveLength(2);
+    expect(links[0]!.type).toBe("resolve");
+    expect(links[0]!.label).toBe("Michelangelo");
+    expect(links[1]!.type).toBe("resolve");
+    expect(links[1]!.label).toBe("NATO");
   });
 
   test("assign stays assign when depth below max", () => {

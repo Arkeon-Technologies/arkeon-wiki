@@ -68,7 +68,8 @@ const BRACKET_LINK_RE = /\[\[([^\]]*)\]\]/g;
 //   Label                     — label only, unquoted
 const QUOTED_RE = /^"([^"]*)"(?:\|"([^"]*)")?$/;
 const FLEXIBLE_RE = /^"([^"]+)"(?:\|(.+))?$|^([^|]+?)(?:\|(.+))?$/;
-const ENTITY_ID_RE = /^[A-Za-z0-9_-]+$/;
+// ULIDs: exactly 26 Crockford base32 chars (no I, L, O, U)
+const ENTITY_ID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 
 /**
  * Parse all typed links from wiki markdown content.
