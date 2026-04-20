@@ -200,8 +200,8 @@ describe("Draft worker", () => {
       space_id: spaceId,
     });
 
-    // Give Meilisearch a moment to index
-    await sleep(1000);
+    // Give Meilisearch time to index the new wiki so reconcile can find it
+    await sleep(2000);
 
     // Now create a parent wiki that assigns the same label
     const { response, body } = await jsonRequest("/wiki", {
@@ -222,7 +222,9 @@ describe("Draft worker", () => {
 
     console.log(`[test] placeholder ${assigned.id} queued, expecting reconcile redirect...`);
 
-    // Wait for draft worker to process — should redirect quickly (no LLM drafting needed)
+    // Wait for draft worker to process — reconcile involves a Meilisearch
+    // lookup + LLM judge call. The worker processes items sequentially,
+    // so this may wait behind any items queued by earlier tests.
     if (hasLlm) {
       await waitFor(async () => {
         const { response: phRes } = await getJson(`/wiki/${assigned.id}`, actor.apiKey);
@@ -235,9 +237,9 @@ describe("Draft worker", () => {
           if (status && status !== "assigned") return true;
         }
         return false;
-      }, { timeoutMs: 60_000, intervalMs: 2_000 });
+      }, { timeoutMs: 120_000, intervalMs: 2_000 });
 
       console.log(`[test] reconcile redirect completed`);
     }
-  }, 90_000);
+  }, 150_000);
 });
