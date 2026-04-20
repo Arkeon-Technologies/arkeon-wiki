@@ -58,6 +58,25 @@ type ListResponse = {
   cursor: string | null;
 };
 
+type FileResponse = {
+  file: {
+    id: string;
+    type: string;
+    ver: number;
+    properties: Record<string, unknown>;
+  };
+};
+
+type FileListResponse = {
+  files: Array<{
+    id: string;
+    type: string;
+    ver: number;
+    properties: Record<string, unknown>;
+  }>;
+  cursor: string | null;
+};
+
 type RelationshipsResponse = {
   relationships: Array<{
     id: string;
@@ -108,7 +127,7 @@ async function createWiki(
       content,
       keywords: [label.toLowerCase()],
       short_description: `Test wiki: ${label}`,
-      subject_type: opts?.subjectType ?? "document",
+      ...(opts?.subjectType ? { subject_type: opts.subjectType } : {}),
       ...(opts?.spaceId ? { space_id: opts.spaceId } : {}),
     },
   });
@@ -116,12 +135,38 @@ async function createWiki(
   return body as WikiResponse;
 }
 
-async function listDocuments(apiKey: string, spaceId: string) {
+async function createFile(
+  apiKey: string,
+  label: string,
+  content: string,
+  opts?: { spaceId?: string; sourceFile?: string; folder?: string },
+) {
+  const { response, body } = await jsonRequest("/files", {
+    method: "POST",
+    apiKey,
+    json: {
+      label,
+      content,
+      ...(opts?.sourceFile ? { source_file: opts.sourceFile } : {}),
+      ...(opts?.folder ? { folder: opts.folder } : {}),
+      ...(opts?.spaceId ? { space_id: opts.spaceId } : {}),
+    },
+  });
+  expect(response.status).toBe(201);
+  return body as FileResponse;
+}
+
+async function listFiles(apiKey: string, spaceId: string) {
   const { body } = await getJson(
-    `/wiki?filter=${encodeURIComponent("properties.subject_type:document")}&space_id=${spaceId}&limit=200`,
+    `/files?space_id=${spaceId}&limit=200`,
     apiKey,
   );
-  return (body as ListResponse).entities;
+  return (body as FileListResponse).files;
+}
+
+async function listDocuments(apiKey: string, spaceId: string) {
+  // Legacy helper — lists files via the files endpoint
+  return listFiles(apiKey, spaceId);
 }
 
 async function getEntity(apiKey: string, entityId: string) {
@@ -129,6 +174,13 @@ async function getEntity(apiKey: string, entityId: string) {
   if (response.status === 404 || response.status === 410) return null;
   expect(response.status).toBe(200);
   return (body as EntityResponse).wiki;
+}
+
+async function getFile(apiKey: string, entityId: string) {
+  const { response, body } = await getJson(`/files/${entityId}`, apiKey);
+  if (response.status === 404) return null;
+  expect(response.status).toBe(200);
+  return (body as FileResponse).file;
 }
 
 async function getIncomingRelationships(apiKey: string, entityId: string, predicate?: string) {
@@ -153,6 +205,23 @@ async function updateEntity(apiKey: string, entityId: string, ver: number, prope
     method: "PUT",
     apiKey,
     json: { ver, properties },
+  });
+  return response.status;
+}
+
+async function updateFile(apiKey: string, entityId: string, ver: number, properties: Record<string, unknown>) {
+  const { response } = await jsonRequest(`/files/${entityId}`, {
+    method: "PUT",
+    apiKey,
+    json: { ver, properties },
+  });
+  return response.status;
+}
+
+async function deleteFile(apiKey: string, entityId: string) {
+  const response = await fetch(`${baseUrl}/files/${entityId}`, {
+    method: "DELETE",
+    headers: { authorization: `ApiKey ${apiKey}` },
   });
   return response.status;
 }
@@ -187,14 +256,14 @@ describe("Repo commands — init / diff / add / rm flow", () => {
   let doc2Id: string;
   let doc3Id: string;
 
-  test("add: create document wikis", async () => {
-    const d1 = await createWiki(actor.apiKey, "Book 01", "Augustine reflects on his early life.", { spaceId, subjectType: "document" });
-    const d2 = await createWiki(actor.apiKey, "Book 02", "Augustine discusses the nature of sin.", { spaceId, subjectType: "document" });
-    const d3 = await createWiki(actor.apiKey, "City of God", "A treatise on the two cities.", { spaceId, subjectType: "document" });
+  test("add: create file entities", async () => {
+    const d1 = await createFile(actor.apiKey, "Book 01", "Augustine reflects on his early life.", { spaceId });
+    const d2 = await createFile(actor.apiKey, "Book 02", "Augustine discusses the nature of sin.", { spaceId });
+    const d3 = await createFile(actor.apiKey, "City of God", "A treatise on the two cities.", { spaceId });
 
-    doc1Id = d1.wiki.id;
-    doc2Id = d2.wiki.id;
-    doc3Id = d3.wiki.id;
+    doc1Id = d1.file.id;
+    doc2Id = d2.file.id;
+    doc3Id = d3.file.id;
 
     expect(doc1Id).toBeTruthy();
     expect(doc2Id).toBeTruthy();
@@ -207,25 +276,26 @@ describe("Repo commands — init / diff / add / rm flow", () => {
   });
 
   test("diff: documents have correct properties", async () => {
-    const entity = await getEntity(actor.apiKey, doc1Id);
+    const entity = await getFile(actor.apiKey, doc1Id);
     expect(entity).not.toBeNull();
     expect(entity!.properties.label).toBe("Book 01");
     expect(entity!.properties.content).toBeTruthy();
+    expect(entity!.type).toBe("file");
   });
 
   // --- Update flow (simulate modified content) ---
 
-  test("add (update): modify document properties in place", async () => {
-    const entity = await getEntity(actor.apiKey, doc1Id);
+  test("add (update): modify file properties in place", async () => {
+    const entity = await getFile(actor.apiKey, doc1Id);
     expect(entity).not.toBeNull();
 
-    const status = await updateEntity(actor.apiKey, doc1Id, entity!.ver, {
+    const status = await updateFile(actor.apiKey, doc1Id, entity!.ver, {
       short_description: "Updated description for Book 01.",
     });
     expect(status).toBe(200);
 
     // Verify entity ID is stable
-    const updated = await getEntity(actor.apiKey, doc1Id);
+    const updated = await getFile(actor.apiKey, doc1Id);
     expect(updated).not.toBeNull();
     expect(updated!.id).toBe(doc1Id); // same ID
     expect(updated!.properties.short_description).toBe("Updated description for Book 01.");
@@ -257,29 +327,29 @@ describe("Repo commands — init / diff / add / rm flow", () => {
 
   // --- Remove flow ---
 
-  test("rm: delete document wiki", async () => {
-    const status = await deleteEntity(actor.apiKey, doc3Id);
+  test("rm: delete file entity", async () => {
+    const status = await deleteFile(actor.apiKey, doc3Id);
     expect(status).toBe(204);
-    expect(await getEntity(actor.apiKey, doc3Id)).toBeNull();
+    expect(await getFile(actor.apiKey, doc3Id)).toBeNull();
   });
 
-  test("rm: remaining documents are unaffected", async () => {
-    const docs = await listDocuments(actor.apiKey, spaceId);
-    // doc1, doc2 remain (doc3 deleted); Analysis of Book 01 also has subject_type "document"
+  test("rm: remaining files are unaffected", async () => {
+    const docs = await listFiles(actor.apiKey, spaceId);
+    // doc1, doc2 remain (doc3 deleted); Analysis of Book 01 is a wiki, not a file
     const labels = docs.map((d) => d.properties.label).sort();
-    expect(labels).toEqual(["Analysis of Book 01", "Book 01", "Book 02"]);
+    expect(labels).toEqual(["Book 01", "Book 02"]);
   });
 
   // --- Simple delete (no extracted children) ---
 
-  test("rm: delete document with no children", async () => {
-    const status = await deleteEntity(actor.apiKey, doc2Id);
+  test("rm: delete file with no children", async () => {
+    const status = await deleteFile(actor.apiKey, doc2Id);
     expect(status).toBe(204);
 
-    const docs = await listDocuments(actor.apiKey, spaceId);
-    expect(docs).toHaveLength(2);
+    const docs = await listFiles(actor.apiKey, spaceId);
+    expect(docs).toHaveLength(1);
     const labels = docs.map((d) => d.properties.label).sort();
-    expect(labels).toEqual(["Analysis of Book 01", "Book 01"]);
+    expect(labels).toEqual(["Book 01"]);
   });
 });
 

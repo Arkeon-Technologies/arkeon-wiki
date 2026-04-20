@@ -202,6 +202,71 @@ const OPERATIONS: GeneratedOperation[] = [
     bodyFields: [{ name: "properties", description: "", required: false, type: "object" }],
   },
   {
+    operationId: "createFile",
+    group: "files",
+    action: "create-file",
+    method: "POST",
+    path: "/files",
+    summary: "Upload a file to the knowledge graph for entity extraction",
+    description: "Upload a file to the knowledge graph for entity extraction",
+    auth: "required",
+    pathParams: [],
+    queryParams: [],
+    bodyFields: [{ name: "content", description: "Text content of the file. Binary files should describe themselves.", required: true, type: "string" }, { name: "file_type", description: "Normalized file extension: markdown, text, latex, pdf, etc.", required: false, type: "string" }, { name: "folder", description: "Organizational folder path (e.g. 'physics/quantum'). No leading/trailing slashes.", required: false, type: "string" }, { name: "label", description: "Display name for the file (typically the filename or relative path)", required: true, type: "string" }, { name: "properties", description: "Additional JSON properties to store on the file entity", required: false, type: "object" }, { name: "source_file", description: "Relative filesystem path of the source file (for change detection)", required: false, type: "string" }, { name: "source_hash", description: "SHA256 hash of the source file content (for change detection)", required: false, type: "string" }, { name: "space_id", description: "Space to create the file in. Optional — defaults to the only space the actor can contribute to.", required: false, type: "string" }],
+  },
+  {
+    operationId: "deleteFile",
+    group: "files",
+    action: "delete-file",
+    method: "DELETE",
+    path: "/files/{id}",
+    summary: "Delete a file entity",
+    description: "Delete a file entity",
+    auth: "required",
+    pathParams: [{ name: "id", description: "Entity ULID", required: true, type: "string" }],
+    queryParams: [],
+    bodyFields: [],
+  },
+  {
+    operationId: "getFile",
+    group: "files",
+    action: "file",
+    method: "GET",
+    path: "/files/{id}",
+    summary: "Fetch a single file entity by ID",
+    description: "Fetch a single file entity by ID",
+    auth: "optional",
+    pathParams: [{ name: "id", description: "Entity ULID", required: true, type: "string" }],
+    queryParams: [{ name: "view", description: "Projection: full (all fields, no relationships) | summary (label + short_description) | expanded (all fields + _relationships).", required: false, type: "string", enumValues: ["full","summary","expanded"] }, { name: "fields", description: "Comma-separated field list", required: false, type: "string" }],
+    bodyFields: [],
+  },
+  {
+    operationId: "listFiles",
+    group: "files",
+    action: "list-files",
+    method: "GET",
+    path: "/files",
+    summary: "List file entities with filtering, sorting, and cursor pagination",
+    description: "List file entities with filtering, sorting, and cursor pagination",
+    auth: "optional",
+    pathParams: [],
+    queryParams: [{ name: "filter", description: "Column/property filters. See GET /help for filter syntax.", required: false, type: "string" }, { name: "sort", description: "updated_at | created_at (default: updated_at)", required: false, type: "string", enumValues: ["updated_at","created_at"] }, { name: "order", description: "asc | desc (default: desc)", required: false, type: "string", enumValues: ["asc","desc"] }, { name: "view", description: "Projection: full (all fields, no relationships) | summary (label + short_description) | expanded (all fields + _relationships).", required: false, type: "string", enumValues: ["full","summary","expanded"] }, { name: "fields", description: "Comma-separated field list", required: false, type: "string" }, { name: "limit", description: "Max results (default 50, max 200)", required: false, type: "integer" }, { name: "cursor", description: "Pagination cursor", required: false, type: "string" }, { name: "space_id", description: "Scope results to a space ULID", required: false, type: "string" }],
+    bodyFields: [],
+  },
+  {
+    operationId: "updateFile",
+    group: "files",
+    action: "update-file",
+    method: "PUT",
+    path: "/files/{id}",
+    summary: "Update file properties (content, source_hash, etc.)",
+    description: "Update file properties (content, source_hash, etc.)",
+    auth: "required",
+    pathParams: [{ name: "id", description: "Entity ULID", required: true, type: "string" }],
+    queryParams: [],
+    bodyFields: [{ name: "note", description: "", required: false, type: "string" }, { name: "properties", description: "", required: false, type: "object" }, { name: "remove_properties", description: "Property keys to delete", required: false, type: "array" }, { name: "ver", description: "Expected current version (CAS token). Server increments ver on success.", required: true, type: "integer" }],
+  },
+  {
     operationId: "graphTraverse",
     group: "graph",
     action: "get",
@@ -446,7 +511,7 @@ const OPERATIONS: GeneratedOperation[] = [
     auth: "required",
     pathParams: [],
     queryParams: [],
-    bodyFields: [{ name: "aliases", description: "Alternate titles or spellings for this wiki page. Used for duplicate detection and search metadata.", required: false, type: "array" }, { name: "content", description: "Markdown body. Typed [[links]] in the content are parsed and turned into relationships when the wiki is published.\n\nFour link forms — all wrapped in double square brackets:\n  [[entity:ULID]]                         Hard reference to an existing visible entity.\n  [[resolve:\"Label\"|\"Description\"]]       Let the server find a match via Meilisearch + LLM judge. Soft-degrades to placeholder on miss or when no LLM is configured; never fails the request.\n  [[placeholder:\"Label\"|\"Description\"]]   Unwritten stub. Not queued. Leave it, or fill it in later.\n  [[assign:\"Label\"|\"Description\"]]        Hand off to the background drafter. Queued for auto-drafting.\n\nLabels must be double-quoted. Description is optional for resolve/placeholder/assign but recommended — it gives the resolver and future drafters context. Entity IDs are unquoted ULIDs.\n\nEvery parsed link materializes as a `references` relationship from the published wiki to the target (or to a newly-minted placeholder). The wiki page itself is the canonical graph entity for its subject.\n\nChoosing between resolve / placeholder / assign: use `resolve` when the thing probably already exists and you want the server to find it; use `placeholder` when you want a stub but don't want anything auto-drafted; use `assign` to hand off actual drafting to a background worker.\n\nAfter processing, the stored entity has two content fields: `properties.content` (resolved — all links rewritten to `[[entity:ULID]]`) and `properties.submitted_content` (the original input with unresolved link syntax preserved). The same applies when updating content via PUT.\n\nCaveat: the parser scans every `[[...]]` pair in the content, including inside fenced code blocks. To discuss link syntax in prose, use alternative delimiters (e.g. `<<entity:id>>`). See GET /help/guide/wiki for a worked example.", required: true, type: "string" }, { name: "depth", description: "Internal recursion depth — clients should not set this", required: false, type: "integer" }, { name: "keywords", description: "Alternate names and search phrasings someone might use to find this wiki", required: true, type: "array" }, { name: "label", description: "Canonical display name for the wiki (like an article title)", required: true, type: "string" }, { name: "properties", description: "Additional JSON properties to store on the wiki entity. Reserved wiki metadata keys from this request take precedence.", required: false, type: "object" }, { name: "short_description", description: "One to two sentences of framing, used in search previews and multi-choice disambiguation. Min 10 chars, max 400.", required: true, type: "string" }, { name: "space_id", description: "Space to create the wiki in. Optional — defaults to the only space the actor can contribute to. 400 if ambiguous (multiple candidates) or none.", required: false, type: "string" }, { name: "subject_type", description: "Semantic subject type for the page, e.g. person, concept, book, event. Stored as properties.subject_type; the internal entity type remains wiki.", required: false, type: "string" }, { name: "type", description: "Deprecated alias for subject_type. Stored as properties.subject_type; the internal entity type remains wiki.", required: false, type: "string" }],
+    bodyFields: [{ name: "aliases", description: "Alternate titles or spellings for this wiki page. Used for duplicate detection and search metadata.", required: false, type: "array" }, { name: "content", description: "Markdown body. Typed [[links]] in the content are parsed and turned into relationships when the wiki is published.\n\nFour link forms — all wrapped in double square brackets:\n  [[entity:ULID]]                         Hard reference to an existing visible entity.\n  [[resolve:\"Label\"|\"Description\"]]       Let the server find a match via Meilisearch + LLM judge. Soft-degrades to placeholder on miss or when no LLM is configured; never fails the request.\n  [[placeholder:\"Label\"|\"Description\"]]   Unwritten stub. Not queued. Leave it, or fill it in later.\n  [[assign:\"Label\"|\"Description\"]]        Hand off to the background drafter. Queued for auto-drafting.\n\nLabels must be double-quoted. Description is optional for resolve/placeholder/assign but recommended — it gives the resolver and future drafters context. Entity IDs are unquoted ULIDs.\n\nEvery parsed link materializes as a `references` relationship from the published wiki to the target (or to a newly-minted placeholder). The wiki page itself is the canonical graph entity for its subject.\n\nChoosing between resolve / placeholder / assign: use `resolve` when the thing probably already exists and you want the server to find it; use `placeholder` when you want a stub but don't want anything auto-drafted; use `assign` to hand off actual drafting to a background worker.\n\nAfter processing, the stored entity has two content fields: `properties.content` (resolved — all links rewritten to `[[entity:ULID]]`) and `properties.submitted_content` (the original input with unresolved link syntax preserved). The same applies when updating content via PUT.\n\nCaveat: the parser scans every `[[...]]` pair in the content, including inside fenced code blocks. To discuss link syntax in prose, use alternative delimiters (e.g. `<<entity:id>>`). See GET /help/guide/wiki for a worked example.", required: true, type: "string" }, { name: "depth", description: "Internal recursion depth — clients should not set this", required: false, type: "integer" }, { name: "keywords", description: "Alternate names and search phrasings someone might use to find this wiki", required: true, type: "array" }, { name: "label", description: "Canonical display name for the wiki (like an article title)", required: true, type: "string" }, { name: "properties", description: "Additional JSON properties to store on the wiki entity. Reserved wiki metadata keys from this request take precedence.", required: false, type: "object" }, { name: "short_description", description: "One to two sentences of framing, used in search previews and multi-choice disambiguation. Min 10 chars, max 400.", required: true, type: "string" }, { name: "space_id", description: "Space to create the wiki in. Optional — defaults to the only space the actor can contribute to. 400 if ambiguous (multiple candidates) or none.", required: false, type: "string" }, { name: "subject_type", description: "Semantic subject type for the page, e.g. person, concept, book, event. Stored as properties.subject_type; the internal entity type remains wiki.", required: false, type: "string" }],
   },
   {
     operationId: "deleteWiki",
@@ -555,7 +620,7 @@ const OPERATIONS: GeneratedOperation[] = [
 ];
 
 export function registerApiCommands(program: Command, options: { skipExisting?: boolean } = {}): void {
-  for (const group of ["actors","admin","auth","graph","relationships","resolve","search","spaces","wiki"]) {
+  for (const group of ["actors","admin","auth","files","graph","relationships","resolve","search","spaces","wiki"]) {
     const existing = program.commands.find((command) => command.name() === group);
     if (existing && options.skipExisting) {
       registerGeneratedGroup(existing, OPERATIONS.filter((operation) => operation.group === group));

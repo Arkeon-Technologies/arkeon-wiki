@@ -281,7 +281,7 @@ else
 fi
 
 echo "arkeon-wiki wiki create..."
-CREATE_OUT=$(npx arkeon-wiki wiki create --label "Smoke Test Entity" --short-description "A smoke test entity" --keywords '["smoke"]' --content "Smoke test content." --type person --raw 2>&1) || fail "arkeon-wiki wiki create"
+CREATE_OUT=$(npx arkeon-wiki wiki create --label "Smoke Test Entity" --short-description "A smoke test entity" --keywords '["smoke"]' --content "Smoke test content." --subject-type person --raw 2>&1) || fail "arkeon-wiki wiki create"
 # grep returns exit 1 when no match — use || true to prevent set -eo pipefail from killing the script
 # --raw output uses "id": "..." (with spaces), so match both formats
 ENTITY_ID=$(echo "$CREATE_OUT" | grep -oE '"id"\s*:\s*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/' || true)

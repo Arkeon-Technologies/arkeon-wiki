@@ -20,11 +20,6 @@ type EntityResult = {
   properties: Record<string, unknown>;
 };
 
-type ListResponse = {
-  entities: EntityResult[];
-  cursor: string | null;
-};
-
 type RelationshipResult = {
   id: string;
   source_id: string;
@@ -35,8 +30,7 @@ type RelationshipsResponse = {
   cursor: string | null;
 };
 
-const DOCUMENT_FILTER = "properties.subject_type:document";
-const LEGACY_DOCUMENT_FILTER = "type:document";
+const FILE_FILTER = "type:file";
 
 async function findDocBySourceFile(
   apiUrl: string,
@@ -44,20 +38,13 @@ async function findDocBySourceFile(
   spaceId: string,
   sourceFile: string,
 ): Promise<string | null> {
-  const filters = [
-    `${DOCUMENT_FILTER},properties.source_file:${sourceFile}`,
-    `${LEGACY_DOCUMENT_FILTER},properties.source_file:${sourceFile}`,
-  ];
-  for (const filter of filters) {
-    const resp = await apiGet<ListResponse>(
-      apiUrl,
-      `/wiki?filter=${encodeURIComponent(filter)}&space_id=${spaceId}&limit=1`,
-      apiKey,
-    );
-    const id = resp.entities[0]?.id;
-    if (id) return id;
-  }
-  return null;
+  const filter = `${FILE_FILTER},properties.source_file:${sourceFile}`;
+  const resp = await apiGet<{ files: EntityResult[]; cursor: string | null }>(
+    apiUrl,
+    `/files?filter=${encodeURIComponent(filter)}&space_id=${spaceId}&limit=1`,
+    apiKey,
+  );
+  return resp.files[0]?.id ?? null;
 }
 
 /**
@@ -113,7 +100,7 @@ async function deleteDocumentAndChildren(
     if (!cursor) break;
   }
 
-  await apiDelete(apiUrl, `/wiki/${entityId}`, apiKey);
+  await apiDelete(apiUrl, `/files/${entityId}`, apiKey);
   return { cascaded, preserved };
 }
 

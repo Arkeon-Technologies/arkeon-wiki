@@ -16,7 +16,7 @@
 import type { Command } from "commander";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { extname, join, relative } from "node:path";
+import { dirname, extname, join, relative } from "node:path";
 
 import { apiGet, apiPost, apiPut } from "../../lib/api-client.js";
 import { credentials } from "../../lib/credentials.js";
@@ -65,13 +65,8 @@ type ListResponse = {
   cursor: string | null;
 };
 
-type CreateWikiResponse = {
-  wiki: EntityResult;
-};
-
 const TEXT_EXTENSIONS = new Set([".md", ".txt", ".tex", ".rst", ".adoc", ".org"]);
-const DOCUMENT_FILTER = "properties.subject_type:document";
-const LEGACY_DOCUMENT_FILTER = "type:document";
+const FILE_FILTER = "type:file";
 
 function sha256(filePath: string): string {
   const content = readFileSync(filePath);
@@ -99,20 +94,13 @@ async function findExistingDoc(
   spaceId: string,
   sourceFile: string,
 ): Promise<{ entity_id: string; source_hash: string; ver: number } | null> {
-  const filters = [
-    `${DOCUMENT_FILTER},properties.source_file:${sourceFile}`,
-    `${LEGACY_DOCUMENT_FILTER},properties.source_file:${sourceFile}`,
-  ];
-  let entity: EntityResult | undefined;
-  for (const filter of filters) {
-    const resp = await apiGet<ListResponse>(
-      apiUrl,
-      `/wiki?filter=${encodeURIComponent(filter)}&space_id=${spaceId}&limit=1`,
-      apiKey,
-    );
-    entity = resp.entities[0];
-    if (entity) break;
-  }
+  const filter = `${FILE_FILTER},properties.source_file:${sourceFile}`;
+  const resp = await apiGet<{ files: EntityResult[]; cursor: string | null }>(
+    apiUrl,
+    `/files?filter=${encodeURIComponent(filter)}&space_id=${spaceId}&limit=1`,
+    apiKey,
+  );
+  const entity = resp.files[0];
   if (!entity) return null;
   return {
     entity_id: entity.id,
@@ -121,19 +109,11 @@ async function findExistingDoc(
   };
 }
 
-function keyword(value: string): string {
-  return value.slice(0, 100);
-}
-
-function documentShortDescription(relPath: string): string {
-  return `Document registered from ${relPath}`.slice(0, 400);
-}
-
 function documentLabel(relPath: string): string {
   return relPath.length <= 200 ? relPath : relPath.slice(-200);
 }
 
-async function createDocumentWiki(
+async function createDocumentFile(
   apiUrl: string,
   apiKey: string,
   spaceId: string,
@@ -142,20 +122,17 @@ async function createDocumentWiki(
   const label = documentLabel(file.relPath);
   const fileKind = fileType(file.ext);
   const content = file.content ?? `Binary ${fileKind} document registered from ${file.relPath}.`;
-  const created = await apiPost<CreateWikiResponse>(apiUrl, "/wiki", apiKey, {
+  const folder = dirname(file.relPath);
+  const created = await apiPost<{ file: EntityResult }>(apiUrl, "/files", apiKey, {
     label,
-    subject_type: "document",
-    keywords: [keyword(file.relPath), keyword(fileKind)],
-    short_description: documentShortDescription(file.relPath),
     content,
-    properties: {
-      source_file: file.relPath,
-      source_hash: file.hash,
-      file_type: fileKind,
-    },
+    source_file: file.relPath,
+    source_hash: file.hash,
+    file_type: fileKind,
+    ...(folder !== "." ? { folder } : {}),
     space_id: spaceId,
   });
-  return created.wiki;
+  return created.file;
 }
 
 export function registerAddCommand(program: Command): void {
@@ -304,7 +281,7 @@ export function registerAddCommand(program: Command): void {
 
         // --- Raw documents: create new ---
         for (const file of rawToCreate) {
-          const entity = await createDocumentWiki(state.api_url, apiKey, state.space_id, file);
+          const entity = await createDocumentFile(state.api_url, apiKey, state.space_id, file);
           documents.push({ path: file.relPath, entity_id: entity.id, action: "added" });
           output.progress(`  + ${file.relPath} -> ${entity.id}`);
           addedCount++;
@@ -320,7 +297,7 @@ export function registerAddCommand(program: Command): void {
             properties.content = file.content;
           }
 
-          await apiPut(state.api_url, `/wiki/${file.entity_id}`, apiKey, {
+          await apiPut(state.api_url, `/files/${file.entity_id}`, apiKey, {
             ver: file.ver,
             properties,
           });

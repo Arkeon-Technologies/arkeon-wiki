@@ -25,15 +25,14 @@ type EntityResult = {
   properties: Record<string, unknown>;
 };
 
-type ListResponse = {
-  entities: EntityResult[];
+type FileListResponse = {
+  files: EntityResult[];
   cursor: string | null;
 };
 
 const DEFAULT_EXTENSIONS = new Set([".md", ".txt", ".tex"]);
 const IGNORE_DIRS = new Set([".arkeon", ".git", "node_modules", ".claude"]);
 const IGNORE_FILES = new Set(["AGENTS.md"]);
-const DOCUMENT_FILTERS = ["properties.subject_type:document", "type:document"];
 
 function walkDir(dir: string, base: string, extensions: Set<string>): string[] {
   const results: string[] = [];
@@ -75,30 +74,27 @@ async function fetchDocumentEntities(
   const docs = new Map<string, { entity_id: string; source_hash: string }>();
   let cursor: string | null = null;
 
-  for (const filter of DOCUMENT_FILTERS) {
-    cursor = null;
-    for (;;) {
-      const cursorParam = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
-      const resp: ListResponse = await apiGet<ListResponse>(
-        apiUrl,
-        `/wiki?filter=${encodeURIComponent(filter)}&space_id=${spaceId}&limit=200${cursorParam}`,
-        apiKey,
-      );
+  for (;;) {
+    const cursorParam: string = cursor ? `&cursor=${encodeURIComponent(cursor)}` : "";
+    const resp: FileListResponse = await apiGet<FileListResponse>(
+      apiUrl,
+      `/files?space_id=${spaceId}&limit=200${cursorParam}`,
+      apiKey,
+    );
 
-      for (const entity of resp.entities) {
-        const sourceFile = entity.properties?.source_file as string | undefined;
-        const sourceHash = entity.properties?.source_hash as string | undefined;
-        if (sourceFile) {
-          docs.set(sourceFile, {
-            entity_id: entity.id,
-            source_hash: sourceHash ?? "",
-          });
-        }
+    for (const entity of resp.files) {
+      const sourceFile = entity.properties?.source_file as string | undefined;
+      const sourceHash = entity.properties?.source_hash as string | undefined;
+      if (sourceFile) {
+        docs.set(sourceFile, {
+          entity_id: entity.id,
+          source_hash: sourceHash ?? "",
+        });
       }
-
-      cursor = resp.cursor;
-      if (!cursor) break;
     }
+
+    cursor = resp.cursor;
+    if (!cursor) break;
   }
 
   return docs;

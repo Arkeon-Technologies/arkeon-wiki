@@ -474,7 +474,7 @@ wikisRouter.openapi(listEntitiesRoute, async (c) => {
   const sort = parseSort(c.req.query("sort"), ["updated_at", "created_at"], "updated_at");
 
   const userFilter = c.req.query("filter");
-  const filter = mergeFilters("kind!:relationship", userFilter);
+  const filter = mergeFilters("kind!:relationship,type!:file", userFilter);
 
   const spaceId = c.req.query("space_id");
   const listing = buildEntityListingQuery({ filter, limit, cursor, sort, order, spaceId });
@@ -504,7 +504,7 @@ wikisRouter.openapi(getEntityRoute, async (c) => {
     ...setActorContext(sql, actor),
     sql`SELECT e.*,
       (SELECT COALESCE(array_agg(se.space_id), '{}') FROM space_entities se WHERE se.entity_id = e.id) AS space_ids
-      FROM entities e WHERE e.id = ${entityId} LIMIT 1`,
+      FROM entities e WHERE e.id = ${entityId} AND e.type != 'file' LIMIT 1`,
   ]);
 
   const entity = (results[results.length - 1] as EntityRecord[])[0];
@@ -783,7 +783,7 @@ wikisRouter.openapi(deleteEntityRoute, async (c) => {
   // Actor context set for ownership checks
   const results = await sql.transaction([
     ...setActorContext(sql, actor),
-    sql`DELETE FROM entities WHERE id = ${entityId} RETURNING id`,
+    sql`DELETE FROM entities WHERE id = ${entityId} AND type != 'file' RETURNING id`,
   ]);
 
   if ((results[results.length - 1] as Array<{ id: string }>).length === 0) {
@@ -806,8 +806,8 @@ wikisRouter.openapi(bulkDeleteEntitiesRoute, async (c) => {
     throw new ApiError(400, "invalid_query", "At least one of filter or space_id is required");
   }
 
-  // Always exclude relationships — use dedicated relationship endpoints
-  const filter = mergeFilters("kind!:relationship", userFilter);
+  // Always exclude relationships and files — use dedicated endpoints
+  const filter = mergeFilters("kind!:relationship,type!:file", userFilter);
 
   const { whereSql, params } = buildEntityFilterWhere({ filter, spaceId });
 
