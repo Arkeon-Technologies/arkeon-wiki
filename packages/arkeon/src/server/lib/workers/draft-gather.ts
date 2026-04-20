@@ -133,7 +133,7 @@ async function fetchSourceContent(
       JOIN entities src ON src.id = re.target_id
       WHERE re.source_id = ${placeholderId}
         AND re.predicate = 'extracted_from'
-        AND src.type = 'source'
+        AND src.type = 'file'
       LIMIT 1
     `;
     const row = (rows as Array<Record<string, unknown>>)[0];

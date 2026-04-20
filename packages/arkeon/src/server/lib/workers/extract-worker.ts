@@ -151,6 +151,51 @@ async function loadSource(entityId: string, actor: Actor): Promise<SourceInfo | 
 }
 
 // ---------------------------------------------------------------------------
+// Existing extraction lookup
+// ---------------------------------------------------------------------------
+
+interface ExistingExtraction {
+  id: string;
+  label: string;
+  description: string;
+  subjectType: string;
+}
+
+/**
+ * Fetch all entities previously extracted from this source document
+ * via extracted_from relationships. Used to make re-extraction idempotent.
+ */
+async function fetchExistingExtractions(
+  sourceId: string,
+  actor: Actor,
+): Promise<ExistingExtraction[]> {
+  return withTransaction(async (sql) => {
+    for (const q of setActorContext(sql, actor)) await q;
+    const rows = await sql`
+      SELECT e.id,
+             e.properties->>'label' AS label,
+             e.properties->>'description' AS description,
+             e.properties->>'subject_type' AS subject_type
+      FROM relationship_edges re
+      JOIN entities e ON e.id = re.source_id
+      WHERE re.target_id = ${sourceId}
+        AND re.predicate = 'extracted_from'
+        AND e.kind = 'entity'
+    `;
+    return (rows as Array<Record<string, unknown>>).map((r) => ({
+      id: String(r.id),
+      label: String(r.label ?? ""),
+      description: String(r.description ?? ""),
+      subjectType: String(r.subject_type ?? ""),
+    }));
+  });
+}
+
+function normalizeLabel(label: string): string {
+  return label.toLowerCase().trim();
+}
+
+// ---------------------------------------------------------------------------
 // LLM extraction
 // ---------------------------------------------------------------------------
 
@@ -183,16 +228,28 @@ Rules:
 - Do not extract the source document itself as a subject
 - Prefer specific subjects over generic ones ("ATP Synthase" over "enzymes")`;
 
-async function extractSubjects(content: string, sourceLabel: string): Promise<ExtractedSubject[]> {
+async function extractSubjects(
+  content: string,
+  sourceLabel: string,
+  existing: ExistingExtraction[],
+): Promise<ExtractedSubject[]> {
   const { client, model } = getLlmClient("draft"); // use draft config — extraction needs more tokens than exists
 
-  const userMessage = `Source document: "${sourceLabel}"\n\n${content.slice(0, 50_000)}`;
+  const parts: string[] = [`Source document: "${sourceLabel}"\n\n${content.slice(0, 50_000)}`];
+
+  if (existing.length > 0) {
+    parts.push("\n\nPreviously extracted subjects from this document (do not re-extract these unless they need correction):");
+    for (const e of existing) {
+      parts.push(`- ${e.label} (${e.subjectType}): ${e.description}`);
+    }
+    parts.push("\nFocus on any subjects NOT already in the list above.");
+  }
 
   const response = await client.chat.completions.create({
     model,
     messages: [
       { role: "system", content: EXTRACT_PROMPT },
-      { role: "user", content: userMessage },
+      { role: "user", content: parts.join("\n") },
     ],
     response_format: { type: "json_object" },
     max_completion_tokens: 4000,
@@ -243,17 +300,35 @@ async function processItem(row: QueueRow): Promise<void> {
     return;
   }
 
-  console.log(`${tag} extracting from "${source.label}" (${source.content.length} chars)`);
+  // Fetch what was already extracted from this source (idempotent re-extraction)
+  const existing = await fetchExistingExtractions(source.id, actor);
+  const existingLabels = new Set(existing.map((e) => normalizeLabel(e.label)));
 
-  // Call LLM to identify subjects
-  const subjects = await extractSubjects(source.content, source.label);
+  console.log(
+    `${tag} extracting from "${source.label}" (${source.content.length} chars, ${existing.length} already extracted)`,
+  );
+
+  // Call LLM to identify subjects (passes existing subjects so it can focus on what's new)
+  const subjects = await extractSubjects(source.content, source.label, existing);
   if (subjects.length === 0) {
-    console.log(`${tag} no subjects extracted`);
+    console.log(`${tag} no new subjects extracted`);
     await markComplete(row.entity_id, 0);
     return;
   }
 
-  console.log(`${tag} extracted ${subjects.length} subjects: ${subjects.map((s) => s.label).join(", ")}`);
+  // Filter out subjects that already exist (by normalized label match)
+  const newSubjects = subjects.filter((s) => !existingLabels.has(normalizeLabel(s.label)));
+  const skipped = subjects.length - newSubjects.length;
+
+  if (newSubjects.length === 0) {
+    console.log(`${tag} LLM returned ${subjects.length} subjects, all already extracted — nothing to do`);
+    await markComplete(row.entity_id, 0);
+    return;
+  }
+
+  console.log(
+    `${tag} extracted ${subjects.length} subjects (${skipped} already exist, ${newSubjects.length} new): ${newSubjects.map((s) => s.label).join(", ")}`,
+  );
 
   // Create placeholders and queue them for drafting
   const now = new Date().toISOString();
@@ -263,7 +338,7 @@ async function processItem(row: QueueRow): Promise<void> {
   await withTransaction(async (tx) => {
     for (const q of setActorContext(tx, actor)) await q;
 
-    for (const subject of subjects) {
+    for (const subject of newSubjects) {
       const phId = generateUlid();
       const phProps = {
         label: subject.label,
@@ -323,7 +398,7 @@ async function processItem(row: QueueRow): Promise<void> {
     }
   });
 
-  console.log(`${tag} created ${created} placeholders, queued for drafting`);
+  console.log(`${tag} created ${created} new placeholders, queued for drafting`);
   await markComplete(row.entity_id, created);
 }
 

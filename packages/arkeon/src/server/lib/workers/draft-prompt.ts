@@ -54,11 +54,12 @@ Return ONLY a JSON object with this exact shape:
   "subject_type": "person"
 }
 
-If you cannot write a meaningful article (only a name with no real context), return:
+If the dossier contains absolutely no usable information beyond a bare label (no source document, no inbound references, no related context), return:
 {
   "can_draft": false,
   "refused_reason": "Brief explanation of why drafting is not possible."
 }
+When source document text is provided, you should almost always be able to draft — extract and synthesize relevant information about the subject from it.
 
 Rules for the markdown content:
 - Write 200-800 words. Be concise and factual.
