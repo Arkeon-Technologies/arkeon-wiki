@@ -134,11 +134,14 @@ export function parseWikiLinks(
     const spanText = extractSpanText(content, offset, length);
 
     if (type === "entity") {
-      if (!ENTITY_ID_RE.test(body)) {
+      // LLMs often append a display label after a pipe: [[entity:ULID|Label]].
+      // Strip it — only the ID matters.
+      const id = body.split("|")[0]!.trim();
+      if (!ENTITY_ID_RE.test(id)) {
         errors.push({ raw, offset, reason: "entity links must use an unquoted entity ID" });
         continue;
       }
-      links.push({ type, raw, offset, length, id: body, spanText });
+      links.push({ type, raw, offset, length, id, spanText });
     } else {
       // Accept both quoted and unquoted label|description forms.
       // LLMs commonly drop quotes, so we parse flexibly:

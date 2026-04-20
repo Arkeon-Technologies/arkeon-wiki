@@ -26,6 +26,14 @@ describe("wiki link parsing", () => {
     expect(links[3]!.label).toBe("Open Concept");
   });
 
+  test("strips display label from entity links (LLM pipe syntax)", () => {
+    const content = "See [[entity:01KP123ABC|Renaissance Art]] for details.";
+    const links = parseWikiLinks(content, 0, 2);
+    expect(links).toHaveLength(1);
+    expect(links[0]!.type).toBe("entity");
+    expect(links[0]!.id).toBe("01KP123ABC");
+  });
+
   test("assign stays assign when depth below max", () => {
     const content = "Assign [[assign:\"Widget\"|\"to be drafted\"]].";
     const links = parseWikiLinks(content, 0, 2);
