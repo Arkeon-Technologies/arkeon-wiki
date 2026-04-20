@@ -257,10 +257,10 @@ pass "seed idempotent"
 
 echo "arkeon-wiki wiki list..."
 ENTITIES_OUT=$(npx arkeon-wiki wiki list --raw 2>&1) || fail "arkeon-wiki wiki list"
-if echo "$ENTITIES_OUT" | grep -q '"entities"'; then
+# Use printf to avoid broken-pipe errors when piping large output to grep -q
+if printf '%s' "$ENTITIES_OUT" | grep -c '"entities"' >/dev/null 2>&1; then
   # Count entities in the response (non-empty array means seed data is visible)
-  # Use `|| true` because grep returns exit 1 when no matches, which kills set -eo pipefail
-  ENTITY_COUNT=$(echo "$ENTITIES_OUT" | grep -o '"id"' | wc -l | tr -d ' ' || true)
+  ENTITY_COUNT=$(printf '%s' "$ENTITIES_OUT" | grep -o '"id"' | wc -l | tr -d ' ' || true)
   if [ -n "$ENTITY_COUNT" ] && [ "$ENTITY_COUNT" -gt 0 ]; then
     pass "wiki list returns $ENTITY_COUNT entities"
   else
