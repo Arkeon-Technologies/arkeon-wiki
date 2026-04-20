@@ -21,11 +21,11 @@ of idempotency rules. The short version: always use `IF NOT EXISTS` /
 3. The runner splits on semicolons, handling dollar-quoted blocks (`$$`)
    and comments correctly
 4. Template variable `:'arke_app_password'` is replaced at runtime
-5. Test by running `arkeon migrate` twice — the second run must succeed
+5. Test by running `arkeon-wiki migrate` twice — the second run must succeed
 
 ### Runner internals
 
-`runMigrations()` in `migrate.ts` is called in-process by `arkeon start` —
+`runMigrations()` in `migrate.ts` is called in-process by `arkeon-wiki start` —
 no child process, no spawn. It connects as superuser, iterates SQL files,
 applies template variables, splits statements, and executes them. Errors
 with code `42P07` (already exists) or `42703` (column not found during

@@ -59,7 +59,7 @@ is called for file uploads/downloads.
 
 ## Startup sequence
 
-`arkeon start` / `arkeon up` runs this in order:
+`arkeon-wiki start` / `arkeon-wiki up` runs this in order:
 
 1. Read and normalize env vars (`ARKEON_*` canonical, legacy fallbacks)
 2. Create Hono app, generate OpenAPI spec

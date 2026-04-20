@@ -39,7 +39,7 @@ Intended flow:
 
 **Key recovery:** `POST /auth/recover` will accept a signed timestamp payload proving possession of the private key and issue a new API key for the same actor. The private key never leaves the client.
 
-Until these routes are implemented, actors must be created via `POST /actors` (admin-only) or `arkeon auth add <name>` (which calls `POST /actors` under the hood).
+Until these routes are implemented, actors must be created via `POST /actors` (admin-only) or `arkeon-wiki auth add <name>` (which calls `POST /actors` under the hood).
 
 ## CLI Auth Commands
 
@@ -48,7 +48,7 @@ Until these routes are implemented, actors must be created via `POST /actors` (a
 - `auth set-api-key <key>` — Store a raw API key locally (no keypair, no recovery possible).
 - `auth status` / `auth whoami` — Show current identity. Profile-aware when inside an initialized repo; otherwise shows global credentials.
 - `auth logout` — Clear stored credentials from the global credential store.
-- `auth use <name>` — Switch the active profile for the current repo (requires `arkeon init` first).
+- `auth use <name>` — Switch the active profile for the current repo (requires `arkeon-wiki init` first).
 - `auth add <name>` — Create a new actor on the graph and register it as a local profile. Requires admin privileges.
 - `auth remove <name>` — Remove a profile locally, optionally deactivate the actor on the graph with `--delete`.
 - `auth profiles` — List all profiles registered for the current instance.
@@ -61,7 +61,7 @@ When making API requests, the CLI resolves credentials in this order:
 2. **Per-repo actor key** — from `.arkeon/state.json` `current_actor` mapped through the instance actor registry
 3. **Global credential store** — `~/.config/arkeon-cli/credentials.json`
 
-Per-repo profiles are only active inside a directory with `.arkeon/state.json` (created by `arkeon init`). Outside a repo context, only the global store and env var apply.
+Per-repo profiles are only active inside a directory with `.arkeon/state.json` (created by `arkeon-wiki init`). Outside a repo context, only the global store and env var apply.
 
 ## Security Notes
 
