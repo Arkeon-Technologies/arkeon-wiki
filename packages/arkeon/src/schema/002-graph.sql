@@ -33,9 +33,10 @@ CREATE INDEX IF NOT EXISTS idx_entities_type_label_lower
   ON entities (type, lower(properties->>'label'))
   WHERE kind = 'entity' AND properties->>'label' IS NOT NULL;
 
--- Migrate legacy document wikis to type 'file'
+-- Migrate legacy document wikis to type 'file' (one-time, pre-2026-04-21)
 UPDATE entities SET type = 'file'
-  WHERE type = 'wiki' AND properties->>'subject_type' = 'document';
+  WHERE type = 'wiki' AND properties->>'subject_type' = 'document'
+    AND created_at < '2026-04-21T00:00:00Z'::timestamptz;
 
 -- Index for folder property queries
 CREATE INDEX IF NOT EXISTS idx_entities_folder

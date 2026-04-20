@@ -504,7 +504,7 @@ wikisRouter.openapi(getEntityRoute, async (c) => {
     ...setActorContext(sql, actor),
     sql`SELECT e.*,
       (SELECT COALESCE(array_agg(se.space_id), '{}') FROM space_entities se WHERE se.entity_id = e.id) AS space_ids
-      FROM entities e WHERE e.id = ${entityId} LIMIT 1`,
+      FROM entities e WHERE e.id = ${entityId} AND e.type != 'file' LIMIT 1`,
   ]);
 
   const entity = (results[results.length - 1] as EntityRecord[])[0];
@@ -783,7 +783,7 @@ wikisRouter.openapi(deleteEntityRoute, async (c) => {
   // Actor context set for ownership checks
   const results = await sql.transaction([
     ...setActorContext(sql, actor),
-    sql`DELETE FROM entities WHERE id = ${entityId} RETURNING id`,
+    sql`DELETE FROM entities WHERE id = ${entityId} AND type != 'file' RETURNING id`,
   ]);
 
   if ((results[results.length - 1] as Array<{ id: string }>).length === 0) {

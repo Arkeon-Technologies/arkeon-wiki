@@ -19,7 +19,7 @@ import { generateUlid } from "../lib/ids";
 import { createRouter } from "../lib/openapi";
 import { createSql, withTransaction } from "../lib/sql";
 import { setActorContext, withSystemActorContext } from "../lib/actor-context";
-import { indexEntity, indexEntityById, removeEntity } from "../lib/meilisearch";
+import { indexEntity, removeEntity } from "../lib/meilisearch";
 import { backgroundTask } from "../lib/background";
 import { encodeCursor } from "../lib/cursor";
 import { parseProjection, projectEntity } from "../lib/entity-projection";
@@ -37,6 +37,18 @@ import {
   queryParam,
   cursorResponseSchema,
 } from "../lib/schemas";
+
+/** Strip reserved file property keys from caller-supplied properties bag. */
+const FILE_RESERVED_KEYS = new Set([
+  "label", "subject_type", "content", "status",
+  "source_file", "source_hash", "file_type", "folder",
+]);
+
+function sanitizeFileProperties(properties: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(properties).filter(([key]) => !FILE_RESERVED_KEYS.has(key)),
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Route definitions
@@ -237,10 +249,11 @@ filesRouter.openapi(createFileRoute, async (c) => {
   const file_type = typeof body.file_type === "string" ? body.file_type : undefined;
   const folder = typeof body.folder === "string" && body.folder.trim().length > 0 ? body.folder.trim() : undefined;
   const space_id_input = typeof body.space_id === "string" ? body.space_id : undefined;
-  const extraProperties =
+  const extraProperties = sanitizeFileProperties(
     typeof body.properties === "object" && body.properties !== null && !Array.isArray(body.properties)
       ? (body.properties as Record<string, unknown>)
-      : {};
+      : {},
+  );
 
   const space_id = space_id_input?.trim()
     ? space_id_input
