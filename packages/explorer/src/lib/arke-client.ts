@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Arkeon Technologies, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-import { type ArkeEntity, type ArkeRelationship, type ActivityItem, type ArkeActor, type ArkeComment, type ArkeSpace, type GraphNode, type GraphEdge } from './arke-types'
+import { type ArkeEntity, type ArkeRelationship, type ActivityItem, type ArkeActor, type ArkeComment, type ArkeSpace, type GraphNode, type GraphEdge, type WikiDetail, type WikiLink } from './arke-types'
 
 type RelPage = { relationships: ArkeRelationship[]; cursor: string | null }
 
@@ -14,7 +14,7 @@ export interface RelationshipsResult {
 
 export interface ArkeInstanceClient {
   getActivity(cursor?: string, limit?: number): Promise<{ activity: ActivityItem[]; cursor: string | null }>
-  getEntity(id: string): Promise<ArkeEntity>
+  getEntity(id: string): Promise<ArkeEntity & { _wikiDetail?: WikiDetail }>
   /** Fetch first page of relationships (both directions). Returns cursors for pagination. */
   getRelationships(id: string, limit?: number): Promise<RelationshipsResult>
   /** Fetch more relationships using cursors from a previous result. */
@@ -123,8 +123,24 @@ export function createArkeClient(apiKey?: string, baseUrl = ''): ArkeInstanceCli
     },
 
     async getEntity(id: string) {
-      const data = await apiFetch<{ entity: ArkeEntity }>(`/wiki/${id}`)
-      return data.entity
+      const data = await apiFetch<{
+        entity?: ArkeEntity
+        wiki?: ArkeEntity
+        links_to?: WikiLink[]
+        linked_from?: WikiLink[]
+        sources?: unknown[]
+      }>(`/wiki/${id}`)
+      const entity = data.entity ?? data.wiki
+      if (!entity) throw new Error(`No entity found for ${id}`)
+      // Attach wiki detail if present
+      if (data.links_to || data.linked_from) {
+        (entity as ArkeEntity & { _wikiDetail?: WikiDetail })._wikiDetail = {
+          links_to: data.links_to ?? [],
+          linked_from: data.linked_from ?? [],
+          sources: data.sources ?? [],
+        }
+      }
+      return entity
     },
 
     async getRelationships(id: string, limit = 50) {

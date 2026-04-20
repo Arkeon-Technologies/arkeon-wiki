@@ -186,6 +186,7 @@ export function useMapData(
           rels.relationships,
           rels.outCursor,
           rels.inCursor,
+          (entity as typeof entity & { _wikiDetail?: import('@/lib/arke-types').WikiDetail })._wikiDetail,
         )
       } catch (err) {
         console.error(`Failed to fetch relationships for ${id}:`, err)
