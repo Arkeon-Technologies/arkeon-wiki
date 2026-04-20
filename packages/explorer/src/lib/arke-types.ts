@@ -34,19 +34,33 @@ export interface ArkeEntity {
   space_ids?: string[]
 }
 
+/** A reference link from the single-wiki endpoint */
+export interface WikiLink {
+  id: string
+  label: string
+  type: string
+  predicate: string
+  span_text?: string
+}
+
+/** Extended data returned by GET /wiki/:id for wiki-type entities */
+export interface WikiDetail {
+  links_to: WikiLink[]
+  linked_from: WikiLink[]
+  sources: unknown[]
+}
+
 export interface LoadedEntity {
   entity: ArkeEntity
   label?: string
   description?: string
   relationships: ArkeRelationship[]
-  /** Cursor for fetching more outgoing relationships (null = exhausted) */
   outCursor: string | null
-  /** Cursor for fetching more incoming relationships (null = exhausted) */
   inCursor: string | null
-  /** Whether there are more relationships to fetch */
   hasMore: boolean
-  /** If this entity is a relationship, the triplet data (source, target, predicate) */
   triplet?: ArkeRelationship
+  /** Wiki-specific detail (links_to, linked_from) from the single-wiki endpoint */
+  wikiDetail?: WikiDetail
 }
 
 export function createLoadedEntity(
@@ -54,12 +68,14 @@ export function createLoadedEntity(
   relationships: ArkeRelationship[],
   outCursor: string | null = null,
   inCursor: string | null = null,
+  wikiDetail?: WikiDetail,
 ): LoadedEntity {
   const label = (entity.properties.label ?? entity.properties.title ?? entity.properties.name) as string | undefined
-  const description = (entity.properties.description ?? entity.properties.body) as string | undefined
+  const description = (entity.properties.short_description ?? entity.properties.description ?? entity.properties.body) as string | undefined
   return {
-    entity, label, description: description?.slice(0, 200), relationships,
+    entity, label, description, relationships,
     outCursor, inCursor, hasMore: outCursor !== null || inCursor !== null,
+    wikiDetail,
   }
 }
 
