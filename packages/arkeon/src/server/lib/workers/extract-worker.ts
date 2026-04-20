@@ -276,10 +276,10 @@ async function processItem(row: QueueRow): Promise<void> {
       await tx`
         INSERT INTO entities (
           id, kind, type, ver, properties, owner_id,
-          read_level, write_level, edited_by, note, created_at, updated_at
+          edited_by, note, created_at, updated_at
         ) VALUES (
           ${phId}, 'entity', 'placeholder', 1, ${phProps}::jsonb, ${actor.id},
-          1, 1, ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
+          ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
         )
       `;
 
@@ -296,14 +296,11 @@ async function processItem(row: QueueRow): Promise<void> {
       await tx`
         INSERT INTO entities (
           id, kind, type, ver, properties, owner_id,
-          read_level, write_level, edited_by, note, created_at, updated_at
-        ) SELECT
+          edited_by, note, created_at, updated_at
+        ) VALUES (
           ${relId}, 'relationship', 'relationship', 1, ${relProps}::jsonb,
-          ${actor.id}, GREATEST(src.read_level, tgt.read_level),
-          GREATEST(src.write_level, tgt.write_level),
-          ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
-        FROM entities src, entities tgt
-        WHERE src.id = ${phId} AND tgt.id = ${source.id}
+          ${actor.id}, ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
+        )
       `;
       await tx`
         INSERT INTO relationship_edges (id, source_id, target_id, predicate)
