@@ -110,6 +110,10 @@ export async function startApi(config: ArkeonApiConfig = {}): Promise<ArkeonApi>
 
   const port = config.port ?? Number(process.env.PORT ?? 8000);
   const server = serve({ fetch: app.fetch, port }, (info) => {
+    // Publish the actual listen port so background workers (draft-worker)
+    // can self-call the API on the correct port, even for named instances
+    // that get auto-assigned ports (e.g. 8242).
+    process.env.PORT = String(info.port);
     console.log(`arkeon-api listening on http://localhost:${info.port}`);
   });
 

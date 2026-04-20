@@ -19,7 +19,7 @@ import { ApiError } from "../lib/errors";
 import { generateUlid } from "../lib/ids";
 import { createRouter } from "../lib/openapi";
 import { withTransaction } from "../lib/sql";
-import { setActorContext } from "../lib/actor-context";
+import { setActorContext, withSystemActorContext } from "../lib/actor-context";
 import { indexEntity } from "../lib/meilisearch";
 import { backgroundTask } from "../lib/background";
 import {
@@ -365,6 +365,24 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
 
   // Index in Meilisearch (background)
   backgroundTask(indexEntity(publishedWiki as Record<string, unknown>));
+
+  // Auto-enqueue document wikis for entity extraction. When `arkeon add`
+  // pushes a raw document, it arrives here with subject_type "document".
+  // The extract worker will read the content, identify notable subjects,
+  // and queue placeholder entities for auto-drafting.
+  if (subject_type === "document") {
+    backgroundTask(
+      withSystemActorContext(async (sql) => {
+        await sql`
+          INSERT INTO source_extract_queue (entity_id, owner_agent, status, created_at)
+          VALUES (${wikiId}, ${actor.id}, 'pending', NOW())
+          ON CONFLICT (entity_id) DO NOTHING
+        `;
+      }).catch((err) => {
+        console.warn(`[wiki] failed to enqueue ${wikiId} for extraction:`, (err as Error).message);
+      }),
+    );
+  }
 
   return c.json(
     {
