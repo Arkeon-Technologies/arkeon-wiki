@@ -105,7 +105,15 @@ async function runSeed(opts: SeedOptions): Promise<void> {
   let totalRelationships = 0;
   const createdWikis: Array<{ id: string; label: string }> = [];
 
+  // Track entities created by earlier wikis so later wikis can link to them
+  // instead of minting duplicates. Maps normalized label → entity ID.
+  const knownEntities = new Map<string, string>();
+
   for (const wiki of wikis) {
+    // Replace [[placeholder:"Label"|"Desc"]] with [[entity:ULID]] for
+    // any label that was already created by a previous wiki.
+    const content = rewriteKnownPlaceholders(wiki.content, knownEntities);
+
     const url = `${apiUrl.replace(/\/$/, "")}/wiki`;
     const response = await fetch(url, {
       method: "POST",
@@ -113,7 +121,7 @@ async function runSeed(opts: SeedOptions): Promise<void> {
         "content-type": "application/json",
         authorization: `ApiKey ${adminKey}`,
       },
-      body: JSON.stringify({ ...wiki, space_id: spaceId }),
+      body: JSON.stringify({ ...wiki, content, space_id: spaceId }),
     });
 
     if (!response.ok) {
@@ -129,6 +137,15 @@ async function runSeed(opts: SeedOptions): Promise<void> {
     createdWikis.push({ id: result.wiki.id, label: wiki.label });
     totalPlaceholders += result.placeholders?.length ?? 0;
     totalRelationships += result.relationships_created ?? 0;
+
+    // Register the wiki itself and all its placeholders so later wikis
+    // can reference them via [[entity:ULID]] instead of minting duplicates.
+    knownEntities.set(wiki.label.toLowerCase(), result.wiki.id);
+    for (const ph of result.placeholders ?? []) {
+      if (ph.label) {
+        knownEntities.set(ph.label.toLowerCase(), ph.id);
+      }
+    }
   }
 
   output.result({
@@ -196,4 +213,27 @@ function resolveApiUrl(): string {
   const stored = config.get("apiUrl");
   if (stored) return stored;
   return `http://localhost:${DEFAULT_API_PORT}`;
+}
+
+/**
+ * Scan content for [[placeholder:"Label"|"Description"]] links and replace
+ * any whose label (case-insensitive) matches a previously created entity
+ * with [[entity:ULID]]. This turns duplicate placeholders into shared
+ * graph edges across wikis.
+ */
+function rewriteKnownPlaceholders(
+  content: string,
+  known: Map<string, string>,
+): string {
+  if (known.size === 0) return content;
+
+  // Match [[placeholder:"Label"|"Description"]] or [[placeholder:"Label"]]
+  return content.replace(
+    /\[\[placeholder:"([^"]*)"\|"[^"]*"\]\]|\[\[placeholder:"([^"]*)"\]\]/g,
+    (match, labelWithDesc: string | undefined, labelOnly: string | undefined) => {
+      const label = (labelWithDesc ?? labelOnly ?? "").toLowerCase();
+      const entityId = known.get(label);
+      return entityId ? `[[entity:${entityId}]]` : match;
+    },
+  );
 }
