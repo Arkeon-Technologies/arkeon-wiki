@@ -138,7 +138,10 @@ export function parseWikiLinks(
       // Strip it — only the ID matters.
       const id = body.split("|")[0]!.trim();
       if (!ENTITY_ID_RE.test(id)) {
-        errors.push({ raw, offset, reason: "entity links must use an unquoted entity ID" });
+        // LLM used a label instead of a ULID — demote to resolve link
+        // so the normal entity-resolution pipeline handles it.
+        const label = body.replace(/^"|"$/g, "").trim();
+        links.push({ type: "resolve", raw, offset, length, label, description: undefined, spanText });
         continue;
       }
       links.push({ type, raw, offset, length, id, spanText });

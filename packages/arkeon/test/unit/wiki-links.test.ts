@@ -34,6 +34,14 @@ describe("wiki link parsing", () => {
     expect(links[0]!.id).toBe("01KP123ABC");
   });
 
+  test("demotes entity link with label instead of ULID to resolve", () => {
+    const content = "See [[entity:Renaissance Art]] for details.";
+    const links = parseWikiLinks(content, 0, 2);
+    expect(links).toHaveLength(1);
+    expect(links[0]!.type).toBe("resolve");
+    expect(links[0]!.label).toBe("Renaissance Art");
+  });
+
   test("assign stays assign when depth below max", () => {
     const content = "Assign [[assign:\"Widget\"|\"to be drafted\"]].";
     const links = parseWikiLinks(content, 0, 2);
