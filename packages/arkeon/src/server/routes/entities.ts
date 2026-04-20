@@ -1371,3 +1371,230 @@ wikisRouter.openapi(bulkGetEntitiesRoute, async (c) => {
     entities: entities.map((row) => projectEntity(row, projection)),
   }, 200);
 });
+
+// ---------------------------------------------------------------------------
+// POST /wiki/placeholders — create placeholder entities in a space
+// ---------------------------------------------------------------------------
+
+const createPlaceholdersRoute = createRoute({
+  method: "post",
+  path: "/placeholders",
+  operationId: "createPlaceholders",
+  tags: ["Wiki"],
+  summary: "Create placeholder entities for subjects to be drafted",
+  "x-arke-auth": "required",
+  "x-arke-related": ["POST /wiki", "GET /wiki/{id}"],
+  "x-arke-rules": [
+    "Requires authenticated actor",
+    "Each placeholder is created with kind=entity, type=placeholder",
+    "Optionally creates relationships from each placeholder to other entities",
+    "All creations are atomic — if any fails, none are persisted",
+    "Maximum 50 placeholders per request",
+  ],
+  request: {
+    body: {
+      required: true,
+      content: jsonContent(
+        z.object({
+          placeholders: z
+            .array(
+              z.object({
+                label: z.string().min(1).describe("Subject label"),
+                description: z.string().optional().describe("Short description"),
+                subject_type: z.string().optional().describe("Semantic type (person, concept, etc.)"),
+                relationships: z
+                  .array(
+                    z.object({
+                      target_id: UlidSchema.describe("Target entity ULID"),
+                      predicate: z.string().min(1).describe("Relationship predicate"),
+                      detail: z.string().optional().describe("Relationship detail text"),
+                    }),
+                  )
+                  .optional()
+                  .describe("Relationships to create from this placeholder"),
+              }),
+            )
+            .min(1)
+            .max(50)
+            .describe("Placeholders to create"),
+          space_id: UlidSchema.describe("Space to add placeholders to"),
+        }),
+      ),
+    },
+  },
+  responses: {
+    201: {
+      description: "Placeholders created",
+      content: jsonContent(
+        z.object({
+          created: z.number().int(),
+          placeholders: z.array(z.object({ id: UlidSchema, label: z.string() })),
+        }),
+      ),
+    },
+    ...errorResponses([400, 401]),
+  },
+});
+
+wikisRouter.openapi(createPlaceholdersRoute, async (c) => {
+  const actor = requireActor(c);
+  const body = await parseJsonBody<{
+    placeholders: Array<{
+      label: string;
+      description?: string;
+      subject_type?: string;
+      relationships?: Array<{ target_id: string; predicate: string; detail?: string }>;
+    }>;
+    space_id: string;
+  }>(c);
+
+  if (!body.placeholders || !Array.isArray(body.placeholders) || body.placeholders.length === 0) {
+    throw new ApiError(400, "invalid_body", "placeholders array is required and must be non-empty");
+  }
+  if (body.placeholders.length > 50) {
+    throw new ApiError(400, "invalid_body", "Maximum 50 placeholders per request");
+  }
+  if (!body.space_id) {
+    throw new ApiError(400, "missing_required_field", "space_id is required");
+  }
+
+  const sql = createSql();
+  const now = new Date().toISOString();
+  const created: Array<{ id: string; label: string }> = [];
+
+  await sql.transaction([
+    ...setActorContext(sql, actor),
+    ...(function buildQueries() {
+      const queries: ReturnType<typeof sql.query>[] = [];
+      for (const ph of body.placeholders) {
+        const phId = generateUlid();
+        const phProps: Record<string, unknown> = {
+          label: ph.label,
+          status: "assigned",
+        };
+        if (ph.description) phProps.description = ph.description;
+        if (ph.subject_type) phProps.subject_type = ph.subject_type;
+
+        // Create placeholder entity
+        queries.push(
+          sql`INSERT INTO entities (
+            id, kind, type, ver, properties, owner_id,
+            edited_by, note, created_at, updated_at
+          ) VALUES (
+            ${phId}, 'entity', 'placeholder', 1, ${phProps}::jsonb, ${actor.id},
+            ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
+          )`,
+        );
+
+        // Add to space
+        queries.push(
+          sql`INSERT INTO space_entities (space_id, entity_id, added_by, added_at)
+            VALUES (${body.space_id}, ${phId}, ${actor.id}, ${now}::timestamptz)
+            ON CONFLICT (space_id, entity_id) DO NOTHING`,
+        );
+
+        // Create relationships
+        if (ph.relationships) {
+          for (const rel of ph.relationships) {
+            const relId = generateUlid();
+            const relProps: Record<string, unknown> = {};
+            if (rel.detail) relProps.detail = rel.detail;
+
+            queries.push(
+              sql`INSERT INTO entities (
+                id, kind, type, ver, properties, owner_id,
+                edited_by, note, created_at, updated_at
+              ) VALUES (
+                ${relId}, 'relationship', 'relationship', 1, ${relProps}::jsonb,
+                ${actor.id}, ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
+              )`,
+            );
+            queries.push(
+              sql`INSERT INTO relationship_edges (id, source_id, target_id, predicate)
+                VALUES (${relId}, ${phId}, ${rel.target_id}, ${rel.predicate})`,
+            );
+            queries.push(
+              sql`INSERT INTO space_entities (space_id, entity_id, added_by, added_at)
+                VALUES (${body.space_id}, ${relId}, ${actor.id}, ${now}::timestamptz)
+                ON CONFLICT (space_id, entity_id) DO NOTHING`,
+            );
+          }
+        }
+
+        created.push({ id: phId, label: ph.label });
+      }
+      return queries;
+    })(),
+  ]);
+
+  return c.json({ created: created.length, placeholders: created }, 201);
+});
+
+// ---------------------------------------------------------------------------
+// POST /wiki/{id}/redirect — create an entity redirect
+// ---------------------------------------------------------------------------
+
+const createRedirectRoute = createRoute({
+  method: "post",
+  path: "/{id}/redirect",
+  operationId: "createRedirect",
+  tags: ["Wiki"],
+  summary: "Create a redirect from one entity to another",
+  "x-arke-auth": "required",
+  "x-arke-related": ["GET /wiki/{id}", "POST /wiki/{id}/merge"],
+  "x-arke-rules": [
+    "Requires authenticated actor",
+    "Creates a redirect so that requests for the old entity resolve to the new one",
+    "If a redirect already exists for this entity, the request is a no-op",
+  ],
+  request: {
+    params: entityIdParams("Source entity ULID (the entity being redirected)"),
+    body: {
+      required: true,
+      content: jsonContent(
+        z.object({
+          target_id: UlidSchema.describe("Target entity ULID to redirect to"),
+        }),
+      ),
+    },
+  },
+  responses: {
+    201: {
+      description: "Redirect created",
+      content: jsonContent(
+        z.object({
+          old_id: UlidSchema,
+          new_id: UlidSchema,
+          merged_at: DateTimeSchema,
+        }),
+      ),
+    },
+    ...errorResponses([400, 401, 404]),
+  },
+});
+
+wikisRouter.openapi(createRedirectRoute, async (c) => {
+  const actor = requireActor(c);
+  const entityId = c.req.param("id");
+  const body = await parseJsonBody<{ target_id: string }>(c);
+
+  if (!body.target_id) {
+    throw new ApiError(400, "missing_required_field", "target_id is required");
+  }
+
+  const sql = createSql();
+  const now = new Date().toISOString();
+
+  await sql.transaction([
+    ...setActorContext(sql, actor),
+    sql`INSERT INTO entity_redirects (old_id, new_id, merged_at, merged_by)
+      VALUES (${entityId}, ${body.target_id}, ${now}::timestamptz, ${actor.id})
+      ON CONFLICT (old_id) DO NOTHING`,
+  ]);
+
+  return c.json({
+    old_id: entityId,
+    new_id: body.target_id,
+    merged_at: now,
+  }, 201);
+});
