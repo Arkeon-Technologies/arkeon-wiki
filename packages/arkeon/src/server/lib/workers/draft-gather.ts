@@ -14,23 +14,8 @@
  * is good enough and the LLM loop is skipped entirely.
  */
 
+import type { Actor } from "../../types.js";
 import type { EntityMatch } from "../entity-resolve.js";
-
-/**
- * Extended actor type for worker-internal use. Workers load actor rows
- * directly from the DB and need classification-level fields that the
- * slim request-path Actor type omits.
- */
-export interface WorkerActor {
-  id: string;
-  apiKeyId: string;
-  keyPrefix: string;
-  label: string | null;
-  maxReadLevel: number;
-  maxWriteLevel: number;
-  isAdmin: boolean;
-  canPublishPublic: boolean;
-}
 import { searchEntities, isMeilisearchConfigured } from "../meilisearch.js";
 import { withTransaction, type SqlClient } from "../sql.js";
 import { setActorContext } from "../actor-context.js";
@@ -97,7 +82,7 @@ const RICH_REFERRER_THRESHOLD = 2;
 
 async function fetchInboundSpans(
   placeholderId: string,
-  actor: WorkerActor,
+  actor: Actor,
 ): Promise<InboundSpan[]> {
   return withTransaction(async (sql) => {
     for (const q of setActorContext(sql, actor)) await q;
@@ -136,7 +121,7 @@ async function fetchInboundSpans(
  */
 async function fetchSourceContent(
   placeholderId: string,
-  actor: WorkerActor,
+  actor: Actor,
 ): Promise<{ sourceLabel: string; sourceContent: string } | null> {
   return withTransaction(async (sql) => {
     for (const q of setActorContext(sql, actor)) await q;
@@ -166,7 +151,7 @@ async function fetchSourceContent(
 async function searchNearbyEntities(
   label: string,
   description: string | null,
-  actor: WorkerActor,
+  actor: Actor,
   spaceId: string,
 ): Promise<DiscoveredEntity[]> {
   if (!isMeilisearchConfigured()) return [];
@@ -175,7 +160,6 @@ async function searchNearbyEntities(
   const result = await searchEntities(query, {
     filter: [
       'kind = "entity"',
-      `read_level <= ${actor.maxReadLevel}`,
       `space_ids = "${spaceId}"`,
     ],
     limit: 10,
@@ -207,7 +191,7 @@ async function searchNearbyEntities(
 async function searchRelatedWikis(
   label: string,
   description: string | null,
-  actor: WorkerActor,
+  actor: Actor,
   spaceId: string,
 ): Promise<WikiSnippet[]> {
   if (!isMeilisearchConfigured()) return [];
@@ -217,7 +201,6 @@ async function searchRelatedWikis(
     filter: [
       'kind = "entity"',
       'type = "wiki"',
-      `read_level <= ${actor.maxReadLevel}`,
       `space_ids = "${spaceId}"`,
     ],
     limit: 5,
@@ -247,7 +230,7 @@ async function searchRelatedWikis(
 
 async function fetchSpaceWikiSample(
   spaceId: string,
-  actor: WorkerActor,
+  actor: Actor,
 ): Promise<Array<{ label: string; shortDescription: string }>> {
   return withTransaction(async (sql) => {
     for (const q of setActorContext(sql, actor)) await q;
@@ -360,7 +343,7 @@ const GATHER_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 async function executeTool(
   name: string,
   args: Record<string, unknown>,
-  actor: WorkerActor,
+  actor: Actor,
   spaceId: string,
   discovered: DiscoveredEntity[],
   wikiSnippets: WikiSnippet[],
@@ -371,7 +354,6 @@ async function executeTool(
       const limit = Math.min(Number(args.limit) || 10, 20);
       const filters: string[] = [
         'kind = "entity"',
-        `read_level <= ${actor.maxReadLevel}`,
         `space_ids = "${spaceId}"`,
       ];
       if (typeof args.type_filter === "string" && args.type_filter) {
@@ -594,7 +576,7 @@ function buildSeedMessage(
 
 export async function gatherDossier(
   placeholder: PlaceholderInfo,
-  actor: WorkerActor,
+  actor: Actor,
   depth: number,
   reconcileCandidates: EntityMatch[],
 ): Promise<Dossier> {

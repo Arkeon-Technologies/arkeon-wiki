@@ -44,8 +44,8 @@ async function getQueueStatus(entityId: string): Promise<string | null> {
   if (response.status === 410) return "redirected";
   if (response.status === 404) return "gone";
   if (response.status !== 200) return null;
-  const entity = (body as any).entity;
-  return entity?.properties?.status ?? entity?.type ?? null;
+  const wiki = (body as any).wiki;
+  return wiki?.properties?.status ?? wiki?.type ?? null;
 }
 
 describe("Draft worker", () => {
@@ -88,8 +88,8 @@ describe("Draft worker", () => {
     // Verify the placeholder entity exists
     const { response: phRes, body: phBody } = await getJson(`/wiki/${phId}`, actor.apiKey);
     expect(phRes.status).toBe(200);
-    expect((phBody as any).entity.type).toBe("placeholder");
-    expect((phBody as any).entity.properties.status).toBe("assigned");
+    expect((phBody as any).wiki.type).toBe("placeholder");
+    expect((phBody as any).wiki.properties.status).toBe("assigned");
   });
 
   test.skipIf(!hasLlm)("draft worker processes queued placeholder into a published wiki", async () => {
@@ -160,7 +160,7 @@ describe("Draft worker", () => {
       // Check if placeholder entity's properties.status changed from "assigned"
       const { response: entRes, body: entBody } = await getJson(`/wiki/${placeholderId}`, actor.apiKey);
       if (entRes.status === 200) {
-        const status = (entBody as any).entity?.properties?.status;
+        const status = (entBody as any).wiki?.properties?.status;
         if (status === "undraftable") {
           console.log(`[test] placeholder marked undraftable`);
           return true; // processed, just not drafted
@@ -176,7 +176,7 @@ describe("Draft worker", () => {
       // Verify the drafted wiki has content
       const { response: wikiRes, body: wikiBody } = await getJson(`/wiki/${resultWikiId}`, actor.apiKey);
       expect(wikiRes.status).toBe(200);
-      const wiki = (wikiBody as any).entity;
+      const wiki = (wikiBody as any).wiki;
       expect(wiki.type).toBe("wiki");
       expect(wiki.properties.status).toBe("published");
       expect(wiki.properties.content).toBeTruthy();
@@ -230,7 +230,7 @@ describe("Draft worker", () => {
 
         // Also check if placeholder status changed
         if (phRes.status === 200) {
-          const entity = ((await phRes.json().catch(() => null)) as any)?.entity;
+          const entity = ((await phRes.json().catch(() => null)) as any)?.wiki;
           const status = entity?.properties?.status;
           if (status && status !== "assigned") return true;
         }

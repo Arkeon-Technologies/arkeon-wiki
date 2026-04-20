@@ -14,7 +14,7 @@
  * Follows the same start/stop pattern as draft-worker.ts.
  */
 
-import type { WorkerActor } from "./draft-gather.js";
+import type { Actor } from "../../types.js";
 import { getLlmClient, isLlmConfigured } from "../llm.js";
 import { withTransaction } from "../sql.js";
 import { setActorContext, withSystemActorContext } from "../actor-context.js";
@@ -99,10 +99,10 @@ async function recoverStuckRows(): Promise<number> {
 // Actor + source loading
 // ---------------------------------------------------------------------------
 
-async function loadActor(actorId: string): Promise<WorkerActor | null> {
+async function loadActor(actorId: string): Promise<Actor | null> {
   return withSystemActorContext(async (sql) => {
     const rows = await sql`
-      SELECT id, properties, max_read_level, max_write_level, is_admin, can_publish_public
+      SELECT id, properties
       FROM actors WHERE id = ${actorId} LIMIT 1
     `;
     const row = (rows as Array<Record<string, unknown>>)[0];
@@ -113,10 +113,6 @@ async function loadActor(actorId: string): Promise<WorkerActor | null> {
       apiKeyId: "",
       keyPrefix: "",
       label: typeof props.label === "string" ? props.label : null,
-      maxReadLevel: Number(row.max_read_level),
-      maxWriteLevel: Number(row.max_write_level),
-      isAdmin: row.is_admin === true,
-      canPublishPublic: row.can_publish_public === true,
     };
   });
 }
@@ -129,7 +125,7 @@ interface SourceInfo {
   spaceId: string;
 }
 
-async function loadSource(entityId: string, actor: WorkerActor): Promise<SourceInfo | null> {
+async function loadSource(entityId: string, actor: Actor): Promise<SourceInfo | null> {
   return withTransaction(async (sql) => {
     for (const q of setActorContext(sql, actor)) await q;
     const rows = await sql`
