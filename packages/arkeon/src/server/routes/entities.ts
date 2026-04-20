@@ -508,16 +508,21 @@ wikisRouter.openapi(getEntityRoute, async (c) => {
   ]);
 
   const entity = (results[results.length - 1] as EntityRecord[])[0];
+
+  // Check if entity was merged/redirected into another — this covers both
+  // deleted entities and placeholder entities that were redirected by the
+  // draft worker (the placeholder row still exists but callers should
+  // follow the redirect).
+  const redirectRows = await sql`SELECT new_id, merged_at FROM entity_redirects WHERE old_id = ${entityId} LIMIT 1`;
+  const redirect = (redirectRows as Array<{ new_id: string; merged_at: string }>)[0];
+  if (redirect) {
+    throw new ApiError(410, "entity_merged", "This entity was merged into another entity", {
+      merged_into: redirect.new_id,
+      merged_at: redirect.merged_at,
+    });
+  }
+
   if (!entity) {
-    // Check if entity was merged into another
-    const redirectRows = await sql`SELECT new_id, merged_at FROM entity_redirects WHERE old_id = ${entityId} LIMIT 1`;
-    const redirect = (redirectRows as Array<{ new_id: string; merged_at: string }>)[0];
-    if (redirect) {
-      throw new ApiError(410, "entity_merged", "This entity was merged into another entity", {
-        merged_into: redirect.new_id,
-        merged_at: redirect.merged_at,
-      });
-    }
     throw new ApiError(404, "not_found", "Entity not found");
   }
 
