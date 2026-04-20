@@ -12,15 +12,17 @@
  * The LLM loop is gated: when the placeholder already has rich inbound
  * context (>=5 spans from >=2 distinct referrers), the static dossier
  * is good enough and the LLM loop is skipped entirely.
+ *
+ * All data access goes through the internal API client to prevent
+ * schema drift — no direct SQL in this file.
  */
 
 import type { Actor } from "../../types.js";
 import type { EntityMatch } from "../entity-resolve.js";
-import { searchEntities, isMeilisearchConfigured } from "../meilisearch.js";
-import { withTransaction, type SqlClient } from "../sql.js";
-import { setActorContext } from "../actor-context.js";
 import { getLlmClient } from "../llm.js";
 import type OpenAI from "openai";
+import * as api from "./internal-api.js";
+import type { ApiEntity, ApiRelationship } from "./internal-api.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -77,41 +79,43 @@ const RICH_SPAN_THRESHOLD = 5;
 const RICH_REFERRER_THRESHOLD = 2;
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function entityFromApi(e: ApiEntity): DiscoveredEntity {
+  const props = e.properties;
+  return {
+    id: e.id,
+    label: String(props.label ?? ""),
+    type: e.type,
+    shortDescription: String(props.short_description ?? "").slice(0, 200),
+  };
+}
+
+/**
+ * Get the counterpart entity from a relationship.
+ * The API populates .source when direction=in, .target when direction=out.
+ */
+function counterpart(rel: ApiRelationship): { id: string; kind: string; type: string; properties: Record<string, unknown> } | undefined {
+  return rel.direction === "in" ? rel.source : rel.target;
+}
+
+// ---------------------------------------------------------------------------
 // Pre-seed: deterministic context gathering (no LLM)
 // ---------------------------------------------------------------------------
 
-async function fetchInboundSpans(
-  placeholderId: string,
-  actor: Actor,
-): Promise<InboundSpan[]> {
-  return withTransaction(async (sql) => {
-    for (const q of setActorContext(sql, actor)) await q;
-
-    const rows = await sql`
-      SELECT
-        re.predicate,
-        rel.properties AS rel_props,
-        src.id AS referrer_id,
-        src.properties AS src_props
-      FROM relationship_edges re
-      JOIN entities rel ON rel.id = re.id
-      JOIN entities src ON src.id = re.source_id
-      WHERE re.target_id = ${placeholderId}
-      ORDER BY rel.created_at DESC
-      LIMIT 30
-    `;
-
-    return (rows as Array<Record<string, unknown>>).map((r) => {
-      const relProps = (r.rel_props as Record<string, unknown>) ?? {};
-      const srcProps = (r.src_props as Record<string, unknown>) ?? {};
-      return {
-        referrerEntityId: String(r.referrer_id),
-        referrerLabel: String(srcProps.label ?? ""),
-        referrerShortDesc: String(srcProps.short_description ?? "").slice(0, 200),
-        predicate: String(r.predicate),
-        spanText: String(relProps.span_text ?? "").slice(0, 400),
-      };
-    });
+async function fetchInboundSpans(placeholderId: string): Promise<InboundSpan[]> {
+  const rels = await api.getRelationships(placeholderId, { direction: "in", limit: 30 });
+  return rels.map((rel) => {
+    const cp = counterpart(rel);
+    const cpProps = cp?.properties ?? {};
+    return {
+      referrerEntityId: cp?.id ?? "",
+      referrerLabel: String(cpProps.label ?? ""),
+      referrerShortDesc: String(cpProps.short_description ?? "").slice(0, 200),
+      predicate: String(rel.predicate),
+      spanText: String((rel.properties.span_text as string) ?? "").slice(0, 400),
+    };
   });
 }
 
@@ -121,136 +125,96 @@ async function fetchInboundSpans(
  */
 async function fetchSourceContent(
   placeholderId: string,
-  actor: Actor,
 ): Promise<{ sourceLabel: string; sourceContent: string } | null> {
-  return withTransaction(async (sql) => {
-    for (const q of setActorContext(sql, actor)) await q;
-
-    // Follow extracted_from edges from this placeholder to a source entity
-    const rows = await sql`
-      SELECT src.properties AS src_props
-      FROM relationship_edges re
-      JOIN entities src ON src.id = re.target_id
-      WHERE re.source_id = ${placeholderId}
-        AND re.predicate = 'extracted_from'
-        AND src.type = 'file'
-      LIMIT 1
-    `;
-    const row = (rows as Array<Record<string, unknown>>)[0];
-    if (!row) return null;
-    const srcProps = (row.src_props as Record<string, unknown>) ?? {};
-    const content = String(srcProps.content ?? "");
-    if (!content) return null;
-    return {
-      sourceLabel: String(srcProps.label ?? ""),
-      sourceContent: content.slice(0, 30_000), // cap for context window
-    };
+  // Follow extracted_from edges outward from the placeholder
+  const rels = await api.getRelationships(placeholderId, {
+    direction: "out",
+    predicate: "extracted_from",
+    limit: 1,
   });
+  if (rels.length === 0) return null;
+
+  // The target of the extracted_from edge is the source file
+  const targetId = rels[0]!.target_id;
+  const file = await api.getFile(targetId);
+  if (!file) return null;
+
+  const content = String(file.properties.content ?? "");
+  if (!content) return null;
+
+  return {
+    sourceLabel: String(file.properties.label ?? ""),
+    sourceContent: content.slice(0, 30_000),
+  };
 }
 
 async function searchNearbyEntities(
   label: string,
   description: string | null,
-  actor: Actor,
   spaceId: string,
 ): Promise<DiscoveredEntity[]> {
-  if (!isMeilisearchConfigured()) return [];
-
   const query = description ? `${label} ${description}`.slice(0, 200) : label;
-  const result = await searchEntities(query, {
-    filter: [
-      'kind = "entity"',
-      `space_ids = "${spaceId}"`,
-    ],
-    limit: 10,
-    attributesToSearchOn: ["label", "keywords", "short_description"],
-  });
-
-  if (result.ids.length === 0) return [];
-
-  return withTransaction(async (sql) => {
-    for (const q of setActorContext(sql, actor)) await q;
-    const rows = await sql`
-      SELECT id, type, properties FROM entities
-      WHERE id = ANY(${result.ids}) AND kind = 'entity'
-    `;
-    const byId = new Map<string, DiscoveredEntity>();
-    for (const r of rows as Array<Record<string, unknown>>) {
-      const props = (r.properties as Record<string, unknown>) ?? {};
-      byId.set(String(r.id), {
-        id: String(r.id),
-        label: String(props.label ?? ""),
-        type: String(r.type),
-        shortDescription: String(props.short_description ?? "").slice(0, 200),
-      });
-    }
-    return result.ids.map((id) => byId.get(id)).filter((e): e is DiscoveredEntity => !!e);
-  });
+  try {
+    const result = await api.search({
+      q: query,
+      kind: "entity",
+      space_id: spaceId,
+      limit: 10,
+    });
+    return result.results.map(entityFromApi);
+  } catch (err) {
+    console.warn("[draft-gather] searchNearbyEntities failed:", (err as Error).message);
+    return [];
+  }
 }
 
 async function searchRelatedWikis(
   label: string,
   description: string | null,
-  actor: Actor,
   spaceId: string,
 ): Promise<WikiSnippet[]> {
-  if (!isMeilisearchConfigured()) return [];
-
   const query = description ? `${label} ${description}`.slice(0, 200) : label;
-  const result = await searchEntities(query, {
-    filter: [
-      'kind = "entity"',
-      'type = "wiki"',
-      `space_ids = "${spaceId}"`,
-    ],
-    limit: 5,
-    attributesToSearchOn: ["label", "keywords", "short_description"],
-  });
-
-  if (result.ids.length === 0) return [];
-
-  return withTransaction(async (sql) => {
-    for (const q of setActorContext(sql, actor)) await q;
-    const rows = await sql`
-      SELECT id, properties FROM entities
-      WHERE id = ANY(${result.ids}) AND type = 'wiki'
-    `;
-    return (rows as Array<Record<string, unknown>>).map((r) => {
-      const props = (r.properties as Record<string, unknown>) ?? {};
-      const content = String(props.content ?? "");
-      const firstPara = content.split("\n\n")[0]?.slice(0, 500) ?? "";
+  try {
+    const result = await api.search({
+      q: query,
+      type: "wiki",
+      kind: "entity",
+      space_id: spaceId,
+      limit: 5,
+    });
+    return result.results.map((e) => {
+      const content = String(e.properties.content ?? "");
       return {
-        id: String(r.id),
-        label: String(props.label ?? ""),
-        firstParagraph: firstPara,
+        id: e.id,
+        label: String(e.properties.label ?? ""),
+        firstParagraph: content.split("\n\n")[0]?.slice(0, 500) ?? "",
       };
     });
-  });
+  } catch (err) {
+    console.warn("[draft-gather] searchRelatedWikis failed:", (err as Error).message);
+    return [];
+  }
 }
 
 async function fetchSpaceWikiSample(
   spaceId: string,
-  actor: Actor,
 ): Promise<Array<{ label: string; shortDescription: string }>> {
-  return withTransaction(async (sql) => {
-    for (const q of setActorContext(sql, actor)) await q;
-    const rows = await sql`
-      SELECT e.properties FROM entities e
-      JOIN space_entities se ON se.entity_id = e.id
-      WHERE se.space_id = ${spaceId}
-        AND e.type = 'wiki'
-        AND e.kind = 'entity'
-      ORDER BY e.updated_at DESC
-      LIMIT 10
-    `;
-    return (rows as Array<Record<string, unknown>>).map((r) => {
-      const props = (r.properties as Record<string, unknown>) ?? {};
-      return {
-        label: String(props.label ?? ""),
-        shortDescription: String(props.short_description ?? "").slice(0, 200),
-      };
+  try {
+    const entities = await api.listEntities({
+      space_id: spaceId,
+      filter: "type:wiki",
+      sort: "updated_at",
+      order: "desc",
+      limit: 10,
     });
-  });
+    return entities.map((e) => ({
+      label: String(e.properties.label ?? ""),
+      shortDescription: String(e.properties.short_description ?? "").slice(0, 200),
+    }));
+  } catch (err) {
+    console.warn("[draft-gather] fetchSpaceWikiSample failed:", (err as Error).message);
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -337,13 +301,12 @@ const GATHER_TOOLS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Tool execution
+// Tool execution via API
 // ---------------------------------------------------------------------------
 
 async function executeTool(
   name: string,
   args: Record<string, unknown>,
-  actor: Actor,
   spaceId: string,
   discovered: DiscoveredEntity[],
   wikiSnippets: WikiSnippet[],
@@ -352,143 +315,84 @@ async function executeTool(
     case "search_entities": {
       const query = String(args.query ?? "");
       const limit = Math.min(Number(args.limit) || 10, 20);
-      const filters: string[] = [
-        'kind = "entity"',
-        `space_ids = "${spaceId}"`,
-      ];
+      // Sanitize type_filter — this value comes from LLM tool arguments
+      let typeFilter: string | undefined;
       if (typeof args.type_filter === "string" && args.type_filter) {
-        // Sanitize to alphanumeric + underscore/hyphen — this value comes
-        // from LLM tool arguments and is interpolated into a Meilisearch filter.
         const safeType = args.type_filter.replace(/[^a-zA-Z0-9_-]/g, "");
-        if (safeType) filters.push(`type = "${safeType}"`);
+        if (safeType) typeFilter = safeType;
       }
-      if (!isMeilisearchConfigured()) return { results: [], note: "Search not configured" };
-      const result = await searchEntities(query, {
-        filter: filters,
-        limit,
-        attributesToSearchOn: ["label", "keywords", "short_description"],
-      });
-      if (result.ids.length === 0) return { results: [] };
 
-      return withTransaction(async (sql) => {
-        for (const q of setActorContext(sql, actor)) await q;
-        const rows = await sql`
-          SELECT id, type, properties FROM entities
-          WHERE id = ANY(${result.ids}) AND kind = 'entity'
-        `;
-        const entities = (rows as Array<Record<string, unknown>>).map((r) => {
-          const props = (r.properties as Record<string, unknown>) ?? {};
-          const ent: DiscoveredEntity = {
-            id: String(r.id),
-            label: String(props.label ?? ""),
-            type: String(r.type),
-            shortDescription: String(props.short_description ?? "").slice(0, 200),
-          };
-          // Track discovered entities for the dossier
+      try {
+        const result = await api.search({
+          q: query,
+          kind: "entity",
+          type: typeFilter,
+          space_id: spaceId,
+          limit,
+        });
+        const entities = result.results.map((e) => {
+          const ent = entityFromApi(e);
           if (!discovered.some((d) => d.id === ent.id)) discovered.push(ent);
           return ent;
         });
         return { results: entities };
-      });
+      } catch (err) {
+        console.warn("[draft-gather] tool search_entities failed:", (err as Error).message);
+        return { results: [], note: "Search unavailable" };
+      }
     }
 
     case "get_entity": {
       const id = String(args.id ?? "");
-      return withTransaction(async (sql) => {
-        for (const q of setActorContext(sql, actor)) await q;
-        const rows = await sql`
-          SELECT id, type, properties FROM entities WHERE id = ${id} AND kind = 'entity' LIMIT 1
-        `;
-        if (rows.length === 0) return { error: "Entity not found or not visible" };
-        const r = rows[0] as Record<string, unknown>;
-        const props = (r.properties as Record<string, unknown>) ?? {};
-        const ent: DiscoveredEntity = {
-          id: String(r.id),
-          label: String(props.label ?? ""),
-          type: String(r.type),
-          shortDescription: String(props.short_description ?? "").slice(0, 200),
-        };
-        if (!discovered.some((d) => d.id === ent.id)) discovered.push(ent);
-        return {
-          id: ent.id,
-          type: ent.type,
-          label: ent.label,
-          description: String(props.description ?? "").slice(0, 400),
-          keywords: Array.isArray(props.keywords) ? props.keywords : [],
-          short_description: ent.shortDescription,
-          aliases: Array.isArray(props.aliases) ? props.aliases : [],
-        };
-      });
+      const entity = await api.getWikiEntity(id, "full");
+      if (!entity) return { error: "Entity not found or not visible" };
+      const props = entity.properties;
+      const ent = entityFromApi(entity);
+      if (!discovered.some((d) => d.id === ent.id)) discovered.push(ent);
+      return {
+        id: ent.id,
+        type: ent.type,
+        label: ent.label,
+        description: String(props.description ?? "").slice(0, 400),
+        keywords: Array.isArray(props.keywords) ? props.keywords : [],
+        short_description: ent.shortDescription,
+        aliases: Array.isArray(props.aliases) ? props.aliases : [],
+      };
     }
 
     case "get_wiki_content": {
       const id = String(args.id ?? "");
       const maxChars = Math.min(Number(args.max_chars) || 2000, 4000);
-      return withTransaction(async (sql) => {
-        for (const q of setActorContext(sql, actor)) await q;
-        const rows = await sql`
-          SELECT id, properties FROM entities WHERE id = ${id} AND type = 'wiki' LIMIT 1
-        `;
-        if (rows.length === 0) return { error: "Wiki not found or not visible" };
-        const r = rows[0] as Record<string, unknown>;
-        const props = (r.properties as Record<string, unknown>) ?? {};
-        const content = String(props.content ?? "").slice(0, maxChars);
-        const label = String(props.label ?? "");
-        const firstPara = content.split("\n\n")[0]?.slice(0, 500) ?? "";
-        if (!wikiSnippets.some((w) => w.id === id)) {
-          wikiSnippets.push({ id, label, firstParagraph: firstPara });
-        }
-        return { id, label, content };
-      });
+      const entity = await api.getWikiEntity(id, "full");
+      if (!entity || entity.type !== "wiki") return { error: "Wiki not found or not visible" };
+      const props = entity.properties;
+      const content = String(props.content ?? "").slice(0, maxChars);
+      const label = String(props.label ?? "");
+      const firstPara = content.split("\n\n")[0]?.slice(0, 500) ?? "";
+      if (!wikiSnippets.some((w) => w.id === id)) {
+        wikiSnippets.push({ id, label, firstParagraph: firstPara });
+      }
+      return { id, label, content };
     }
 
     case "traverse": {
       const id = String(args.id ?? "");
-      const direction = String(args.direction ?? "both");
+      const direction = String(args.direction ?? "both") as "in" | "out" | "both";
       const limit = Math.min(Number(args.limit) || 15, 30);
-      return withTransaction(async (sql) => {
-        for (const q of setActorContext(sql, actor)) await q;
-
-        let dirClause: string;
-        if (direction === "out") dirClause = `re.source_id = $1`;
-        else if (direction === "in") dirClause = `re.target_id = $1`;
-        else dirClause = `(re.source_id = $1 OR re.target_id = $1)`;
-
-        const rows = await sql.query(
-          `SELECT
-            re.predicate,
-            re.source_id,
-            re.target_id,
-            rel.properties AS rel_props,
-            other.id AS other_id,
-            other.type AS other_type,
-            other.properties AS other_props
-          FROM relationship_edges re
-          JOIN entities rel ON rel.id = re.id
-          JOIN entities other ON other.id = CASE
-            WHEN re.source_id = $1 THEN re.target_id
-            ELSE re.source_id
-          END
-          WHERE ${dirClause}
-          ORDER BY rel.created_at DESC
-          LIMIT $2`,
-          [id, limit],
-        );
-
-        return {
-          edges: (rows as Array<Record<string, unknown>>).map((r) => {
-            const relProps = (r.rel_props as Record<string, unknown>) ?? {};
-            const otherProps = (r.other_props as Record<string, unknown>) ?? {};
-            return {
-              predicate: r.predicate,
-              other_id: r.other_id,
-              other_label: String(otherProps.label ?? ""),
-              other_type: r.other_type,
-              span_text: String(relProps.span_text ?? "").slice(0, 300),
-            };
-          }),
-        };
-      });
+      const rels = await api.getRelationships(id, { direction, limit });
+      return {
+        edges: rels.map((rel) => {
+          const other = counterpart(rel);
+          const otherProps = other?.properties ?? {};
+          return {
+            predicate: rel.predicate,
+            other_id: other?.id,
+            other_label: String(otherProps.label ?? ""),
+            other_type: other?.type,
+            span_text: String((rel.properties.span_text as string) ?? "").slice(0, 300),
+          };
+        }),
+      };
     }
 
     case "emit_dossier":
@@ -585,13 +489,13 @@ export async function gatherDossier(
 ): Promise<Dossier> {
   const usage = { tokensIn: 0, tokensOut: 0, turns: 0 };
 
-  // Pre-seed deterministic context
+  // Pre-seed deterministic context (all via API)
   const [inboundSpans, nearbyEntities, relatedWikis, spaceWikiSample, sourceDoc] = await Promise.all([
-    fetchInboundSpans(placeholder.id, actor),
-    searchNearbyEntities(placeholder.label, placeholder.description, actor, placeholder.spaceId),
-    searchRelatedWikis(placeholder.label, placeholder.description, actor, placeholder.spaceId),
-    fetchSpaceWikiSample(placeholder.spaceId, actor),
-    fetchSourceContent(placeholder.id, actor),
+    fetchInboundSpans(placeholder.id),
+    searchNearbyEntities(placeholder.label, placeholder.description, placeholder.spaceId),
+    searchRelatedWikis(placeholder.label, placeholder.description, placeholder.spaceId),
+    fetchSpaceWikiSample(placeholder.spaceId),
+    fetchSourceContent(placeholder.id),
   ]);
 
   // Start with entities discovered during pre-seed
@@ -664,7 +568,7 @@ export async function gatherDossier(
 
           try {
             const result = await executeTool(
-              tc.function.name, args, actor, placeholder.spaceId,
+              tc.function.name, args, placeholder.spaceId,
               discovered, wikiSnippets,
             );
             return { id: tc.id, content: JSON.stringify(result) };
