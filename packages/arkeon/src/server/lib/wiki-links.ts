@@ -10,6 +10,13 @@
  *   [[placeholder:"Label"|"Description"]]       — unwritten stub. Not queued. May be left or filled later.
  *   [[assign:"Label"|"Description"]]            — hand off to the background drafter. Queued for auto-drafting.
  *
+ * Quoting is flexible for resolve/placeholder/assign links — both quoted
+ * and unquoted forms are accepted (LLMs commonly drop quotes):
+ *   [[resolve:"Label"|"Description"]]           — canonical (fully quoted)
+ *   [[resolve:"Label"|Description]]             — description unquoted
+ *   [[resolve:Label|Description]]               — fully unquoted
+ *   [[resolve:Label]]                           — label only, no description
+ *
  * At depth >= maxDepth, assign: links are demoted to placeholder: (no further
  * recursive queueing — prevents unbounded fan-out).
  */
@@ -53,8 +60,14 @@ export class WikiLinkParseError extends Error {
 // Matches every bracketed wiki link. Each block is then validated strictly.
 const BRACKET_LINK_RE = /\[\[([^\]]*)\]\]/g;
 
-// Matches "quoted" with optional |"quoted"
+// Matches label|description in several forms:
+//   "Label"|"Description"     — fully quoted (canonical)
+//   "Label"|Description       — label quoted, description unquoted
+//   "Label"                   — label only, no description
+//   Label|Description         — fully unquoted
+//   Label                     — label only, unquoted
 const QUOTED_RE = /^"([^"]*)"(?:\|"([^"]*)")?$/;
+const FLEXIBLE_RE = /^"([^"]+)"(?:\|(.+))?$|^([^|]+?)(?:\|(.+))?$/;
 const ENTITY_ID_RE = /^[A-Za-z0-9_-]+$/;
 
 /**
@@ -127,24 +140,28 @@ export function parseWikiLinks(
       }
       links.push({ type, raw, offset, length, id: body, spanText });
     } else {
-      const quoted = QUOTED_RE.exec(body);
-      if (!quoted) {
-        errors.push({ raw, offset, reason: `${type}: links must use quoted syntax: [[${type}:\"Label\"|\"Description\"]]` });
+      // Accept both quoted and unquoted label|description forms.
+      // LLMs commonly drop quotes, so we parse flexibly:
+      //   "Label"|"Description"  — canonical
+      //   "Label"|Description    — description unquoted
+      //   Label|Description      — fully unquoted
+      //   "Label" or Label       — no description
+      const flex = FLEXIBLE_RE.exec(body);
+      if (!flex) {
+        errors.push({ raw, offset, reason: `${type}: could not parse label from [[${type}:...]]` });
         continue;
       }
-      if (!quoted[1]) {
+      // flex[1] = quoted label, flex[2] = description after quoted label
+      // flex[3] = unquoted label, flex[4] = description after unquoted label
+      const label = (flex[1] ?? flex[3] ?? "").trim();
+      const descRaw = (flex[2] ?? flex[4] ?? "").trim();
+      // Strip surrounding quotes from description if present
+      const description = descRaw.replace(/^"|"$/g, "").trim() || undefined;
+      if (!label) {
         errors.push({ raw, offset, reason: "Link label cannot be empty" });
         continue;
       }
-      links.push({
-        type,
-        raw,
-        offset,
-        length,
-        label: quoted[1]!,
-        description: quoted[2] ?? undefined,
-        spanText,
-      });
+      links.push({ type, raw, offset, length, label, description, spanText });
     }
   }
 
@@ -191,4 +208,3 @@ export function extractSpanText(
   return content.slice(start, end);
 }
 
-// TODO(phase-2): draft worker processes queued placeholders created from assign: links

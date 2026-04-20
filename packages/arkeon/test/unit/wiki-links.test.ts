@@ -34,8 +34,31 @@ describe("wiki link parsing", () => {
     expect(links[0]!.label).toBe("Widget");
   });
 
-  test("rejects bare and malformed wiki links with offsets", () => {
-    const content = "Bad [[Some Page]] and [[resolve:Unquoted]] and [[unknown:\"Thing\"]].";
+  test("accepts unquoted label and description in resolve/assign/placeholder links", () => {
+    const content = [
+      "Unquoted [[resolve:Unquoted Label|Some description here]].",
+      "Mixed [[assign:\"Quoted Label\"|unquoted description]].",
+      "Label only [[placeholder:Just A Label]].",
+    ].join(" ");
+
+    const links = parseWikiLinks(content, 0, 2);
+    expect(links).toHaveLength(3);
+
+    expect(links[0]!.type).toBe("resolve");
+    expect(links[0]!.label).toBe("Unquoted Label");
+    expect(links[0]!.description).toBe("Some description here");
+
+    expect(links[1]!.type).toBe("assign");
+    expect(links[1]!.label).toBe("Quoted Label");
+    expect(links[1]!.description).toBe("unquoted description");
+
+    expect(links[2]!.type).toBe("placeholder");
+    expect(links[2]!.label).toBe("Just A Label");
+    expect(links[2]!.description).toBeUndefined();
+  });
+
+  test("rejects bare and unknown-type wiki links with offsets", () => {
+    const content = "Bad [[Some Page]] and [[unknown:\"Thing\"]].";
 
     expect(() => parseWikiLinks(content, 0, 2)).toThrow(WikiLinkParseError);
 
@@ -44,11 +67,10 @@ describe("wiki link parsing", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(WikiLinkParseError);
       const details = (err as WikiLinkParseError).details;
-      expect(details).toHaveLength(3);
+      expect(details).toHaveLength(2);
       expect(details[0]!.raw).toBe("[[Some Page]]");
       expect(details[0]!.offset).toBe(content.indexOf("[[Some Page]]"));
       expect(details.map((d) => d.reason).join(" ")).toContain("typed link");
-      expect(details.map((d) => d.reason).join(" ")).toContain("quoted syntax");
       expect(details.map((d) => d.reason).join(" ")).toContain("Unknown wiki link type");
     }
   });
