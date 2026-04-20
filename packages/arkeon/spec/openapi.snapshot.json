@@ -6302,6 +6302,168 @@
         ]
       }
     },
+    "/wiki/{id}/redirect": {
+      "post": {
+        "operationId": "createRedirect",
+        "parameters": [
+          {
+            "description": "Source entity ULID (the entity being redirected)",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Source entity ULID (the entity being redirected)",
+              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "target_id": {
+                    "description": "Target entity ULID to redirect to",
+                    "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "target_id"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "merged_at": {
+                      "example": "2026-01-01T00:00:00.000Z",
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "new_id": {
+                      "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                      "type": "string"
+                    },
+                    "old_id": {
+                      "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "old_id",
+                    "new_id",
+                    "merged_at"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Redirect already exists (same target, idempotent)"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "merged_at": {
+                      "example": "2026-01-01T00:00:00.000Z",
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "new_id": {
+                      "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                      "type": "string"
+                    },
+                    "old_id": {
+                      "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "old_id",
+                    "new_id",
+                    "merged_at"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Redirect created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        },
+        "summary": "Create a redirect from one entity to another",
+        "tags": [
+          "Wiki"
+        ],
+        "x-arke-auth": "required",
+        "x-arke-related": [
+          "GET /wiki/{id}",
+          "POST /wiki/{id}/merge"
+        ],
+        "x-arke-rules": [
+          "Requires authenticated actor",
+          "Creates a redirect so that requests for the old entity resolve to the new one",
+          "Returns 200 if the same redirect already exists (idempotent)",
+          "Returns 409 if a redirect to a different target already exists",
+          "Validates that target_id refers to an existing entity"
+        ]
+      }
+    },
     "/wiki/{id}/relationships": {
       "get": {
         "description": "Relationships are created by the wiki pipeline when `[[links]]` in a wiki body are parsed and resolved. There is no public endpoint for creating relationships directly — they are a pure side effect of publishing a wiki.",
@@ -7083,6 +7245,169 @@
           "Entity with richest properties is auto-selected as merge target",
           "Maximum 100 groups per request, 500 entities per group",
           "An entity ID must not appear in more than one group"
+        ]
+      }
+    },
+    "/wiki/placeholders": {
+      "post": {
+        "operationId": "createPlaceholders",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "enqueue_draft": {
+                    "description": "If true, enqueue each placeholder for wiki drafting in the same transaction (default false)",
+                    "type": "boolean"
+                  },
+                  "placeholders": {
+                    "description": "Placeholders to create",
+                    "items": {
+                      "properties": {
+                        "description": {
+                          "description": "Short description",
+                          "type": "string"
+                        },
+                        "label": {
+                          "description": "Subject label",
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "relationships": {
+                          "description": "Relationships to create from this placeholder",
+                          "items": {
+                            "properties": {
+                              "detail": {
+                                "description": "Relationship detail text",
+                                "type": "string"
+                              },
+                              "predicate": {
+                                "description": "Relationship predicate",
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "target_id": {
+                                "description": "Target entity ULID",
+                                "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "target_id",
+                              "predicate"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "subject_type": {
+                          "description": "Semantic type (person, concept, etc.)",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "label"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 50,
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "space_id": {
+                    "description": "Space to add placeholders to",
+                    "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "placeholders",
+                  "space_id"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "created": {
+                      "type": "integer"
+                    },
+                    "placeholders": {
+                      "items": {
+                        "properties": {
+                          "id": {
+                            "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                            "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                            "type": "string"
+                          },
+                          "label": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "label"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "created",
+                    "placeholders"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Placeholders created"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          }
+        },
+        "summary": "Create placeholder entities for subjects to be drafted",
+        "tags": [
+          "Wiki"
+        ],
+        "x-arke-auth": "required",
+        "x-arke-related": [
+          "POST /wiki",
+          "GET /wiki/{id}"
+        ],
+        "x-arke-rules": [
+          "Requires authenticated actor",
+          "Each placeholder is created with kind=entity, type=placeholder",
+          "Optionally creates relationships from each placeholder to other entities",
+          "All creations are atomic — if any fails, none are persisted",
+          "Maximum 50 placeholders per request"
         ]
       }
     }
