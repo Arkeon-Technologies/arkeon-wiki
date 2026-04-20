@@ -293,6 +293,19 @@ const OPERATIONS: GeneratedOperation[] = [
     bodyFields: [],
   },
   {
+    operationId: "getQueueStatus",
+    group: "queues",
+    action: "queue-status",
+    method: "GET",
+    path: "/queues",
+    summary: "Live status of all background worker queues (extract, draft)",
+    description: "Live status of all background worker queues (extract, draft)",
+    auth: "required",
+    pathParams: [],
+    queryParams: [{ name: "recent", description: "Number of recent completed/failed items to return per queue", required: false, type: "integer" }],
+    bodyFields: [],
+  },
+  {
     operationId: "getRelationship",
     group: "relationships",
     action: "get",
@@ -620,7 +633,7 @@ const OPERATIONS: GeneratedOperation[] = [
 ];
 
 export function registerApiCommands(program: Command, options: { skipExisting?: boolean } = {}): void {
-  for (const group of ["actors","admin","auth","files","graph","relationships","resolve","search","spaces","wiki"]) {
+  for (const group of ["actors","admin","auth","files","graph","queues","relationships","resolve","search","spaces","wiki"]) {
     const existing = program.commands.find((command) => command.name() === group);
     if (existing && options.skipExisting) {
       registerGeneratedGroup(existing, OPERATIONS.filter((operation) => operation.group === group));

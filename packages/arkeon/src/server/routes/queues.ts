@@ -9,20 +9,25 @@ import { errorResponses, jsonContent } from "../lib/schemas";
 import { withSystemActorContext } from "../lib/actor-context";
 
 // ---------------------------------------------------------------------------
-// Queue definitions — add a row here when a new worker queue is introduced
+// Queue definitions — add a row here when a new worker queue is introduced.
+// SAFETY: table names are interpolated into SQL strings. Only hardcoded
+// values are allowed here — NEVER derive from user input or config.
 // ---------------------------------------------------------------------------
 
 interface QueueDef {
   /** Display name returned in the API response */
   name: string;
-  /** Postgres table name */
+  /** Postgres table name — must be a valid, hardcoded identifier */
   table: string;
 }
 
-const QUEUE_DEFS: QueueDef[] = [
+const QUEUE_DEFS: ReadonlyArray<QueueDef> = [
   { name: "extract", table: "source_extract_queue" },
   { name: "draft", table: "wiki_draft_queue" },
-];
+] as const;
+
+/** Allowlist of table names that may appear in queue queries. */
+const VALID_QUEUE_TABLES = new Set(QUEUE_DEFS.map((d) => d.table));
 
 // ---------------------------------------------------------------------------
 // Zod schemas
@@ -57,7 +62,8 @@ const queuesRoute = createRoute({
   tags: ["Queues"],
   summary: "Live status of all background worker queues (extract, draft)",
   "x-arke-auth": "required",
-  "x-arke-rules": [],
+  "x-arke-related": ["GET /wiki", "POST /wiki"],
+  "x-arke-rules": ["Queue status includes entity IDs, labels, and error messages for all actors"],
   request: {
     query: z.object({
       recent: z.coerce
@@ -93,63 +99,93 @@ export const queuesRouter = createRouter();
 queuesRouter.openapi(queuesRoute, async (c) => {
   requireActor(c);
 
-  const recent = Number(c.req.query("recent") ?? 5);
+  const recent = Number(c.req.query("recent"));
 
   const queues = await withSystemActorContext(async (sql) => {
     const results = [];
 
     for (const def of QUEUE_DEFS) {
       const t = def.table;
+      if (!VALID_QUEUE_TABLES.has(t)) continue;
 
-      // Counts by status
-      const countRows = await sql.query(
-        `SELECT status, count(*)::int AS n FROM ${t} GROUP BY status`,
+      // Single CTE query per queue: counts + processing + recent complete + recent errors
+      const rows = await sql.query(
+        `WITH
+           counts AS (
+             SELECT 'count' AS _section, status, count(*)::int AS n,
+                    NULL::text AS entity_id, NULL::text AS label,
+                    NULL::text AS error, NULL::int AS attempts,
+                    NULL::timestamptz AS created_at, NULL::timestamptz AS started_at
+             FROM ${t}
+             GROUP BY status
+           ),
+           processing AS (
+             SELECT 'processing' AS _section, q.status, NULL::int AS n,
+                    q.entity_id, e.properties->>'label' AS label,
+                    q.error, q.attempts, q.created_at, q.started_at
+             FROM ${t} q
+             LEFT JOIN entities e ON e.id = q.entity_id
+             WHERE q.status = 'processing'
+             ORDER BY q.started_at ASC
+           ),
+           recent_complete AS (
+             SELECT 'recent_complete' AS _section, q.status, NULL::int AS n,
+                    q.entity_id, e.properties->>'label' AS label,
+                    q.error, q.attempts, q.created_at, q.started_at
+             FROM ${t} q
+             LEFT JOIN entities e ON e.id = q.entity_id
+             WHERE q.status = 'complete'
+             ORDER BY q.started_at DESC NULLS LAST
+             LIMIT $1
+           ),
+           recent_errors AS (
+             SELECT 'recent_errors' AS _section, q.status, NULL::int AS n,
+                    q.entity_id, e.properties->>'label' AS label,
+                    q.error, q.attempts, q.created_at, q.started_at
+             FROM ${t} q
+             LEFT JOIN entities e ON e.id = q.entity_id
+             WHERE q.status IN ('failed', 'undraftable')
+             ORDER BY q.started_at DESC NULLS LAST
+             LIMIT $1
+           )
+         SELECT * FROM counts
+         UNION ALL SELECT * FROM processing
+         UNION ALL SELECT * FROM recent_complete
+         UNION ALL SELECT * FROM recent_errors`,
+        [recent],
       );
+
       const counts: Record<string, number> = {};
-      for (const row of countRows as Array<{ status: string; n: number }>) {
-        counts[row.status] = row.n;
+      const processing: unknown[] = [];
+      const recentComplete: unknown[] = [];
+      const recentErrors: unknown[] = [];
+
+      for (const row of rows as Array<Record<string, unknown>>) {
+        const section = row._section as string;
+        if (section === "count") {
+          counts[row.status as string] = row.n as number;
+        } else {
+          const item = {
+            entity_id: row.entity_id,
+            label: row.label,
+            status: row.status,
+            error: row.error,
+            attempts: row.attempts,
+            created_at: row.created_at,
+            started_at: row.started_at,
+          };
+          if (section === "processing") processing.push(item);
+          else if (section === "recent_complete") recentComplete.push(item);
+          else if (section === "recent_errors") recentErrors.push(item);
+        }
       }
-
-      // Currently processing items (with labels)
-      const processing = await sql.query(
-        `SELECT q.entity_id, e.properties->>'label' AS label,
-                q.status, q.error, q.attempts, q.created_at, q.started_at
-         FROM ${t} q
-         LEFT JOIN entities e ON e.id = q.entity_id
-         WHERE q.status = 'processing'
-         ORDER BY q.started_at ASC`,
-      );
-
-      // Recent completions
-      const recentComplete = await sql.query(
-        `SELECT q.entity_id, e.properties->>'label' AS label,
-                q.status, q.error, q.attempts, q.created_at, q.started_at
-         FROM ${t} q
-         LEFT JOIN entities e ON e.id = q.entity_id
-         WHERE q.status = 'complete'
-         ORDER BY q.started_at DESC NULLS LAST
-         LIMIT $1`,
-        [recent],
-      );
-
-      // Recent errors (failed + undraftable)
-      const recentErrors = await sql.query(
-        `SELECT q.entity_id, e.properties->>'label' AS label,
-                q.status, q.error, q.attempts, q.created_at, q.started_at
-         FROM ${t} q
-         LEFT JOIN entities e ON e.id = q.entity_id
-         WHERE q.status IN ('failed', 'undraftable')
-         ORDER BY q.started_at DESC NULLS LAST
-         LIMIT $1`,
-        [recent],
-      );
 
       results.push({
         name: def.name,
         counts,
-        processing: processing as unknown[],
-        recent_complete: recentComplete as unknown[],
-        recent_errors: recentErrors as unknown[],
+        processing,
+        recent_complete: recentComplete,
+        recent_errors: recentErrors,
       });
     }
 

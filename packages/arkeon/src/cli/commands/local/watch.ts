@@ -82,7 +82,8 @@ async function runWatch(opts: WatchOptions): Promise<void> {
     output.error(new Error("Stack is not running. Start it with `arkeon up`."), {
       operation: "watch",
     });
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
 
   const secrets = readSecrets();
@@ -90,7 +91,8 @@ async function runWatch(opts: WatchOptions): Promise<void> {
     output.error(new Error("No secrets.json found. Run `arkeon init` first."), {
       operation: "watch",
     });
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
   const adminKey = secrets.adminBootstrapKey;
 
