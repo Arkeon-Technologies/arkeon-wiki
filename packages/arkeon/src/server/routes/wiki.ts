@@ -19,7 +19,7 @@ import { ApiError } from "../lib/errors";
 import { generateUlid } from "../lib/ids";
 import { createRouter } from "../lib/openapi";
 import { withTransaction } from "../lib/sql";
-import { setActorContext, withSystemActorContext } from "../lib/actor-context";
+import { setActorContext } from "../lib/actor-context";
 import { indexEntity } from "../lib/meilisearch";
 import { backgroundTask } from "../lib/background";
 import {
@@ -91,12 +91,6 @@ const createWikiRoute = createRoute({
             .min(10)
             .max(400)
             .describe("One to two sentences of framing, used in search previews and multi-choice disambiguation. Min 10 chars, max 400."),
-          type: z
-            .string()
-            .min(1)
-            .max(80)
-            .optional()
-            .describe("Deprecated alias for subject_type. Stored as properties.subject_type; the internal entity type remains wiki."),
           subject_type: z
             .string()
             .min(1)
@@ -173,9 +167,7 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   const short_description = body.short_description as string;
   const subject_type = typeof body.subject_type === "string"
     ? body.subject_type.trim()
-    : typeof body.type === "string"
-      ? body.type.trim()
-      : undefined;
+    : undefined;
   const aliasesRaw = body.aliases;
   const extraPropertiesRaw = body.properties;
   const space_id_input = body.space_id;
@@ -193,9 +185,6 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
   const keywords = (keywordsRaw as string[]).map((k) => k.trim());
   if (!short_description || typeof short_description !== "string" || short_description.trim().length < 10) {
     throw new ApiError(400, "invalid_request", "short_description is required and must be at least 10 characters");
-  }
-  if (body.type !== undefined && (!subject_type || typeof body.type !== "string")) {
-    throw new ApiError(400, "invalid_request", "type must be a non-empty string when provided");
   }
   if (body.subject_type !== undefined && (!subject_type || typeof body.subject_type !== "string")) {
     throw new ApiError(400, "invalid_request", "subject_type must be a non-empty string when provided");
@@ -365,24 +354,6 @@ wikiRouter.openapi(createWikiRoute, async (c) => {
 
   // Index in Meilisearch (background)
   backgroundTask(indexEntity(publishedWiki as Record<string, unknown>));
-
-  // Auto-enqueue document wikis for entity extraction. When `arkeon add`
-  // pushes a raw document, it arrives here with subject_type "document".
-  // The extract worker will read the content, identify notable subjects,
-  // and queue placeholder entities for auto-drafting.
-  if (subject_type === "document") {
-    backgroundTask(
-      withSystemActorContext(async (sql) => {
-        await sql`
-          INSERT INTO source_extract_queue (entity_id, owner_agent, status, created_at)
-          VALUES (${wikiId}, ${actor.id}, 'pending', NOW())
-          ON CONFLICT (entity_id) DO NOTHING
-        `;
-      }).catch((err) => {
-        console.warn(`[wiki] failed to enqueue ${wikiId} for extraction:`, (err as Error).message);
-      }),
-    );
-  }
 
   return c.json(
     {

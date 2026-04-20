@@ -474,7 +474,7 @@ wikisRouter.openapi(listEntitiesRoute, async (c) => {
   const sort = parseSort(c.req.query("sort"), ["updated_at", "created_at"], "updated_at");
 
   const userFilter = c.req.query("filter");
-  const filter = mergeFilters("kind!:relationship", userFilter);
+  const filter = mergeFilters("kind!:relationship,type!:file", userFilter);
 
   const spaceId = c.req.query("space_id");
   const listing = buildEntityListingQuery({ filter, limit, cursor, sort, order, spaceId });
@@ -806,8 +806,8 @@ wikisRouter.openapi(bulkDeleteEntitiesRoute, async (c) => {
     throw new ApiError(400, "invalid_query", "At least one of filter or space_id is required");
   }
 
-  // Always exclude relationships — use dedicated relationship endpoints
-  const filter = mergeFilters("kind!:relationship", userFilter);
+  // Always exclude relationships and files — use dedicated endpoints
+  const filter = mergeFilters("kind!:relationship,type!:file", userFilter);
 
   const { whereSql, params } = buildEntityFilterWhere({ filter, spaceId });
 

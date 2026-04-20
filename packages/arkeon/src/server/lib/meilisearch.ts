@@ -123,7 +123,7 @@ export async function ensureMeiliIndex(): Promise<void> {
   }
   await c.index(ENTITIES_INDEX).updateSettings({
     searchableAttributes: ["*"],
-    filterableAttributes: ["type", "kind", "owner_id", "space_ids"],
+    filterableAttributes: ["type", "kind", "owner_id", "space_ids", "folder"],
     sortableAttributes: ["updated_at", "created_at"],
   });
 }

@@ -1984,6 +1984,592 @@
         ]
       }
     },
+    "/files": {
+      "get": {
+        "operationId": "listFiles",
+        "parameters": [
+          {
+            "description": "Column/property filters. See GET /help for filter syntax.",
+            "in": "query",
+            "name": "filter",
+            "required": false,
+            "schema": {
+              "description": "Column/property filters. See GET /help for filter syntax.",
+              "type": "string"
+            }
+          },
+          {
+            "description": "updated_at | created_at (default: updated_at)",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "description": "updated_at | created_at (default: updated_at)",
+              "enum": [
+                "updated_at",
+                "created_at"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "asc | desc (default: desc)",
+            "in": "query",
+            "name": "order",
+            "required": false,
+            "schema": {
+              "description": "asc | desc (default: desc)",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Projection: full (all fields, no relationships) | summary (label + short_description) | expanded (all fields + _relationships).",
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "description": "Projection: full (all fields, no relationships) | summary (label + short_description) | expanded (all fields + _relationships).",
+              "enum": [
+                "full",
+                "summary",
+                "expanded"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated field list",
+            "in": "query",
+            "name": "fields",
+            "required": false,
+            "schema": {
+              "description": "Comma-separated field list",
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Max results (default 50, max 200)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "description": "Max results (default 50, max 200)",
+              "maximum": 200,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Pagination cursor",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "description": "Pagination cursor",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Scope results to a space ULID",
+            "in": "query",
+            "name": "space_id",
+            "required": false,
+            "schema": {
+              "description": "Scope results to a space ULID",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "cursor": {
+                      "description": "Opaque pagination cursor",
+                      "example": "eyJ0Ijoi...",
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "files": {
+                      "items": {
+                        "$ref": "#/components/schemas/Entity"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "files",
+                    "cursor"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Paginated file list"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          }
+        },
+        "summary": "List file entities with filtering, sorting, and cursor pagination",
+        "tags": [
+          "Files"
+        ],
+        "x-arke-auth": "optional",
+        "x-arke-related": [
+          "GET /files/{id}",
+          "GET /wiki"
+        ],
+        "x-arke-rules": [
+          "Only returns entities with type=file — wiki entities are excluded",
+          "Relationships (kind=relationship) are always excluded"
+        ]
+      },
+      "post": {
+        "operationId": "createFile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "content": {
+                    "description": "Text content of the file. Binary files should describe themselves.",
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "file_type": {
+                    "description": "Normalized file extension: markdown, text, latex, pdf, etc.",
+                    "maxLength": 80,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "folder": {
+                    "description": "Organizational folder path (e.g. 'physics/quantum'). No leading/trailing slashes.",
+                    "maxLength": 500,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "label": {
+                    "description": "Display name for the file (typically the filename or relative path)",
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "properties": {
+                    "additionalProperties": {},
+                    "description": "Additional JSON properties to store on the file entity",
+                    "type": "object"
+                  },
+                  "source_file": {
+                    "description": "Relative filesystem path of the source file (for change detection)",
+                    "maxLength": 500,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "source_hash": {
+                    "description": "SHA256 hash of the source file content (for change detection)",
+                    "type": "string"
+                  },
+                  "space_id": {
+                    "description": "Space to create the file in. Optional — defaults to the only space the actor can contribute to.",
+                    "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "label",
+                  "content"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "file": {
+                      "$ref": "#/components/schemas/Entity"
+                    }
+                  },
+                  "required": [
+                    "file"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "File created and enqueued for extraction"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        },
+        "summary": "Upload a file to the knowledge graph for entity extraction",
+        "tags": [
+          "Files"
+        ],
+        "x-arke-auth": "required",
+        "x-arke-related": [
+          "GET /files",
+          "GET /files/{id}"
+        ],
+        "x-arke-rules": [
+          "Returns 409 if a file with the same label already exists in the space",
+          "If space_id is omitted, falls back to the only space the actor can contribute to; 400 if ambiguous or none",
+          "Content is stored as-is — no wiki link resolution",
+          "Automatically enqueued for entity extraction"
+        ]
+      }
+    },
+    "/files/{id}": {
+      "delete": {
+        "operationId": "deleteFile",
+        "parameters": [
+          {
+            "description": "Entity ULID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Entity ULID",
+              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "File deleted"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          }
+        },
+        "summary": "Delete a file entity",
+        "tags": [
+          "Files"
+        ],
+        "x-arke-auth": "required",
+        "x-arke-rules": [
+          "Only the owner or an admin may delete"
+        ]
+      },
+      "get": {
+        "operationId": "getFile",
+        "parameters": [
+          {
+            "description": "Entity ULID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Entity ULID",
+              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Projection: full (all fields, no relationships) | summary (label + short_description) | expanded (all fields + _relationships).",
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "description": "Projection: full (all fields, no relationships) | summary (label + short_description) | expanded (all fields + _relationships).",
+              "enum": [
+                "full",
+                "summary",
+                "expanded"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Comma-separated field list",
+            "in": "query",
+            "name": "fields",
+            "required": false,
+            "schema": {
+              "description": "Comma-separated field list",
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "file": {
+                      "$ref": "#/components/schemas/Entity"
+                    }
+                  },
+                  "required": [
+                    "file"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "File entity"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          }
+        },
+        "summary": "Fetch a single file entity by ID",
+        "tags": [
+          "Files"
+        ],
+        "x-arke-auth": "optional",
+        "x-arke-related": [
+          "PUT /files/{id}",
+          "DELETE /files/{id}"
+        ],
+        "x-arke-rules": [
+          "Returns 404 if entity does not exist or is not a file"
+        ]
+      },
+      "put": {
+        "operationId": "updateFile",
+        "parameters": [
+          {
+            "description": "Entity ULID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Entity ULID",
+              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "note": {
+                    "type": "string"
+                  },
+                  "properties": {
+                    "additionalProperties": {},
+                    "type": "object"
+                  },
+                  "remove_properties": {
+                    "description": "Property keys to delete",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "ver": {
+                    "description": "Expected current version (CAS token)",
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "ver"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "file": {
+                      "$ref": "#/components/schemas/Entity"
+                    }
+                  },
+                  "required": [
+                    "file"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "File updated"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          }
+        },
+        "summary": "Update file properties (content, source_hash, etc.)",
+        "tags": [
+          "Files"
+        ],
+        "x-arke-auth": "required",
+        "x-arke-related": [
+          "GET /files/{id}"
+        ],
+        "x-arke-rules": [
+          "Only the owner or an admin may update",
+          "Optimistic concurrency: must pass current ver to update",
+          "Properties are shallow-merged: only provided keys are updated, omitted keys are preserved",
+          "Re-enqueues for extraction if content changes"
+        ]
+      }
+    },
     "/graph/data": {
       "get": {
         "description": "Returns lightweight node and edge data suitable for rendering large graphs.\nNodes include only id, label, type, and space memberships.\nEdges include only id, source_id, target_id, and predicate.\nFull entity details should be loaded on-demand via GET /wiki/{id}.",
@@ -4298,12 +4884,6 @@
                   },
                   "subject_type": {
                     "description": "Semantic subject type for the page, e.g. person, concept, book, event. Stored as properties.subject_type; the internal entity type remains wiki.",
-                    "maxLength": 80,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "type": {
-                    "description": "Deprecated alias for subject_type. Stored as properties.subject_type; the internal entity type remains wiki.",
                     "maxLength": 80,
                     "minLength": 1,
                     "type": "string"

@@ -28,6 +28,7 @@ import { resolveRouter } from "./routes/resolve";
 import { graphRouter } from "./routes/traverse";
 import { searchRouter } from "./routes/search";
 import { spacesRouter } from "./routes/spaces";
+import { filesRouter } from "./routes/files";
 import { wikiRouter } from "./routes/wiki";
 
 export const openApiConfig = {
@@ -150,6 +151,7 @@ export function createApp(options?: { adminKey?: string }) {
   app.route("/wiki", wikisRouter);
   app.route("/wiki", wikiRelationshipsRouter);
   app.route("/wiki", wikiRouter);
+  app.route("/files", filesRouter);
 
   app.notFound((c) => {
     const requestId = c.get("requestId");

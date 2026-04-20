@@ -33,6 +33,15 @@ CREATE INDEX IF NOT EXISTS idx_entities_type_label_lower
   ON entities (type, lower(properties->>'label'))
   WHERE kind = 'entity' AND properties->>'label' IS NOT NULL;
 
+-- Migrate legacy document wikis to type 'file'
+UPDATE entities SET type = 'file'
+  WHERE type = 'wiki' AND properties->>'subject_type' = 'document';
+
+-- Index for folder property queries
+CREATE INDEX IF NOT EXISTS idx_entities_folder
+  ON entities ((properties->>'folder'))
+  WHERE kind = 'entity' AND properties->>'folder' IS NOT NULL;
+
 GRANT SELECT, INSERT, UPDATE, DELETE ON entities TO arke_app;
 
 
