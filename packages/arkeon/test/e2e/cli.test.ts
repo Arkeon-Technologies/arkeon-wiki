@@ -117,7 +117,7 @@ describe("CLI integration — generated API commands", () => {
     cliSpaceId = space.id;
 
     const result = arkeon(
-      `wiki create --label "CLI Smoke Test Person" --short-description "A test person entity" --keywords '["test"]' --content "A person for CLI smoke testing." --type person --space-id ${cliSpaceId}`,
+      `wiki create --label "CLI Smoke Test Person" --short-description "A test person entity" --keywords '["test"]' --content "A person for CLI smoke testing." --subject-type person --space-id ${cliSpaceId}`,
     );
     expect(result.ok).toBe(true);
 
