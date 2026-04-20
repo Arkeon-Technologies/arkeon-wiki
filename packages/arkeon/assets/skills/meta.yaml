@@ -3,12 +3,12 @@
 # and provider-specific frontmatter fields that get composed at build time.
 
 skills:
-  arkeon-connect:
-    description: "Find and create relationships between entities across different spaces in the graph."
-    argument-hint: "[topic or entity name]"
-  arkeon-doctor:
-    description: "Diagnose the health of a local Arkeon installation: version, stack, database, config."
+  arkeon-wiki-doctor:
+    description: "Set up, configure, and diagnose a local arkeon-wiki installation: install, start stack, configure LLM, check health."
     argument-hint: ""
+  arkeon-wiki-ingest:
+    description: "Add files to the knowledge graph, monitor extraction and drafting, pull and edit wikis. Safe to run repeatedly."
+    argument-hint: "[file paths or directories to add]"
 
 providers:
   claude:
@@ -19,10 +19,10 @@ providers:
       common:
         disable-model-invocation: true
       per-skill:
-        arkeon-connect:
-          allowed-tools: "Bash(npx arkeon *, arkeon *, ls *), Read, Glob, Grep, Write, Agent"
-        arkeon-doctor:
-          allowed-tools: "Bash(arkeon *, npx arkeon *, npm view arkeon *, curl *, ls *, cat *), Read, Glob, Grep"
+        arkeon-wiki-doctor:
+          allowed-tools: "Bash(arkeon-wiki *, npx arkeon-wiki *, npm view arkeon-wiki *, curl *, ls *, cat *), Read, Glob, Grep"
+        arkeon-wiki-ingest:
+          allowed-tools: "Bash(arkeon-wiki *, npx arkeon-wiki *, curl *, ls *), Read, Glob, Grep, Write, Agent"
 
   codex:
     format: skill-dir
