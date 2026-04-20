@@ -191,6 +191,9 @@ async function fetchExistingExtractions(
   });
 }
 
+/** Simple case-insensitive match. Won't catch punctuation or abbreviation
+ *  differences ("St. Augustine" vs "St Augustine") — the LLM prompt handles
+ *  fuzzy matching, and the draft worker's dedup catches near-duplicates downstream. */
 function normalizeLabel(label: string): string {
   return label.toLowerCase().trim();
 }
