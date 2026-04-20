@@ -29,6 +29,7 @@ import { graphRouter } from "./routes/traverse";
 import { searchRouter } from "./routes/search";
 import { spacesRouter } from "./routes/spaces";
 import { filesRouter } from "./routes/files";
+import { queuesRouter } from "./routes/queues";
 import { wikiRouter } from "./routes/wiki";
 
 export const openApiConfig = {
@@ -141,6 +142,7 @@ export function createApp(options?: { adminKey?: string }) {
   app.route("/admin", adminRouter);
   app.route("/auth", authRouter);
   app.route("/graph", graphRouter);
+  app.route("/queues", queuesRouter);
   app.route("/relationships", relationshipDirectRouter);
   app.route("/resolve", resolveRouter);
   app.route("/search", searchRouter);

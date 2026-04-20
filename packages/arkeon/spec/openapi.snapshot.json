@@ -2791,6 +2791,237 @@
         "x-arke-rules": []
       }
     },
+    "/queues": {
+      "get": {
+        "operationId": "getQueueStatus",
+        "parameters": [
+          {
+            "description": "Number of recent completed/failed items to return per queue",
+            "in": "query",
+            "name": "recent",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "description": "Number of recent completed/failed items to return per queue",
+              "maximum": 50,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "queues": {
+                      "items": {
+                        "properties": {
+                          "counts": {
+                            "additionalProperties": {
+                              "type": "integer"
+                            },
+                            "type": "object"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "processing": {
+                            "items": {
+                              "properties": {
+                                "attempts": {
+                                  "type": "integer"
+                                },
+                                "created_at": {
+                                  "type": "string"
+                                },
+                                "entity_id": {
+                                  "type": "string"
+                                },
+                                "error": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "label": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "started_at": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "status": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "entity_id",
+                                "label",
+                                "status",
+                                "error",
+                                "attempts",
+                                "created_at",
+                                "started_at"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
+                          "recent_complete": {
+                            "items": {
+                              "properties": {
+                                "attempts": {
+                                  "type": "integer"
+                                },
+                                "created_at": {
+                                  "type": "string"
+                                },
+                                "entity_id": {
+                                  "type": "string"
+                                },
+                                "error": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "label": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "started_at": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "status": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "entity_id",
+                                "label",
+                                "status",
+                                "error",
+                                "attempts",
+                                "created_at",
+                                "started_at"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          },
+                          "recent_errors": {
+                            "items": {
+                              "properties": {
+                                "attempts": {
+                                  "type": "integer"
+                                },
+                                "created_at": {
+                                  "type": "string"
+                                },
+                                "entity_id": {
+                                  "type": "string"
+                                },
+                                "error": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "label": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "started_at": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "status": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "entity_id",
+                                "label",
+                                "status",
+                                "error",
+                                "attempts",
+                                "created_at",
+                                "started_at"
+                              ],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "counts",
+                          "processing",
+                          "recent_complete",
+                          "recent_errors"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "timestamp": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "queues",
+                    "timestamp"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Queue status for all background workers"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          }
+        },
+        "summary": "Live status of all background worker queues (extract, draft)",
+        "tags": [
+          "Queues"
+        ],
+        "x-arke-auth": "required",
+        "x-arke-related": [
+          "GET /wiki",
+          "POST /wiki"
+        ],
+        "x-arke-rules": [
+          "Queue status includes entity IDs, labels, and error messages for all actors"
+        ]
+      }
+    },
     "/relationships": {
       "get": {
         "description": "Lists relationships across the entire graph. Use predicate, source_id, target_id, or space_id to narrow results. Each result includes source and target entity summaries.",

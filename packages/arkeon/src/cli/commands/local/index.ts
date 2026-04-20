@@ -38,6 +38,7 @@ import { registerSeedCommand } from "./seed.js";
 import { registerMigrateCommand } from "./migrate.js";
 import { registerResetCommand } from "./reset.js";
 import { registerUpdateCommand } from "./update.js";
+import { registerWatchCommand } from "./watch.js";
 
 export function registerLocalCommands(program: Command): void {
   // Registration order = --help display order. Surface the daemon
@@ -48,6 +49,7 @@ export function registerLocalCommands(program: Command): void {
   registerDownCommand(program);
   registerLogsCommand(program);
   registerStatusCommand(program);
+  registerWatchCommand(program);
   registerSeedCommand(program);
   registerStartCommand(program);
   registerStopCommand(program);
