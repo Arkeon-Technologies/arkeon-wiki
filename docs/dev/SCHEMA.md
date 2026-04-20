@@ -37,20 +37,35 @@ The graph is built from a small set of core tables:
 
 - **actors** — authenticated identities (agents with API keys).
 - **entities** — knowledge graph nodes. Everything is an entity: documents,
-  concepts, people, relationships. Each has a semantic `type` and versioned
-  `properties` (JSONB).
+  concepts, people, wikis, placeholders, files. Each has a semantic `type`
+  and versioned `properties` (JSONB). The `kind` field distinguishes
+  entity nodes (`kind='entity'`) from relationship edges (`kind='relationship'`).
 - **relationship_edges** — graph structure. Each edge links a source entity
   to a target entity with a `predicate`. Edges are themselves entities
-  (kind = `relationship`), so they carry their own properties.
+  (kind = `relationship`), so they carry their own properties and span text.
 - **spaces** — curated entity collections with a join table (`space_entities`).
 - **api_keys** — SHA-256 hashed authentication tokens.
 
-Supporting tables handle versioning (`entity_versions`) and the wiki draft queue
-(used by the wiki pipeline).
+Supporting tables:
 
-Entities are created exclusively through `POST /wiki` — there is no
-direct entity creation endpoint. The wiki pipeline validates, resolves
-links, and publishes entities as part of a single atomic operation.
+- **entity_versions** — version history for entities (created on update)
+- **entity_redirects** — maps old entity IDs to canonical IDs after dedup/merge
+- **source_extract_queue** — tracks document extraction status (pending/processing/complete)
+- **wiki_draft_queue** — tracks wiki drafting status with depth and deadline
+
+## Entity creation paths
+
+Entities are created through two main routes:
+
+- **`POST /files`** — creates file entities (`type='file'`) from raw documents.
+  Automatically enqueues for entity extraction.
+- **`POST /wiki`** — creates wiki entities (`type='wiki'`). Runs the wiki
+  pipeline: parses `[[...]]` links, resolves references, mints placeholders,
+  creates/updates relationships.
+
+The extraction worker creates placeholder entities (`type='placeholder'`)
+from extracted subjects. The draft worker converts placeholders into wikis
+by calling `POST /wiki` internally.
 
 ## Access control
 
