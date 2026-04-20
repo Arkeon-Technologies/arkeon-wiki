@@ -137,7 +137,7 @@ async function recoverStuckRows(): Promise<number> {
 // ---------------------------------------------------------------------------
 
 async function loadPlaceholder(entityId: string): Promise<PlaceholderInfo | null> {
-  const entity = await api.getEntity(entityId, "full");
+  const entity = await api.getWikiEntity(entityId, "full");
   if (!entity) return null;
   const props = entity.properties;
   return {

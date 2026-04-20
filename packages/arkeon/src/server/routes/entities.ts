@@ -1418,6 +1418,7 @@ const createPlaceholdersRoute = createRoute({
             .max(50)
             .describe("Placeholders to create"),
           space_id: UlidSchema.describe("Space to add placeholders to"),
+          enqueue_draft: z.boolean().optional().describe("If true, enqueue each placeholder for wiki drafting in the same transaction (default false)"),
         }),
       ),
     },
@@ -1446,6 +1447,7 @@ wikisRouter.openapi(createPlaceholdersRoute, async (c) => {
       relationships?: Array<{ target_id: string; predicate: string; detail?: string }>;
     }>;
     space_id: string;
+    enqueue_draft?: boolean;
   }>(c);
 
   if (!body.placeholders || !Array.isArray(body.placeholders) || body.placeholders.length === 0) {
@@ -1521,6 +1523,16 @@ wikisRouter.openapi(createPlaceholdersRoute, async (c) => {
           }
         }
 
+        // Optionally enqueue for drafting in the same transaction
+        if (body.enqueue_draft) {
+          const deadline = new Date(Date.now() + 3600_000).toISOString();
+          queries.push(
+            sql`INSERT INTO wiki_draft_queue (entity_id, depth, owner_agent, deadline, status, created_at)
+              VALUES (${phId}, 0, ${actor.id}, ${deadline}::timestamptz, 'pending', ${now}::timestamptz)
+              ON CONFLICT (entity_id) DO NOTHING`,
+          );
+        }
+
         created.push({ id: phId, label: ph.label });
       }
       return queries;
@@ -1545,7 +1557,9 @@ const createRedirectRoute = createRoute({
   "x-arke-rules": [
     "Requires authenticated actor",
     "Creates a redirect so that requests for the old entity resolve to the new one",
-    "If a redirect already exists for this entity, the request is a no-op",
+    "Returns 200 if the same redirect already exists (idempotent)",
+    "Returns 409 if a redirect to a different target already exists",
+    "Validates that target_id refers to an existing entity",
   ],
   request: {
     params: entityIdParams("Source entity ULID (the entity being redirected)"),
@@ -1569,7 +1583,17 @@ const createRedirectRoute = createRoute({
         }),
       ),
     },
-    ...errorResponses([400, 401, 404]),
+    200: {
+      description: "Redirect already exists (same target, idempotent)",
+      content: jsonContent(
+        z.object({
+          old_id: UlidSchema,
+          new_id: UlidSchema,
+          merged_at: DateTimeSchema,
+        }),
+      ),
+    },
+    ...errorResponses([400, 401, 404, 409]),
   },
 });
 
@@ -1585,11 +1609,32 @@ wikisRouter.openapi(createRedirectRoute, async (c) => {
   const sql = createSql();
   const now = new Date().toISOString();
 
+  // Verify target entity exists
+  const txResults = await sql.transaction([
+    ...setActorContext(sql, actor),
+    sql`SELECT id FROM entities WHERE id = ${body.target_id} LIMIT 1`,
+  ]);
+  const targetRows = txResults[txResults.length - 1] as Array<Record<string, unknown>>;
+  if (targetRows.length === 0) {
+    throw new ApiError(404, "not_found", "Target entity not found");
+  }
+
+  // Check for existing redirect
+  const existingRows = await sql`SELECT new_id FROM entity_redirects WHERE old_id = ${entityId} LIMIT 1`;
+  const existing = (existingRows as Array<{ new_id: string }>)[0];
+  if (existing) {
+    if (existing.new_id === body.target_id) {
+      return c.json({ old_id: entityId, new_id: body.target_id, merged_at: now }, 200);
+    }
+    throw new ApiError(409, "redirect_exists", "A redirect already exists for this entity", {
+      existing_target: existing.new_id,
+    });
+  }
+
   await sql.transaction([
     ...setActorContext(sql, actor),
     sql`INSERT INTO entity_redirects (old_id, new_id, merged_at, merged_by)
-      VALUES (${entityId}, ${body.target_id}, ${now}::timestamptz, ${actor.id})
-      ON CONFLICT (old_id) DO NOTHING`,
+      VALUES (${entityId}, ${body.target_id}, ${now}::timestamptz, ${actor.id})`,
   ]);
 
   return c.json({

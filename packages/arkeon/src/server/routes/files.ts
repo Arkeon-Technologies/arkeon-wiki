@@ -378,7 +378,9 @@ filesRouter.openapi(getFileRoute, async (c) => {
 
   const results = await sql.transaction([
     ...setActorContext(sql, actor),
-    sql`SELECT * FROM entities WHERE id = ${entityId} AND type = 'file' LIMIT 1`,
+    sql`SELECT e.*,
+      (SELECT COALESCE(array_agg(se.space_id), '{}') FROM space_entities se WHERE se.entity_id = e.id) AS space_ids
+      FROM entities e WHERE e.id = ${entityId} AND e.type = 'file' LIMIT 1`,
   ]);
 
   const entity = (results[results.length - 1] as EntityRecord[])[0];

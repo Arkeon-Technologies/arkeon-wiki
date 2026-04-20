@@ -129,10 +129,10 @@ export async function getActor(id: string): Promise<Actor | null> {
 }
 
 /**
- * Fetch an entity (wiki/placeholder) by ID. Returns null if not found/merged.
- * Use for entities on the /wiki route (excludes file entities).
+ * Fetch a wiki entity (wiki/placeholder) by ID. Returns null if not found/merged.
+ * Routes through /wiki/{id} — excludes file entities. Use getFile() for those.
  */
-export async function getEntity(
+export async function getWikiEntity(
   id: string,
   view: "full" | "summary" | "expanded" = "full",
 ): Promise<ApiEntity | null> {
@@ -245,10 +245,11 @@ export async function postPlaceholders(
     relationships?: Array<{ target_id: string; predicate: string; detail?: string }>;
   }>,
   spaceId: string,
+  opts?: { enqueueDraft?: boolean },
 ): Promise<{ status: number; body: { created: number; placeholders: Array<{ id: string; label: string }> } }> {
   return post<{ created: number; placeholders: Array<{ id: string; label: string }> }>(
     "/wiki/placeholders",
-    { placeholders, space_id: spaceId },
+    { placeholders, space_id: spaceId, enqueue_draft: opts?.enqueueDraft },
   );
 }
 

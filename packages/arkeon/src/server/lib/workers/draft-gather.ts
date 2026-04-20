@@ -92,8 +92,12 @@ function entityFromApi(e: ApiEntity): DiscoveredEntity {
   };
 }
 
-function counterpartProps(rel: ApiRelationship): Record<string, unknown> {
-  return (rel.source ?? rel.target)?.properties ?? {};
+/**
+ * Get the counterpart entity from a relationship.
+ * The API populates .source when direction=in, .target when direction=out.
+ */
+function counterpart(rel: ApiRelationship): { id: string; kind: string; type: string; properties: Record<string, unknown> } | undefined {
+  return rel.direction === "in" ? rel.source : rel.target;
 }
 
 // ---------------------------------------------------------------------------
@@ -103,11 +107,12 @@ function counterpartProps(rel: ApiRelationship): Record<string, unknown> {
 async function fetchInboundSpans(placeholderId: string): Promise<InboundSpan[]> {
   const rels = await api.getRelationships(placeholderId, { direction: "in", limit: 30 });
   return rels.map((rel) => {
-    const srcProps = counterpartProps(rel);
+    const cp = counterpart(rel);
+    const cpProps = cp?.properties ?? {};
     return {
-      referrerEntityId: (rel.source ?? rel.target)?.id ?? "",
-      referrerLabel: String(srcProps.label ?? ""),
-      referrerShortDesc: String(srcProps.short_description ?? "").slice(0, 200),
+      referrerEntityId: cp?.id ?? "",
+      referrerLabel: String(cpProps.label ?? ""),
+      referrerShortDesc: String(cpProps.short_description ?? "").slice(0, 200),
       predicate: String(rel.predicate),
       spanText: String((rel.properties.span_text as string) ?? "").slice(0, 400),
     };
@@ -157,7 +162,8 @@ async function searchNearbyEntities(
       limit: 10,
     });
     return result.results.map(entityFromApi);
-  } catch {
+  } catch (err) {
+    console.warn("[draft-gather] searchNearbyEntities failed:", (err as Error).message);
     return [];
   }
 }
@@ -184,7 +190,8 @@ async function searchRelatedWikis(
         firstParagraph: content.split("\n\n")[0]?.slice(0, 500) ?? "",
       };
     });
-  } catch {
+  } catch (err) {
+    console.warn("[draft-gather] searchRelatedWikis failed:", (err as Error).message);
     return [];
   }
 }
@@ -204,7 +211,8 @@ async function fetchSpaceWikiSample(
       label: String(e.properties.label ?? ""),
       shortDescription: String(e.properties.short_description ?? "").slice(0, 200),
     }));
-  } catch {
+  } catch (err) {
+    console.warn("[draft-gather] fetchSpaceWikiSample failed:", (err as Error).message);
     return [];
   }
 }
@@ -328,14 +336,15 @@ async function executeTool(
           return ent;
         });
         return { results: entities };
-      } catch {
-        return { results: [], note: "Search not configured" };
+      } catch (err) {
+        console.warn("[draft-gather] tool search_entities failed:", (err as Error).message);
+        return { results: [], note: "Search unavailable" };
       }
     }
 
     case "get_entity": {
       const id = String(args.id ?? "");
-      const entity = await api.getEntity(id, "full");
+      const entity = await api.getWikiEntity(id, "full");
       if (!entity) return { error: "Entity not found or not visible" };
       const props = entity.properties;
       const ent = entityFromApi(entity);
@@ -354,7 +363,7 @@ async function executeTool(
     case "get_wiki_content": {
       const id = String(args.id ?? "");
       const maxChars = Math.min(Number(args.max_chars) || 2000, 4000);
-      const entity = await api.getEntity(id, "full");
+      const entity = await api.getWikiEntity(id, "full");
       if (!entity || entity.type !== "wiki") return { error: "Wiki not found or not visible" };
       const props = entity.properties;
       const content = String(props.content ?? "").slice(0, maxChars);
@@ -373,7 +382,7 @@ async function executeTool(
       const rels = await api.getRelationships(id, { direction, limit });
       return {
         edges: rels.map((rel) => {
-          const other = rel.source ?? rel.target;
+          const other = counterpart(rel);
           const otherProps = other?.properties ?? {};
           return {
             predicate: rel.predicate,

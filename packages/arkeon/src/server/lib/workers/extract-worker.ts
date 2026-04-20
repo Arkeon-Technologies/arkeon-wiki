@@ -95,29 +95,6 @@ async function recoverStuckRows(): Promise<number> {
 }
 
 // ---------------------------------------------------------------------------
-// Queue insertion for drafting (raw SQL — internal pipeline plumbing)
-// ---------------------------------------------------------------------------
-
-async function enqueueDrafts(
-  placeholderIds: string[],
-  ownerAgentId: string,
-): Promise<void> {
-  if (placeholderIds.length === 0) return;
-  const deadline = new Date(Date.now() + 3600_000).toISOString();
-  const now = new Date().toISOString();
-
-  await withSystemActorContext(async (sql) => {
-    for (const phId of placeholderIds) {
-      await sql`
-        INSERT INTO wiki_draft_queue (entity_id, depth, owner_agent, deadline, status, created_at)
-        VALUES (${phId}, 0, ${ownerAgentId}, ${deadline}::timestamptz, 'pending', ${now}::timestamptz)
-        ON CONFLICT (entity_id) DO NOTHING
-      `;
-    }
-  });
-}
-
-// ---------------------------------------------------------------------------
 // Source loading via API
 // ---------------------------------------------------------------------------
 
@@ -137,15 +114,7 @@ async function loadSource(entityId: string): Promise<SourceInfo | null> {
   const content = String(props.content ?? "");
   if (!content) return null;
 
-  // Get space_id from the entity's space_ids (fetched via search if not directly available)
-  let spaceId = "";
-  if (entity.space_ids && entity.space_ids.length > 0) {
-    spaceId = entity.space_ids[0]!;
-  } else {
-    const searchResult = await api.search({ q: String(props.label ?? entityId), limit: 1 });
-    const match = searchResult.results.find((r) => r.id === entityId);
-    if (match?.space_ids?.[0]) spaceId = match.space_ids[0];
-  }
+  const spaceId = entity.space_ids?.[0] ?? "";
 
   return {
     id: entity.id,
@@ -179,11 +148,11 @@ async function fetchExistingExtractions(sourceId: string): Promise<ExistingExtra
   });
 
   return rels.map((rel) => {
-    // direction=in means the counterpart is populated in .source
-    const counterpart = rel.source ?? rel.target;
-    const props = counterpart?.properties ?? {};
+    // direction=in: counterpart is in .source; direction=out: in .target
+    const cp = rel.direction === "in" ? rel.source : rel.target;
+    const props = cp?.properties ?? {};
     return {
-      id: counterpart?.id ?? "",
+      id: cp?.id ?? "",
       label: String(props.label ?? ""),
       description: String(props.description ?? ""),
       subjectType: String(props.subject_type ?? ""),
@@ -335,7 +304,7 @@ async function processItem(row: QueueRow): Promise<void> {
     `${tag} extracted ${subjects.length} subjects (${skipped} already exist, ${newSubjects.length} new): ${newSubjects.map((s) => s.label).join(", ")}`,
   );
 
-  // Create placeholders via API
+  // Create placeholders + enqueue for drafting atomically via API
   const { status, body: placeholderResult } = await api.postPlaceholders(
     newSubjects.map((s) => ({
       label: s.label,
@@ -346,6 +315,7 @@ async function processItem(row: QueueRow): Promise<void> {
       ],
     })),
     source.spaceId,
+    { enqueueDraft: true },
   );
 
   if (status !== 201) {
@@ -354,10 +324,6 @@ async function processItem(row: QueueRow): Promise<void> {
   }
 
   const created = placeholderResult.created;
-  const placeholderIds = placeholderResult.placeholders.map((p) => p.id);
-
-  // Queue placeholders for drafting (raw SQL — internal pipeline)
-  await enqueueDrafts(placeholderIds, actor.id);
 
   console.log(`${tag} created ${created} new placeholders, queued for drafting`);
   await markComplete(row.entity_id, created);
