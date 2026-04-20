@@ -357,7 +357,10 @@ async function executeTool(
         `space_ids = "${spaceId}"`,
       ];
       if (typeof args.type_filter === "string" && args.type_filter) {
-        filters.push(`type = "${args.type_filter}"`);
+        // Sanitize to alphanumeric + underscore/hyphen — this value comes
+        // from LLM tool arguments and is interpolated into a Meilisearch filter.
+        const safeType = args.type_filter.replace(/[^a-zA-Z0-9_-]/g, "");
+        if (safeType) filters.push(`type = "${safeType}"`);
       }
       if (!isMeilisearchConfigured()) return { results: [], note: "Search not configured" };
       const result = await searchEntities(query, {

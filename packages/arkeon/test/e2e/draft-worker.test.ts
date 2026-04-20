@@ -132,10 +132,9 @@ describe("Draft worker", () => {
 
     await waitFor(async () => {
       // Check if placeholder was redirected (merged into a new wiki)
-      const { response: phRes } = await getJson(`/wiki/${placeholderId}`, actor.apiKey);
+      const { response: phRes, body: phBody } = await getJson(`/wiki/${placeholderId}`, actor.apiKey);
       if (phRes.status === 410) {
         // Redirected — the draft was published and placeholder merged
-        const phBody = await phRes.json().catch(() => null);
         resultWikiId = (phBody as any)?.error?.details?.merged_into ?? null;
         return true;
       }
