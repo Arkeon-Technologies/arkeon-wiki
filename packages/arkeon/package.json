@@ -1,6 +1,6 @@
 {
   "name": "arkeon-wiki",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Self-contained wiki + knowledge-graph platform: Hono API server, embedded Postgres + Meilisearch, CLI. One package, one process, no Docker.",
   "repository": {
     "type": "git",
