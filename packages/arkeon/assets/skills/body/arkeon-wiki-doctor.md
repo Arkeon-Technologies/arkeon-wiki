@@ -38,40 +38,32 @@ Wait for the output to confirm the API is ready. The `up` command prints the adm
 The extraction and drafting workers need an LLM API key to function. Check if one is configured:
 
 ```bash
-echo "OPENAI_API_KEY=${OPENAI_API_KEY:+set}" 
-cat ~/.arkeon-wiki/llm.json 2>/dev/null || echo "no llm.json"
-cat ~/.arkeon-wiki/workers.yaml 2>/dev/null || echo "no workers.yaml"
+arkeon-wiki config get-llm
 ```
 
-If `OPENAI_API_KEY` is set in the environment, LLM is configured. If not, check `llm.json` or `workers.yaml` for an `api_key` field.
-
-**If no LLM is configured**, guide the user:
+Interpret the JSON output:
+- `configured: true` -- LLM is ready. Note the `source` (workers.yaml, llm.json, or OPENAI_API_KEY) and `model`. Continue to step 4.
+- `configured: false` -- no API key found. Guide the user:
 
 > No LLM API key found. The extraction and drafting workers need one to generate wiki content.
 >
-> **Quickest setup** -- set the environment variable:
+> **Quickest setup:**
 > ```bash
-> export OPENAI_API_KEY=sk-...
+> arkeon-wiki config set-llm-key <your-api-key>
 > ```
 >
-> This works with any OpenAI-compatible API (OpenAI, Anthropic via proxy, local models via Ollama/LM Studio).
+> This writes to `~/.arkeon-wiki/llm.json`. Works with any OpenAI-compatible API (OpenAI, Anthropic via proxy, local models via Ollama/LM Studio).
 >
-> **For a custom provider or base URL**, create `~/.arkeon-wiki/llm.json`:
-> ```json
-> {
->   "default": {
->     "provider": "openai",
->     "base_url": "https://api.openai.com/v1",
->     "api_key": "sk-...",
->     "model": "gpt-4o"
->   }
-> }
+> **For a custom provider or model:**
+> ```bash
+> arkeon-wiki config set-llm-key <key> --model gpt-4o --base-url https://api.openai.com/v1
 > ```
 >
 > **Model recommendations:**
 > - Best quality: `gpt-4o` or `claude-sonnet-4-20250514`
 > - Budget-friendly: `gpt-4o-mini` (good for extraction, lighter for drafting)
-> - Per-step overrides are supported in `llm.json` for `resolve`, `exists`, `draft`, `dedup` steps
+>
+> **Advanced:** For per-worker/per-step model assignment (e.g. a cheaper model for extraction, a stronger one for drafting), create `~/.arkeon-wiki/workers.yaml`. See `arkeon-wiki docs --format api` for the full config schema.
 >
 > After setting the key, restart the stack: `arkeon-wiki down && arkeon-wiki up`
 
@@ -134,4 +126,4 @@ Repo:       {bound to space "X" / not initialized}
 If everything is healthy, suggest next steps:
 - If repo not initialized: `arkeon-wiki init`
 - If initialized and ready: `Run /arkeon-wiki-ingest to add files and generate wikis`
-- If LLM not configured: set `OPENAI_API_KEY` and restart
+- If LLM not configured: `arkeon-wiki config set-llm-key <key>`, then `arkeon-wiki down && arkeon-wiki up`

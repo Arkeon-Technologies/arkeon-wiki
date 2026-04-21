@@ -4,13 +4,30 @@ Add files to the knowledge graph, monitor extraction and drafting, then help the
 
 ## Prerequisites
 
-Before starting, verify the stack is running and LLM is configured:
+Before starting, verify the stack is running:
 
 ```bash
 arkeon-wiki status
 ```
 
-If the stack is not running or no LLM is configured, tell the user to run `/arkeon-wiki-doctor` first.
+If the stack is not running, start it: `arkeon-wiki up`
+
+Next, verify LLM is configured (required for extraction and drafting):
+
+```bash
+arkeon-wiki config get-llm
+```
+
+If `configured: false`, the workers won't process any documents. Set a key before continuing:
+
+```bash
+arkeon-wiki config set-llm-key <your-api-key>
+arkeon-wiki down && arkeon-wiki up
+```
+
+Without an LLM key, files can be added but step 3 (monitoring extraction/drafting) will show no progress -- the workers are disabled.
+
+If the stack needs broader diagnosis, run `/arkeon-wiki-doctor`.
 
 Check that the current directory is initialized:
 

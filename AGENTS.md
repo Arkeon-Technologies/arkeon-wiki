@@ -12,6 +12,31 @@ Arkeon Wiki is a knowledge graph that runs locally. It manages embedded Postgres
 - **Status:** `arkeon-wiki status`
 - **Explorer:** `http://localhost:8000/explore`
 
+## LLM Configuration
+
+Extraction and drafting workers require an LLM API key. Without one, the stack runs but no wiki pages are generated from ingested documents.
+
+**Quick setup:**
+```bash
+arkeon-wiki config set-llm-key <your-api-key>
+```
+
+This writes to `~/.arkeon-wiki/llm.json`. Works with any OpenAI-compatible API (OpenAI, Anthropic via proxy, local models via Ollama/LM Studio).
+
+**Custom provider or model:**
+```bash
+arkeon-wiki config set-llm-key <key> --model gpt-4o --base-url https://api.openai.com/v1
+```
+
+**Check current config:**
+```bash
+arkeon-wiki config get-llm
+```
+
+After setting or changing the key, restart the stack: `arkeon-wiki down && arkeon-wiki up`
+
+For advanced per-worker/per-step model assignment, see `~/.arkeon-wiki/workers.yaml`.
+
 ## Skills
 
 Two skills are available for Claude Code, Codex, and Cursor:
@@ -90,4 +115,3 @@ curl http://localhost:8000/help/GET/search   # help for a specific route
 - State stored in `~/.arkeon-wiki/` (override with `ARKEON_WIKI_HOME`)
 - LLM workers extract entities from documents and draft wiki pages automatically
 - Spaces provide multi-tenant isolation; entities and relationships are scoped to spaces
-- Requires `OPENAI_API_KEY` or `~/.arkeon-wiki/llm.json` for extraction/drafting
