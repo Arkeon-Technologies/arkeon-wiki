@@ -27,7 +27,7 @@ import { join } from "node:path";
 import { detectLlmConfig } from "../../shared/llm-detect.js";
 import { getWorkerLlmConfig } from "./worker-config.js";
 
-export type LlmStep = "resolve" | "exists" | "draft" | "dedup";
+export type LlmStep = "resolve" | "exists" | "draft" | "dedup" | "enrich";
 
 export interface LlmStepConfig {
   /** Informational label — "openai", "anthropic-via-openrouter", etc. */
@@ -48,6 +48,7 @@ export interface LlmConfigFile {
   exists?: Partial<LlmStepConfig>;
   draft?: Partial<LlmStepConfig>;
   dedup?: Partial<LlmStepConfig>;
+  enrich?: Partial<LlmStepConfig>;
 }
 
 export interface ResolvedLlm {
@@ -67,6 +68,7 @@ const DEFAULT_MODEL: Record<LlmStep, string> = {
   exists: "gpt-5.4-nano",
   draft: "gpt-5.4-nano",
   dedup: "gpt-5.4-nano",
+  enrich: "gpt-5.4-nano",
 };
 
 const DEFAULT_MAX_TOKENS: Record<LlmStep, number> = {
@@ -74,6 +76,7 @@ const DEFAULT_MAX_TOKENS: Record<LlmStep, number> = {
   exists: 512,
   draft: 8000,
   dedup: 16000,
+  enrich: 8000,
 };
 
 function arkeonHome(): string {

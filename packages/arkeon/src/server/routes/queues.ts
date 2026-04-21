@@ -19,11 +19,16 @@ interface QueueDef {
   name: string;
   /** Postgres table name — must be a valid, hardcoded identifier */
   table: string;
+  /** Primary key column name (default: "entity_id") */
+  idCol?: string;
+  /** Entity column to join for label lookup (default: same as idCol) */
+  entityCol?: string;
 }
 
 const QUEUE_DEFS: ReadonlyArray<QueueDef> = [
   { name: "extract", table: "source_extract_queue" },
   { name: "draft", table: "wiki_draft_queue" },
+  { name: "enrich", table: "wiki_enrich_queue", idCol: "id", entityCol: "target_wiki_id" },
 ] as const;
 
 /** Allowlist of table names that may appear in queue queries. */
@@ -60,7 +65,7 @@ const queuesRoute = createRoute({
   path: "/",
   operationId: "getQueueStatus",
   tags: ["Queues"],
-  summary: "Live status of all background worker queues (extract, draft)",
+  summary: "Live status of all background worker queues (extract, draft, enrich)",
   "x-arke-auth": "required",
   "x-arke-related": ["GET /wiki", "POST /wiki"],
   "x-arke-rules": ["Queue status includes entity IDs, labels, and error messages for all actors"],
@@ -108,6 +113,11 @@ queuesRouter.openapi(queuesRoute, async (c) => {
       const t = def.table;
       if (!VALID_QUEUE_TABLES.has(t)) continue;
 
+      // Resolve column names — most queues use entity_id as PK + join col,
+      // but the enrich queue uses id as PK and target_wiki_id for label lookup.
+      const idCol = def.idCol ?? "entity_id";
+      const entityCol = def.entityCol ?? idCol;
+
       // Single CTE query per queue: counts + processing + recent complete + recent errors
       const rows = await sql.query(
         `WITH
@@ -121,29 +131,29 @@ queuesRouter.openapi(queuesRoute, async (c) => {
            ),
            processing AS (
              SELECT 'processing' AS _section, q.status, NULL::int AS n,
-                    q.entity_id, e.properties->>'label' AS label,
+                    q.${idCol} AS entity_id, e.properties->>'label' AS label,
                     q.error, q.attempts, q.created_at, q.started_at
              FROM ${t} q
-             LEFT JOIN entities e ON e.id = q.entity_id
+             LEFT JOIN entities e ON e.id = q.${entityCol}
              WHERE q.status = 'processing'
              ORDER BY q.started_at ASC
            ),
            recent_complete AS (
              SELECT 'recent_complete' AS _section, q.status, NULL::int AS n,
-                    q.entity_id, e.properties->>'label' AS label,
+                    q.${idCol} AS entity_id, e.properties->>'label' AS label,
                     q.error, q.attempts, q.created_at, q.started_at
              FROM ${t} q
-             LEFT JOIN entities e ON e.id = q.entity_id
+             LEFT JOIN entities e ON e.id = q.${entityCol}
              WHERE q.status = 'complete'
              ORDER BY q.started_at DESC NULLS LAST
              LIMIT $1
            ),
            recent_errors AS (
              SELECT 'recent_errors' AS _section, q.status, NULL::int AS n,
-                    q.entity_id, e.properties->>'label' AS label,
+                    q.${idCol} AS entity_id, e.properties->>'label' AS label,
                     q.error, q.attempts, q.created_at, q.started_at
              FROM ${t} q
-             LEFT JOIN entities e ON e.id = q.entity_id
+             LEFT JOIN entities e ON e.id = q.${entityCol}
              WHERE q.status IN ('failed', 'undraftable')
              ORDER BY q.started_at DESC NULLS LAST
              LIMIT $1

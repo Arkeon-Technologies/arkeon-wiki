@@ -276,35 +276,35 @@ async function processItem(row: QueueRow): Promise<void> {
 
   // Fetch what was already extracted from this source (idempotent re-extraction)
   const existing = await fetchExistingExtractions(source.id);
-  const existingLabels = new Set(existing.map((e) => normalizeLabel(e.label)));
+  const existingFromSource = new Set(existing.map((e) => normalizeLabel(e.label)));
 
-  // Also check all placeholders/wikis in the space — catches cross-source duplicates.
-  // Belt-and-suspenders: POST /wiki/placeholders has the authoritative upsert guard;
-  // this is an optimization to avoid unnecessary LLM extraction + API calls.
-  // TODO: paginate via cursor for spaces with 1000+ entities.
-  const spaceEntities = await api.listEntities({
+  // Load all placeholders/wikis in the space to detect overlaps.
+  // Build a map: normalizedLabel → { id, type } for three-bucket routing.
+  const spaceEntities = await api.listAllEntities({
     space_id: source.spaceId,
     filter: "type:placeholder,type:wiki",
-    limit: 1000,
     view: "summary",
   });
+  const spaceEntityMap = new Map<string, { id: string; type: string }>();
   for (const e of spaceEntities) {
     const props = e.properties ?? {};
     const label = String(props.label ?? "");
-    if (label && !existingLabels.has(normalizeLabel(label))) {
-      existingLabels.add(normalizeLabel(label));
-      // Add to the existing array so the LLM knows about them too
-      existing.push({
-        id: e.id,
-        label,
-        description: String(props.description ?? ""),
-        subjectType: String(props.subject_type ?? ""),
-      });
+    if (label) {
+      spaceEntityMap.set(normalizeLabel(label), { id: e.id, type: e.type });
+      // Add to existing array so the LLM knows about them
+      if (!existingFromSource.has(normalizeLabel(label))) {
+        existing.push({
+          id: e.id,
+          label,
+          description: String(props.description ?? ""),
+          subjectType: String(props.subject_type ?? ""),
+        });
+      }
     }
   }
 
   console.log(
-    `${tag} extracting from "${source.label}" (${source.content.length} chars, ${existing.length} already extracted)`,
+    `${tag} extracting from "${source.label}" (${source.content.length} chars, ${existing.length} known entities)`,
   );
 
   // Call LLM to identify subjects (passes existing subjects so it can focus on what's new)
@@ -315,45 +315,87 @@ async function processItem(row: QueueRow): Promise<void> {
     return;
   }
 
-  // Filter out subjects that already exist (by normalized label match)
-  const newSubjects = subjects.filter((s) => !existingLabels.has(normalizeLabel(s.label)));
-  const skipped = subjects.length - newSubjects.length;
+  // Three-bucket split:
+  //   1. Already extracted from THIS source → skip (idempotent)
+  //   2. Matches an existing wiki in the space → enqueue enrichment
+  //   3. Truly new (or matches only a placeholder) → create placeholder + enqueue draft
+  const toEnrich: Array<{ wikiId: string; label: string }> = [];
+  const toCreate: ExtractedSubject[] = [];
+  let skipped = 0;
 
-  if (newSubjects.length === 0) {
-    console.log(`${tag} LLM returned ${subjects.length} subjects, all already extracted — nothing to do`);
-    await markComplete(row.entity_id, 0);
-    return;
+  for (const subject of subjects) {
+    const norm = normalizeLabel(subject.label);
+
+    // Bucket 1: already extracted from this source
+    if (existingFromSource.has(norm)) {
+      skipped++;
+      continue;
+    }
+
+    // Check if a wiki/placeholder already exists in the space
+    const match = spaceEntityMap.get(norm);
+    if (match && match.type === "wiki") {
+      // Bucket 2: existing wiki → enqueue enrichment
+      toEnrich.push({ wikiId: match.id, label: subject.label });
+    } else if (match) {
+      // Existing placeholder — skip, draft is pending
+      skipped++;
+    } else {
+      // Bucket 3: new subject
+      toCreate.push(subject);
+    }
   }
 
   console.log(
-    `${tag} extracted ${subjects.length} subjects (${skipped} already exist, ${newSubjects.length} new): ${newSubjects.map((s) => s.label).join(", ")}`,
+    `${tag} extracted ${subjects.length} subjects: ${skipped} skipped, ` +
+    `${toEnrich.length} to enrich, ${toCreate.length} new`,
   );
 
-  // Create placeholders + enqueue for drafting atomically via API
-  const { status, body: placeholderResult } = await api.postPlaceholders(
-    newSubjects.map((s) => ({
-      label: s.label,
-      description: s.description,
-      subject_type: s.subject_type,
-      relationships: [
-        { target_id: source.id, predicate: "extracted_from", detail: `Extracted from "${source.label}"` },
-      ],
-    })),
-    source.spaceId,
-    { enqueueDraft: true },
-  );
-
-  if (status !== 201) {
-    const errMsg = JSON.stringify(placeholderResult).slice(0, 400);
-    throw new Error(`POST /wiki/placeholders returned ${status}: ${errMsg}`);
+  // Enqueue enrichments for existing wikis
+  for (const { wikiId, label } of toEnrich) {
+    try {
+      const { status: enrichStatus } = await api.postEnrich(wikiId, source.id);
+      if (enrichStatus === 202) {
+        console.log(`${tag} enqueued enrichment for "${label}" (wiki=${wikiId.slice(0, 8)})`);
+      } else if (enrichStatus === 200) {
+        console.log(`${tag} "${label}" already enriched from this source`);
+      }
+    } catch (err) {
+      console.warn(`${tag} failed to enqueue enrichment for "${label}":`, (err as Error).message);
+    }
   }
 
-  const { created, reused } = placeholderResult;
+  // Create placeholders + enqueue for drafting (existing path for new subjects)
+  let created = 0;
+  let reused = 0;
+  if (toCreate.length > 0) {
+    const { status, body: placeholderResult } = await api.postPlaceholders(
+      toCreate.map((s) => ({
+        label: s.label,
+        description: s.description,
+        subject_type: s.subject_type,
+        relationships: [
+          { target_id: source.id, predicate: "extracted_from", detail: `Extracted from "${source.label}"` },
+        ],
+      })),
+      source.spaceId,
+      { enqueueDraft: true },
+    );
+
+    if (status !== 201) {
+      const errMsg = JSON.stringify(placeholderResult).slice(0, 400);
+      throw new Error(`POST /wiki/placeholders returned ${status}: ${errMsg}`);
+    }
+
+    created = placeholderResult.created;
+    reused = placeholderResult.reused;
+  }
 
   console.log(
     `${tag} ${created} new placeholders created` +
     (reused > 0 ? `, ${reused} reused (deduped)` : "") +
-    `, queued for drafting`,
+    (toEnrich.length > 0 ? `, ${toEnrich.length} enrichments queued` : "") +
+    `, done`,
   );
   await markComplete(row.entity_id, created);
 }

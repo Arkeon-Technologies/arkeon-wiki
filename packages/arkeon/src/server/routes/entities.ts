@@ -1670,3 +1670,125 @@ wikisRouter.openapi(createRedirectRoute, async (c) => {
     merged_at: now,
   }, 201);
 });
+
+// ---------------------------------------------------------------------------
+// POST /wiki/{id}/enrich — enqueue enrichment from a source document
+// ---------------------------------------------------------------------------
+
+const enrichWikiRoute = createRoute({
+  method: "post",
+  path: "/{id}/enrich",
+  operationId: "enrichWiki",
+  tags: ["Wiki"],
+  summary: "Enqueue enrichment of a wiki from a source document",
+  "x-arke-auth": "required",
+  "x-arke-related": ["GET /wiki/{id}", "GET /wiki/{id}/versions", "POST /wiki"],
+  "x-arke-rules": [
+    "Target must be a published wiki (type='wiki')",
+    "Source must be a file entity (type='file')",
+    "Returns 200 if this wiki was already enriched from this source (idempotent)",
+    "Returns 202 when a new enrichment job is queued",
+  ],
+  request: {
+    params: entityIdParams("Wiki entity ULID to enrich"),
+    body: {
+      required: true,
+      content: jsonContent(
+        z.object({
+          source_id: UlidSchema.describe("Source file entity ULID to enrich from"),
+        }),
+      ),
+    },
+  },
+  responses: {
+    202: {
+      description: "Enrichment job queued",
+      content: jsonContent(
+        z.object({
+          queued: z.literal(true),
+          job_id: UlidSchema,
+        }),
+      ),
+    },
+    200: {
+      description: "Already enriched from this source (idempotent)",
+      content: jsonContent(
+        z.object({
+          queued: z.literal(false),
+          reason: z.string(),
+        }),
+      ),
+    },
+    ...errorResponses([400, 401, 404]),
+  },
+});
+
+wikisRouter.openapi(enrichWikiRoute, async (c) => {
+  const actor = requireActor(c);
+  const wikiId = c.req.param("id");
+  const body = await parseJsonBody<{ source_id: string }>(c);
+
+  if (!body.source_id) {
+    throw new ApiError(400, "missing_required_field", "source_id is required");
+  }
+
+  const sql = createSql();
+
+  // Validate target is a published wiki and source is a file, in one transaction
+  const txResults = await sql.transaction([
+    ...setActorContext(sql, actor),
+    sql`SELECT id, type FROM entities WHERE id = ${wikiId} LIMIT 1`,
+    sql`SELECT id, type FROM entities WHERE id = ${body.source_id} LIMIT 1`,
+  ]);
+
+  const wikiRows = txResults[txResults.length - 2] as Array<{ id: string; type: string }>;
+  const sourceRows = txResults[txResults.length - 1] as Array<{ id: string; type: string }>;
+
+  if (wikiRows.length === 0) {
+    throw new ApiError(404, "not_found", "Wiki entity not found");
+  }
+  if (wikiRows[0]!.type !== "wiki") {
+    throw new ApiError(400, "invalid_target", "Target entity must be a published wiki");
+  }
+  if (sourceRows.length === 0) {
+    throw new ApiError(404, "not_found", "Source file entity not found");
+  }
+  if (sourceRows[0]!.type !== "file") {
+    throw new ApiError(400, "invalid_source", "Source entity must be a file");
+  }
+
+  // Check if wiki already has an extracted_from relationship to this source
+  const existingRels = await sql.transaction([
+    ...setActorContext(sql, actor),
+    sql`
+      SELECT re.id FROM relationship_edges re
+      JOIN entities e ON e.id = re.id
+      WHERE re.source_id = ${wikiId}
+        AND re.target_id = ${body.source_id}
+        AND e.type = 'extracted_from'
+      LIMIT 1
+    `,
+  ]);
+  const relRows = existingRels[existingRels.length - 1] as Array<Record<string, unknown>>;
+  if (relRows.length > 0) {
+    return c.json({ queued: false, reason: "already_enriched" }, 200);
+  }
+
+  // Enqueue enrichment job
+  const jobId = generateUlid();
+  const now = new Date().toISOString();
+
+  await sql.transaction([
+    ...setActorContext(sql, actor),
+    sql`
+      INSERT INTO wiki_enrich_queue (id, target_wiki_id, source_id, space_id, owner_agent, status, created_at)
+      SELECT ${jobId}, ${wikiId}, ${body.source_id}, se.space_id, ${actor.id}, 'pending', ${now}::timestamptz
+      FROM space_entities se
+      WHERE se.entity_id = ${wikiId}
+      LIMIT 1
+      ON CONFLICT (target_wiki_id, source_id) DO NOTHING
+    `,
+  ]);
+
+  return c.json({ queued: true, job_id: jobId }, 202);
+});
