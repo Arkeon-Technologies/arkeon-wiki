@@ -25,6 +25,7 @@ import { existsSync } from "node:fs";
 import { platform } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { detectLlmConfig } from "../../../shared/llm-detect.js";
 
 const IS_WIN = platform() === "win32";
 
@@ -291,6 +292,15 @@ async function runStart(options: StartOptions): Promise<void> {
   console.log(`         Health:    http://localhost:${apiPort}/health`);
   console.log(`         Ready:     http://localhost:${apiPort}/ready`);
   console.log(`         Admin key: ${adminBootstrapKey}`);
+
+  const llm = detectLlmConfig();
+  if (!llm.configured) {
+    console.log("");
+    console.log("[arkeon] LLM not configured — extraction and drafting workers are disabled.");
+    console.log("         Set a key:  arkeon-wiki config set-llm-key <your-api-key>");
+    console.log("         Then restart: arkeon-wiki down && arkeon-wiki up");
+  }
+
   console.log("");
   console.log("         Press Ctrl+C to stop.");
 }

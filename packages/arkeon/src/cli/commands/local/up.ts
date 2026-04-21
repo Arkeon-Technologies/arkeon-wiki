@@ -40,6 +40,7 @@ import {
   isProcessAlive,
   loadOrCreateSecrets,
   logfile,
+  probeLlmConfig,
   readPidfile,
   removePidfile,
 } from "../../lib/local-runtime.js";
@@ -300,6 +301,14 @@ async function runUp(opts: UpOptions): Promise<void> {
     keyPrefix: secrets.adminBootstrapKey.slice(0, 8),
   });
 
+  const llm = probeLlmConfig();
+  if (!llm.configured) {
+    output.progress("");
+    output.progress("[arkeon] LLM not configured — extraction and drafting workers are disabled.");
+    output.progress("         Set a key:  arkeon-wiki config set-llm-key <your-api-key>");
+    output.progress("         Then restart: arkeon-wiki down && arkeon-wiki up");
+  }
+
   output.result({
     operation: "up",
     api_url: apiUrl,
@@ -308,6 +317,7 @@ async function runUp(opts: UpOptions): Promise<void> {
     ready_url: `${apiUrl}/ready`,
     admin_key_stored: true,
     admin_key_prefix: `${secrets.adminBootstrapKey.slice(0, 8)}...`,
+    llm_configured: llm.configured,
     logs_hint: "arkeon logs",
     next: "arkeon seed",
   });
