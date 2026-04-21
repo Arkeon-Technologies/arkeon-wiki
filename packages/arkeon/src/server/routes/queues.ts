@@ -34,6 +34,20 @@ const QUEUE_DEFS: ReadonlyArray<QueueDef> = [
 /** Allowlist of table names that may appear in queue queries. */
 const VALID_QUEUE_TABLES = new Set(QUEUE_DEFS.map((d) => d.table));
 
+/**
+ * SAFETY: idCol and entityCol are interpolated directly into SQL strings.
+ * They MUST be valid Postgres identifiers from the hardcoded QUEUE_DEFS
+ * array above — never from user input or config files.
+ */
+const VALID_IDENT = /^[a-z_][a-z0-9_]*$/;
+for (const def of QUEUE_DEFS) {
+  for (const col of [def.idCol, def.entityCol]) {
+    if (col && !VALID_IDENT.test(col)) {
+      throw new Error(`[queues] invalid column identifier in QUEUE_DEFS: "${col}"`);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Zod schemas
 // ---------------------------------------------------------------------------

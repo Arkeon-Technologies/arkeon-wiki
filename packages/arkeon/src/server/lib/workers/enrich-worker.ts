@@ -239,8 +239,7 @@ async function processItem(row: QueueRow): Promise<void> {
       // Check if relationship already exists
       const existing = await sql.query(
         `SELECT re.id FROM relationship_edges re
-         JOIN entities e ON e.id = re.id
-         WHERE re.source_id = $1 AND re.target_id = $2 AND e.type = 'extracted_from'
+         WHERE re.source_id = $1 AND re.target_id = $2 AND re.predicate = 'extracted_from'
          LIMIT 1`,
         [row.target_wiki_id, row.source_id],
       );

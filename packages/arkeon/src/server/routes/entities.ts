@@ -1762,10 +1762,9 @@ wikisRouter.openapi(enrichWikiRoute, async (c) => {
     ...setActorContext(sql, actor),
     sql`
       SELECT re.id FROM relationship_edges re
-      JOIN entities e ON e.id = re.id
       WHERE re.source_id = ${wikiId}
         AND re.target_id = ${body.source_id}
-        AND e.type = 'extracted_from'
+        AND re.predicate = 'extracted_from'
       LIMIT 1
     `,
   ]);
