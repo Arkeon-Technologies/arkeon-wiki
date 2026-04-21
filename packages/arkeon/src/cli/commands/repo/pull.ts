@@ -183,10 +183,22 @@ export function registerPullCommand(program: Command): void {
         if (!opts.filter) {
           for (const [path, entry] of Object.entries(manifest.entries)) {
             if (!remoteById.has(entry.entity_id)) {
+              // Safety: only delete files under wiki/ with no traversal
+              if (!path.startsWith("wiki/") || path.includes("..")) continue;
+              const absPath = join(cwd, path);
+
+              // Check for local modifications before deleting
+              const locallyModified =
+                existsSync(absPath) &&
+                contentHash(absPath) !== entry.content_hash;
+
+              if (locallyModified && !opts.force) {
+                output.warn(`  ! ${path} (conflict: locally modified but deleted remotely, use --force to delete)`);
+                conflicts++;
+                continue;
+              }
+
               if (!opts.dryRun) {
-                // Safety: only delete files under wiki/ with no traversal
-                if (!path.startsWith("wiki/") || path.includes("..")) continue;
-                const absPath = join(cwd, path);
                 if (existsSync(absPath)) unlinkSync(absPath);
                 delete manifest.entries[path];
               }
