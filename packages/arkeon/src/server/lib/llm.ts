@@ -24,6 +24,7 @@ import OpenAI from "openai";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { detectLlmConfig } from "../../shared/llm-detect.js";
 import { getWorkerLlmConfig } from "./worker-config.js";
 
 export type LlmStep = "resolve" | "exists" | "draft" | "dedup";
@@ -184,20 +185,10 @@ export function getLlmClient(step: LlmStep): ResolvedLlm {
  * True if any LLM configuration can be resolved. Lets the route layer
  * decide whether to reject requests that require LLM calls (e.g. a
  * wiki with [[resolve:...]] links) rather than 500 deep in the pipeline.
+ *
+ * Delegates to the shared detection module so CLI and server agree on
+ * what "configured" means.
  */
 export function isLlmConfigured(): boolean {
-  // Check workers.yaml first
-  const workerLlm = getWorkerLlmConfig("resolve");
-  if (workerLlm?.api_key) return true;
-
-  // Fall back to llm.json + env
-  const file = loadConfigFile();
-  const key =
-    file?.default?.api_key ??
-    file?.resolve?.api_key ??
-    file?.exists?.api_key ??
-    file?.draft?.api_key ??
-    file?.dedup?.api_key ??
-    process.env.OPENAI_API_KEY;
-  return Boolean(key);
+  return detectLlmConfig().configured;
 }

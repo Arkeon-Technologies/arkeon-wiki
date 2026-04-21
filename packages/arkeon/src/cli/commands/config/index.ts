@@ -136,7 +136,9 @@ export function registerConfigCommands(program: Command): void {
       if (existsSync(path)) {
         try {
           doc = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
-        } catch { /* overwrite malformed file */ }
+        } catch {
+          output.warn(`Existing ${path} is malformed JSON — overwriting with new config.`);
+        }
       }
 
       const def = (doc.default ?? {}) as Record<string, unknown>;
@@ -148,6 +150,7 @@ export function registerConfigCommands(program: Command): void {
       writeFileSync(path, JSON.stringify(doc, null, 2) + "\n", "utf-8");
       output.result({
         operation: "config.set-llm-key",
+        key_set: true,
         llm_config_path: path,
         model: def.model ?? null,
         base_url: def.base_url ?? null,
