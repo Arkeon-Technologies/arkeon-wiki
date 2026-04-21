@@ -39,6 +39,7 @@ import { createConnection } from "node:net";
 import { fileURLToPath } from "node:url";
 
 import EmbeddedPostgres from "embedded-postgres";
+import yaml from "js-yaml";
 
 // =====================================================================
 // Paths + conventions
@@ -65,6 +66,56 @@ export function pidfile(): string { return join(arkeonHome(), "arkeon.pid"); }
 export function meiliPidfile(): string { return join(arkeonHome(), "meili.pid"); }
 export function logfile(): string { return join(arkeonHome(), "arkeon.log"); }
 export function llmConfigFile(): string { return join(arkeonHome(), "llm.json"); }
+export function workersConfigFile(): string { return join(arkeonHome(), "workers.yaml"); }
+
+export interface LlmProbeResult {
+  configured: boolean;
+  source: "workers.yaml" | "llm.json" | "OPENAI_API_KEY" | null;
+  model: string | null;
+}
+
+/**
+ * Check LLM configuration from local files and env vars.
+ * Pure filesystem/env read — no server import.
+ */
+export function probeLlmConfig(): LlmProbeResult {
+  // workers.yaml (highest priority config surface)
+  const workersPath = workersConfigFile();
+  if (existsSync(workersPath)) {
+    try {
+      const doc = yaml.load(readFileSync(workersPath, "utf-8")) as Record<string, unknown> | null;
+      const llm = doc?.llm as Record<string, unknown> | undefined;
+      if (llm?.api_key) {
+        return { configured: true, source: "workers.yaml", model: (llm.model as string) ?? null };
+      }
+    } catch { /* malformed yaml — fall through */ }
+  }
+
+  // llm.json
+  const llmPath = llmConfigFile();
+  if (existsSync(llmPath)) {
+    try {
+      const doc = JSON.parse(readFileSync(llmPath, "utf-8")) as Record<string, unknown>;
+      const def = doc.default as Record<string, unknown> | undefined;
+      if (def?.api_key) {
+        return { configured: true, source: "llm.json", model: (def.model as string) ?? null };
+      }
+      for (const step of ["resolve", "exists", "draft", "dedup"] as const) {
+        const s = doc[step] as Record<string, unknown> | undefined;
+        if (s?.api_key) {
+          return { configured: true, source: "llm.json", model: (s.model as string) ?? null };
+        }
+      }
+    } catch { /* malformed json — fall through */ }
+  }
+
+  // Environment variable
+  if (process.env.OPENAI_API_KEY) {
+    return { configured: true, source: "OPENAI_API_KEY", model: null };
+  }
+
+  return { configured: false, source: null, model: null };
+}
 
 // Meilisearch version pinned for reproducibility. Bump deliberately.
 const MEILI_VERSION = "v1.41.0";
