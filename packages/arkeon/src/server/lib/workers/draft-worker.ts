@@ -145,6 +145,7 @@ async function loadPlaceholder(entityId: string): Promise<PlaceholderInfo | null
     label: String(props.label ?? ""),
     description: typeof props.description === "string" ? props.description : null,
     spaceId: entity.space_ids?.[0] ?? "",
+    subjectType: typeof props.subject_type === "string" ? props.subject_type : null,
   };
 }
 
@@ -244,7 +245,8 @@ async function processItem(row: QueueRow): Promise<void> {
     depth: row.depth,
   };
   if (draft.aliases && draft.aliases.length > 0) payload.aliases = draft.aliases;
-  if (draft.subject_type) payload.type = draft.subject_type;
+  const subjectType = draft.subject_type || placeholder.subjectType;
+  if (subjectType) payload.subject_type = subjectType;
 
   const { status, body } = await api.postWiki(payload);
 

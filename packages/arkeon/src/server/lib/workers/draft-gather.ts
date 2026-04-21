@@ -67,6 +67,7 @@ export interface PlaceholderInfo {
   label: string;
   description: string | null;
   spaceId: string;
+  subjectType: string | null;
 }
 
 // ---------------------------------------------------------------------------
