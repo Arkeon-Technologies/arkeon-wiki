@@ -229,7 +229,7 @@ export async function postWiki(payload: {
   space_id: string;
   depth: number;
   aliases?: string[];
-  type?: string;
+  subject_type?: string;
 }): Promise<{ status: number; body: Record<string, unknown> }> {
   return post<Record<string, unknown>>("/wiki", payload);
 }
