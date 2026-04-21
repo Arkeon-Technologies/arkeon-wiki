@@ -110,17 +110,14 @@ Do NOT run `npm install` on top of an existing `node_modules` — npm will prese
 
 We deliberately have no rate limiter. Do not propose adding a per-IP
 token bucket, a path exemption list, or a middleware to throttle
-requests. The tradeoffs are captured in `docs/ADVANCED.md` under
-"Rate limiting (not implemented)" — read that before suggesting
-otherwise. Rate limiting, when we need it, belongs at the edge
+requests. Rate limiting, when we need it, belongs at the edge
 (Cloudflare / nginx in front of deployed instances) or as per-actor
 database quotas, not in-process.
 
 ## Documentation Principles
 
-Docs are organized into `docs/user/` (for people running Arkeon),
-`docs/dev/` (for contributors and API consumers), `docs/ADVANCED.md`
-(in-development features), and `docs/future/` (planned features).
+Docs are organized into `docs/user/` (for people running Arkeon) and
+`docs/dev/` (for contributors and API consumers).
 
 All docs are for information that is **not derivable from reading the code**:
 - **Why**: Design rationale, trade-offs, architectural decisions
@@ -163,7 +160,7 @@ The migration runner itself lives at `packages/arkeon/src/schema/migrate.ts`. It
 
 Arkeon has multiple self-documenting surfaces that agents and users rely on to discover and use the API. Every feature an agent might use **must be discoverable** via at least one of: `/llms.txt`, `arkeon-wiki docs`, or a skill body. If you ship a feature and no AX surface knows about it, it doesn't exist to agents.
 
-Full architecture and data flow: `docs/dev/CONTEXT_MANAGEMENT.md`.
+The AX surfaces are documented inline below.
 
 ### Quick surface map
 

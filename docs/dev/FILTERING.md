@@ -1,6 +1,6 @@
 # Filtering & Text Search
 
-Unified query system for listing endpoints. Search (`GET /search`) uses Meilisearch with a different parameter model — see [SEMANTIC_SEARCH.md](./future/SEMANTIC_SEARCH.md).
+Unified query system for listing endpoints. Search (`GET /search`) uses Meilisearch with a different parameter model.
 
 ## Filter Syntax
 

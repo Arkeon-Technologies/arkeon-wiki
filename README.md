@@ -140,7 +140,7 @@ All state lives in `~/.arkeon-wiki/` by default (override with `ARKEON_WIKI_HOME
 | `DATABASE_URL` env var | Use external Postgres instead of embedded |
 | `MEILI_URL` / `MEILI_MASTER_KEY` | Use external Meilisearch |
 
-See [Advanced Configuration](docs/ADVANCED.md) for the full schema.
+See the [Quickstart](docs/user/QUICKSTART.md) for the full configuration reference.
 
 ## Development
 
@@ -174,10 +174,7 @@ npm run test:e2e -w packages/arkeon    # e2e tests (needs running stack)
 |----------|-------------|
 | [Architecture](docs/dev/ARCHITECTURE.md) | Package layout, request lifecycle, build pipeline |
 | [Schema](docs/dev/SCHEMA.md) | Postgres tables, migrations, access control |
-| [Context management](docs/dev/CONTEXT_MANAGEMENT.md) | How the API self-documents for LLMs |
 | [Wiki pipeline](docs/dev/WIKI_PIPELINE.md) | Link resolution, entity extraction, drafting |
-
-Design specs for planned features live in [docs/future/](docs/future/).
 
 ## License
 
