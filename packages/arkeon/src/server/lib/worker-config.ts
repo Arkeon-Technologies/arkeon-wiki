@@ -97,18 +97,21 @@ export interface DrafterConfig extends BackgroundWorkerConfig {
 // }
 // export interface ConnectorConfig extends BackgroundWorkerConfig {}
 
+export interface EnricherConfig extends BackgroundWorkerConfig {}
+
 export interface WorkersYaml {
   llm?: LlmConfig;
   workers?: {
     extractor?: ExtractorConfig;
     drafter?: DrafterConfig;
+    enricher?: EnricherConfig;
     // Future workers — uncomment when implemented:
     // consolidator?: ConsolidatorConfig;
     // connector?: ConnectorConfig;
   };
 }
 
-export type WorkerName = "extractor" | "drafter";
+export type WorkerName = "extractor" | "drafter" | "enricher";
 
 export interface ResolvedWorkerConfig {
   name: WorkerName;
@@ -145,6 +148,14 @@ const WORKER_DEFAULTS: Record<WorkerName, {
     model: "gpt-5.4-nano",
     maxTokens: 8000,
     extra: { max_depth: 2 },
+  },
+  enricher: {
+    enabled: true,
+    pollIntervalMs: 10_000,
+    batchSize: 5,
+    model: "gpt-5.4-nano",
+    maxTokens: 8000,
+    extra: {},
   },
 };
 
@@ -385,6 +396,7 @@ const STEP_TO_WORKER: Record<string, WorkerName> = {
   resolve: "extractor",
   exists: "extractor",
   draft: "drafter",
+  enrich: "enricher",
   // Future: dedup → consolidator, connect → connector
 };
 

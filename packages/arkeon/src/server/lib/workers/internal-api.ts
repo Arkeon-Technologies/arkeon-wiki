@@ -78,6 +78,16 @@ async function post<T>(path: string, body: unknown): Promise<{ status: number; b
   return { status: res.status, body: json };
 }
 
+async function put<T>(path: string, body: unknown): Promise<{ status: number; body: T }> {
+  const res = await fetch(`${baseUrl()}${path}`, {
+    method: "PUT",
+    headers: headers(),
+    body: JSON.stringify(body),
+  });
+  const json = (await res.json()) as T;
+  return { status: res.status, body: json };
+}
+
 // ---------------------------------------------------------------------------
 // Entity / property helpers
 // ---------------------------------------------------------------------------
@@ -218,6 +228,43 @@ export async function listEntities(opts: {
 }
 
 /**
+ * List ALL entities matching filters by paginating through cursor-based results.
+ * Fetches up to maxPages pages of 200 entities each (default 5 pages = 1000 entities).
+ */
+export async function listAllEntities(opts: {
+  space_id?: string;
+  filter?: string;
+  sort?: string;
+  order?: string;
+  view?: "full" | "summary";
+  maxPages?: number;
+}): Promise<ApiEntity[]> {
+  const all: ApiEntity[] = [];
+  let cursor: string | undefined;
+  const maxPages = opts.maxPages ?? 5;
+
+  for (let page = 0; page < maxPages; page++) {
+    const params: Record<string, string | number | undefined> = {
+      space_id: opts.space_id,
+      filter: opts.filter,
+      sort: opts.sort,
+      order: opts.order,
+      limit: 200,
+      view: opts.view,
+    };
+    if (cursor) params.cursor = cursor;
+
+    const data = await get<{ entities: ApiEntity[]; cursor: string | null }>("/wiki", params);
+    if (!data?.entities?.length) break;
+    all.push(...data.entities);
+    if (!data.cursor) break;
+    cursor = data.cursor;
+  }
+
+  return all;
+}
+
+/**
  * Submit a wiki draft via POST /wiki.
  * Returns the raw status + body so callers can handle 201/409/other.
  */
@@ -276,6 +323,27 @@ export async function postMerge(
     ver: targetVer,
     property_strategy: "accumulate",
   });
+}
+
+/**
+ * Update a wiki entity via PUT /wiki/{id}.
+ * Uses optimistic concurrency — caller must pass the current `ver`.
+ */
+export async function putWiki(
+  id: string,
+  payload: { ver: number; properties?: Record<string, unknown>; note?: string },
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  return put<Record<string, unknown>>(`/wiki/${id}`, payload);
+}
+
+/**
+ * Enqueue enrichment of a wiki from a source document via POST /wiki/{id}/enrich.
+ */
+export async function postEnrich(
+  wikiId: string,
+  sourceId: string,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  return post<Record<string, unknown>>(`/wiki/${wikiId}/enrich`, { source_id: sourceId });
 }
 
 // Re-export the ApiEntity type for consumers

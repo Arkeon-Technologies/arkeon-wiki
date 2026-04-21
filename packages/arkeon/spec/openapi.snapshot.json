@@ -3008,7 +3008,7 @@
             "description": "Authentication required"
           }
         },
-        "summary": "Live status of all background worker queues (extract, draft)",
+        "summary": "Live status of all background worker queues (extract, draft, enrich)",
         "tags": [
           "Queues"
         ],
@@ -6151,6 +6151,146 @@
         "x-arke-rules": [
           "Requires write access to the entity (owner, editor, or admin role)",
           "Optimistic concurrency: must pass current ver to upload"
+        ]
+      }
+    },
+    "/wiki/{id}/enrich": {
+      "post": {
+        "operationId": "enrichWiki",
+        "parameters": [
+          {
+            "description": "Wiki entity ULID to enrich",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Wiki entity ULID to enrich",
+              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "source_id": {
+                    "description": "Source file entity ULID to enrich from",
+                    "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                    "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "source_id"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "queued": {
+                      "enum": [
+                        false
+                      ],
+                      "type": "boolean"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "queued",
+                    "reason"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Already enriched from this source (idempotent)"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "job_id": {
+                      "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+                      "type": "string"
+                    },
+                    "queued": {
+                      "enum": [
+                        true
+                      ],
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "queued",
+                    "job_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Enrichment job queued"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          }
+        },
+        "summary": "Enqueue enrichment of a wiki from a source document",
+        "tags": [
+          "Wiki"
+        ],
+        "x-arke-auth": "required",
+        "x-arke-related": [
+          "GET /wiki/{id}",
+          "GET /wiki/{id}/versions",
+          "POST /wiki"
+        ],
+        "x-arke-rules": [
+          "Target must be a published wiki (type='wiki')",
+          "Source must be a file entity (type='file')",
+          "Returns 200 if this wiki was already enriched from this source (idempotent)",
+          "Returns 202 when a new enrichment job is queued"
         ]
       }
     },
