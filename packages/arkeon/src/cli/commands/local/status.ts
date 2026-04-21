@@ -17,6 +17,7 @@ import {
   arkeonDir,
   DEFAULT_API_PORT,
   isProcessAlive,
+  probeLlmConfig,
   readPidfile,
   readSecrets,
   removePidfile,
@@ -65,6 +66,8 @@ async function runStatus(opts: StatusOptions): Promise<void> {
 
   // Not running — still show state_dir + admin key prefix so the user
   // has what they need to bring the stack back up and authenticate.
+  const llm = probeLlmConfig();
+
   if (!pid) {
     const secrets = readSecrets();
     output.result({
@@ -72,6 +75,7 @@ async function runStatus(opts: StatusOptions): Promise<void> {
       state: "not_running",
       state_dir: arkeonDir(),
       admin_key_prefix: secrets ? `${secrets.adminBootstrapKey.slice(0, 8)}...` : null,
+      llm,
       repo,
       hint: "Run `arkeon up` to start the stack.",
     });
@@ -88,6 +92,7 @@ async function runStatus(opts: StatusOptions): Promise<void> {
       stale_pid: pid,
       state_dir: arkeonDir(),
       admin_key_prefix: secrets ? `${secrets.adminBootstrapKey.slice(0, 8)}...` : null,
+      llm,
       repo,
     });
     process.exit(2);
@@ -109,6 +114,7 @@ async function runStatus(opts: StatusOptions): Promise<void> {
       health: false,
       ready: false,
       state_dir: arkeonDir(),
+      llm,
       repo,
       hint: "Process is alive but /health is not responding. Check `arkeon logs` for errors.",
     });
@@ -130,6 +136,7 @@ async function runStatus(opts: StatusOptions): Promise<void> {
       health: true,
       ready,
       state_dir: arkeonDir(),
+      llm,
       repo,
       hint: "No secrets.json in the state dir — cannot run authenticated probes. Run `arkeon init` to generate one.",
     });
@@ -158,6 +165,7 @@ async function runStatus(opts: StatusOptions): Promise<void> {
     seed_book_id: seedState.bookId,
     state_dir: arkeonDir(),
     admin_key_prefix: `${adminKey.slice(0, 8)}...`,
+    llm,
     repo,
     instances: instances.length > 0 ? instances : undefined,
   });

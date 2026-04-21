@@ -16,6 +16,7 @@ import { requestContextMiddleware } from "./middleware/request-context";
 import { authMiddleware } from "./middleware/auth";
 import { ApiError, errorBody } from "./lib/errors";
 import { mapPostgresError } from "./lib/pg-errors";
+import { isLlmConfigured } from "./lib/llm";
 import { createSql } from "./lib/sql";
 import { actorsRouter } from "./routes/actors";
 import { adminRouter } from "./routes/admin";
@@ -119,9 +120,9 @@ export function createApp(options?: { adminKey?: string }) {
     try {
       const sql = createSql();
       await sql`SELECT 1`;
-      return c.json({ status: "ready" });
+      return c.json({ status: "ready", llm_configured: isLlmConfigured() });
     } catch {
-      return c.json({ status: "unavailable" }, 503);
+      return c.json({ status: "unavailable", llm_configured: isLlmConfigured() }, 503);
     }
   });
 

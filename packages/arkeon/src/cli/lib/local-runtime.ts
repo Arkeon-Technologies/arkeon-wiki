@@ -65,6 +65,10 @@ export function pidfile(): string { return join(arkeonHome(), "arkeon.pid"); }
 export function meiliPidfile(): string { return join(arkeonHome(), "meili.pid"); }
 export function logfile(): string { return join(arkeonHome(), "arkeon.log"); }
 export function llmConfigFile(): string { return join(arkeonHome(), "llm.json"); }
+export function workersConfigFile(): string { return join(arkeonHome(), "workers.yaml"); }
+
+// Re-export shared LLM detection for CLI consumers
+export { detectLlmConfig as probeLlmConfig, type LlmDetectResult as LlmProbeResult } from "../../shared/llm-detect.js";
 
 // Meilisearch version pinned for reproducibility. Bump deliberately.
 const MEILI_VERSION = "v1.41.0";
