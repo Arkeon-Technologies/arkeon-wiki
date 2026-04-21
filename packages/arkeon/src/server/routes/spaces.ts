@@ -389,9 +389,9 @@ spacesRouter.openapi(deleteSpaceRoute, async (c) => {
     sql.query(`DELETE FROM spaces WHERE id = $1 RETURNING id`, [spaceId]),
   ]);
 
-  const setCtxCount = setActorContext(sql, actor).length;
-  const memberRows = results[setCtxCount] as Array<{ entity_id: string }>;
-  const deletedRows = results[setCtxCount + 1] as Array<{ id: string }>;
+  // Results: [...setActorContext, memberQuery, deleteQuery] — index from the end
+  const deletedRows = results.at(-1) as Array<{ id: string }>;
+  const memberRows = results.at(-2) as Array<{ entity_id: string }>;
 
   if (deletedRows.length === 0) {
     throw new ApiError(404, "not_found", "Space not found");

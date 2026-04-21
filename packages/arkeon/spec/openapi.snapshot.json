@@ -4228,23 +4228,8 @@
           }
         ],
         "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "space": {
-                      "$ref": "#/components/schemas/Space"
-                    }
-                  },
-                  "required": [
-                    "space"
-                  ],
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Space soft-deleted"
+          "204": {
+            "description": "Space deleted"
           },
           "401": {
             "content": {
@@ -4277,12 +4262,15 @@
             "description": "Not found"
           }
         },
-        "summary": "Soft-delete a space",
+        "summary": "Delete a space and its orphaned entities",
         "tags": [
           "Spaces"
         ],
         "x-arke-auth": "required",
-        "x-arke-rules": []
+        "x-arke-rules": [
+          "Entities that belong only to this space are permanently deleted",
+          "Entities shared with other spaces lose membership but are not deleted"
+        ]
       },
       "get": {
         "operationId": "getSpace",
