@@ -11,7 +11,7 @@ import {
   parseLimit,
   parseCursorParam,
 } from "../lib/http";
-import { indexEntityById } from "../lib/meilisearch";
+import { indexEntityById, removeEntities } from "../lib/meilisearch";
 import { generateUlid } from "../lib/ids";
 import { createRouter } from "../lib/openapi";
 import { encodeCursor } from "../lib/cursor";
@@ -144,17 +144,17 @@ const deleteSpaceRoute = createRoute({
   path: "/{id}",
   operationId: "deleteSpace",
   tags: ["Spaces"],
-  summary: "Soft-delete a space",
+  summary: "Delete a space and its orphaned entities",
   "x-arke-auth": "required",
-  "x-arke-rules": [],
+  "x-arke-rules": [
+    "Entities that belong only to this space are permanently deleted",
+    "Entities shared with other spaces lose membership but are not deleted",
+  ],
   request: {
     params: entityIdParams("Space ULID"),
   },
   responses: {
-    200: {
-      description: "Space soft-deleted",
-      content: jsonContent(z.object({ space: SpaceSchema })),
-    },
+    204: { description: "Space deleted" },
     ...errorResponses([401, 403, 404]),
   },
 });
@@ -287,8 +287,7 @@ spacesRouter.openapi(listSpacesRoute, async (c) => {
       `
         SELECT *
         FROM spaces
-        WHERE status != 'deleted'
-          AND ($1::text IS NULL OR name ILIKE '%' || $1 || '%')
+        WHERE ($1::text IS NULL OR name ILIKE '%' || $1 || '%')
           AND ($2::timestamptz IS NULL OR created_at < $2::timestamptz)
         ORDER BY created_at DESC
         LIMIT $3
@@ -358,16 +357,19 @@ spacesRouter.openapi(updateSpaceRoute, async (c) => {
   const idParamIdx = paramIdx++;
   params.push(spaceId);
 
-  const updateResults = await sql.query(
-    `
-      UPDATE spaces
-      SET ${sets.join(", ")}
-      WHERE id = $${idParamIdx}
-      RETURNING *
-    `,
-    params,
-  );
-  const updated = (updateResults as SpaceRecord[])[0];
+  const txResults = await sql.transaction([
+    ...setActorContext(sql, actor),
+    sql.query(
+      `
+        UPDATE spaces
+        SET ${sets.join(", ")}
+        WHERE id = $${idParamIdx}
+        RETURNING *
+      `,
+      params,
+    ),
+  ]);
+  const updated = (txResults[txResults.length - 1] as SpaceRecord[])[0];
   if (!updated) {
     throw new ApiError(404, "not_found", "Space not found");
   }
@@ -379,28 +381,41 @@ spacesRouter.openapi(deleteSpaceRoute, async (c) => {
   const actor = requireActor(c);
   const spaceId = c.req.param("id");
   const sql = createSql();
-  const now = new Date().toISOString();
 
-  const space = await fetchSpaceForActor(actor, spaceId);
-  if (!space) {
+  // Collect member entity IDs before CASCADE removes space_entities, then hard-delete the space
+  const results = await sql.transaction([
+    ...setActorContext(sql, actor),
+    sql.query(`SELECT entity_id FROM space_entities WHERE space_id = $1`, [spaceId]),
+    sql.query(`DELETE FROM spaces WHERE id = $1 RETURNING id`, [spaceId]),
+  ]);
+
+  // Results: [...setActorContext, memberQuery, deleteQuery] — index from the end
+  const deletedRows = results.at(-1) as Array<{ id: string }>;
+  const memberRows = results.at(-2) as Array<{ entity_id: string }>;
+
+  if (deletedRows.length === 0) {
     throw new ApiError(404, "not_found", "Space not found");
   }
 
-  const deleteResults = await sql.query(
-    `
-      UPDATE spaces
-      SET status = 'deleted', updated_at = $1::timestamptz
-      WHERE id = $2
-      RETURNING *
-    `,
-    [now, spaceId],
-  );
-  const deleted = (deleteResults as SpaceRecord[])[0];
-  if (!deleted) {
-    throw new ApiError(404, "not_found", "Space not found");
+  // Delete orphaned entities (no remaining space memberships) and clean up search index
+  const memberIds = memberRows.map((r) => r.entity_id);
+  if (memberIds.length > 0) {
+    const orphanResults = await sql.transaction([
+      ...setActorContext(sql, actor),
+      sql.query(
+        `DELETE FROM entities WHERE id = ANY($1)
+         AND NOT EXISTS (SELECT 1 FROM space_entities se WHERE se.entity_id = entities.id)
+         RETURNING id`,
+        [memberIds],
+      ),
+    ]);
+    const orphanIds = (orphanResults[orphanResults.length - 1] as Array<{ id: string }>).map((r) => r.id);
+    if (orphanIds.length > 0) {
+      backgroundTask(removeEntities(orphanIds));
+    }
   }
 
-  return c.json({ space: deleted }, 200);
+  return new Response(null, { status: 204 });
 });
 
 spacesRouter.openapi(listSpaceEntitiesRoute, async (c) => {

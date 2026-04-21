@@ -18,8 +18,13 @@ CREATE TABLE IF NOT EXISTS spaces (
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-  CONSTRAINT valid_space_status CHECK (status IN ('active', 'archived', 'deleted'))
+  CONSTRAINT valid_space_status CHECK (status IN ('active', 'archived'))
 );
+
+-- Migration: hard-delete any remaining soft-deleted spaces, then tighten the constraint
+DELETE FROM spaces WHERE status = 'deleted';
+ALTER TABLE spaces DROP CONSTRAINT IF EXISTS valid_space_status;
+ALTER TABLE spaces ADD CONSTRAINT valid_space_status CHECK (status IN ('active', 'archived'));
 
 CREATE INDEX IF NOT EXISTS idx_spaces_owner ON spaces (owner_id);
 CREATE INDEX IF NOT EXISTS idx_spaces_last_activity ON spaces (last_activity_at DESC NULLS LAST);
