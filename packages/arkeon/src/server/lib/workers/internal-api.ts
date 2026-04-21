@@ -246,8 +246,8 @@ export async function postPlaceholders(
   }>,
   spaceId: string,
   opts?: { enqueueDraft?: boolean },
-): Promise<{ status: number; body: { created: number; placeholders: Array<{ id: string; label: string }> } }> {
-  return post<{ created: number; placeholders: Array<{ id: string; label: string }> }>(
+): Promise<{ status: number; body: { created: number; reused: number; placeholders: Array<{ id: string; label: string }> } }> {
+  return post<{ created: number; reused: number; placeholders: Array<{ id: string; label: string }> }>(
     "/wiki/placeholders",
     { placeholders, space_id: spaceId, enqueue_draft: opts?.enqueueDraft },
   );
@@ -261,6 +261,21 @@ export async function postRedirect(
   targetId: string,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   return post<Record<string, unknown>>(`/wiki/${oldId}/redirect`, { target_id: targetId });
+}
+
+/**
+ * Merge source entity into target (transfers relationships, creates redirect, deletes source).
+ */
+export async function postMerge(
+  targetId: string,
+  sourceId: string,
+  targetVer: number,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  return post<Record<string, unknown>>(`/wiki/${targetId}/merge`, {
+    source_id: sourceId,
+    ver: targetVer,
+    property_strategy: "accumulate",
+  });
 }
 
 // Re-export the ApiEntity type for consumers

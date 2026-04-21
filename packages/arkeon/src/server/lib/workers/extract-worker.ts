@@ -278,6 +278,28 @@ async function processItem(row: QueueRow): Promise<void> {
   const existing = await fetchExistingExtractions(source.id);
   const existingLabels = new Set(existing.map((e) => normalizeLabel(e.label)));
 
+  // Also check all placeholders/wikis in the space — catches cross-source duplicates
+  const spaceEntities = await api.listEntities({
+    space_id: source.spaceId,
+    filter: "type:placeholder,type:wiki",
+    limit: 200,
+    view: "summary",
+  });
+  for (const e of spaceEntities) {
+    const props = e.properties ?? {};
+    const label = String(props.label ?? "");
+    if (label && !existingLabels.has(normalizeLabel(label))) {
+      existingLabels.add(normalizeLabel(label));
+      // Add to the existing array so the LLM knows about them too
+      existing.push({
+        id: e.id,
+        label,
+        description: String(props.description ?? ""),
+        subjectType: String(props.subject_type ?? ""),
+      });
+    }
+  }
+
   console.log(
     `${tag} extracting from "${source.label}" (${source.content.length} chars, ${existing.length} already extracted)`,
   );
@@ -323,9 +345,13 @@ async function processItem(row: QueueRow): Promise<void> {
     throw new Error(`POST /wiki/placeholders returned ${status}: ${errMsg}`);
   }
 
-  const created = placeholderResult.created;
+  const { created, reused } = placeholderResult;
 
-  console.log(`${tag} created ${created} new placeholders, queued for drafting`);
+  console.log(
+    `${tag} ${created} new placeholders created` +
+    (reused > 0 ? `, ${reused} reused (deduped)` : "") +
+    `, queued for drafting`,
+  );
   await markComplete(row.entity_id, created);
 }
 
