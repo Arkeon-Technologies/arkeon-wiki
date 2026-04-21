@@ -38,6 +38,51 @@ arkeon-wiki watch                 # live queue monitoring dashboard
 - **Search:** `arkeon-wiki search query --q "term"`
 - **Explore:** open the explorer URL from `arkeon-wiki status`
 
+## Searching and Recall
+
+When you need to find information in the knowledge graph:
+
+**Start with search.** Full-text search with typo tolerance and prefix matching:
+```bash
+arkeon-wiki search query --q "information theory"
+arkeon-wiki search query --q "Shannon" --space-id <id>    # scope to a space
+```
+
+**List and filter.** List endpoints support rich filter syntax (`field<op>value`, comma-separated):
+```bash
+arkeon-wiki wiki list --filter 'properties.subject_type:person'
+arkeon-wiki wiki list --filter 'properties.label:Captain Ahab'
+arkeon-wiki files list                                     # list ingested documents
+```
+
+Filter operators: `:` (equals), `!:` (not), `>`, `>=`, `<`, `<=`, `?` (exists), `!?` (missing).
+Property paths work: `properties.subject_type:concept`, `properties.keywords:physics`.
+
+**Read an entity.** Get full content and metadata:
+```bash
+arkeon-wiki wiki get <id>
+arkeon-wiki wiki get <id> --view expanded                  # includes relationships
+```
+
+**Follow relationships.** See what an entity connects to:
+```bash
+arkeon-wiki relationships list <id>                        # all edges for this entity
+arkeon-wiki relationships list <id> --direction out        # outbound only
+```
+
+**Traverse the graph.** Find nearby or connecting entities:
+```bash
+curl "{api_url}/traverse?source=id:<ULID>&hops=2&limit=20"              # neighborhood
+curl "{api_url}/traverse?source=id:<A>&target=id:<B>&hops=4"            # bridge between two entities
+```
+
+**Full API reference.** For complete parameter details:
+```bash
+arkeon-wiki docs --format api          # offline, same as /llms.txt
+curl http://localhost:8000/llms.txt    # from the running server
+curl http://localhost:8000/help/GET/search   # help for a specific route
+```
+
 ## Architecture
 
 - Single Node.js process, no Docker required
