@@ -1521,9 +1521,16 @@ wikisRouter.openapi(createPlaceholdersRoute, async (c) => {
         created.push({ id: phId, label: ph.label });
       }
 
-      // Always create relationships (links this source to the entity)
+      // Always create relationships (links this source to the entity).
+      // Skip if an identical edge already exists (same-source re-extraction).
       if (ph.relationships) {
         for (const rel of ph.relationships) {
+          const dupeCheck = await tx`
+            SELECT 1 FROM relationship_edges
+            WHERE source_id = ${phId} AND target_id = ${rel.target_id} AND predicate = ${rel.predicate}
+            LIMIT 1`;
+          if (dupeCheck.length > 0) continue;
+
           const relId = generateUlid();
           const relProps: Record<string, unknown> = {};
           if (rel.detail) relProps.detail = rel.detail;

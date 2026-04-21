@@ -278,11 +278,14 @@ async function processItem(row: QueueRow): Promise<void> {
   const existing = await fetchExistingExtractions(source.id);
   const existingLabels = new Set(existing.map((e) => normalizeLabel(e.label)));
 
-  // Also check all placeholders/wikis in the space — catches cross-source duplicates
+  // Also check all placeholders/wikis in the space — catches cross-source duplicates.
+  // Belt-and-suspenders: POST /wiki/placeholders has the authoritative upsert guard;
+  // this is an optimization to avoid unnecessary LLM extraction + API calls.
+  // TODO: paginate via cursor for spaces with 1000+ entities.
   const spaceEntities = await api.listEntities({
     space_id: source.spaceId,
     filter: "type:placeholder,type:wiki",
-    limit: 200,
+    limit: 1000,
     view: "summary",
   });
   for (const e of spaceEntities) {

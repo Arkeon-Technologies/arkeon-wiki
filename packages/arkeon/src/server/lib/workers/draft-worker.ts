@@ -201,13 +201,13 @@ async function processItem(row: QueueRow): Promise<void> {
       // creates a redirect, and deletes the placeholder.
       const target = await api.getWikiEntity(match.id);
       if (target) {
-        const { status } = await api.postMerge(target.id, placeholder.id, target.ver);
+        const { status, body: mergeBody } = await api.postMerge(target.id, placeholder.id, target.ver);
         if (status === 200) {
           console.log(`${tag} merged into ${target.id}`);
           await markComplete(row.entity_id, { mergedInto: target.id });
           return;
         }
-        console.warn(`${tag} merge returned ${status}, falling back to redirect`);
+        console.warn(`${tag} merge returned ${status}, falling back to redirect:`, JSON.stringify(mergeBody).slice(0, 300));
       }
       await api.postRedirect(placeholder.id, match.id);
       await markComplete(row.entity_id, { mergedInto: match.id });
