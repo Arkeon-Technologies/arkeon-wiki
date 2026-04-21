@@ -89,7 +89,7 @@ If any items are marked `undraftable`, note them but don't treat it as an error 
 
 ## 4. Report results
 
-Once all queues are drained, summarize what was generated:
+Once all queues are drained, summarize what was generated and prompt the user to open the explorer:
 
 > **Ingest complete.**
 > - Files processed: {N}
@@ -97,7 +97,10 @@ Once all queues are drained, summarize what was generated:
 > - Wikis drafted: {complete count}
 > - Undraftable: {count} (if any)
 >
-> View the knowledge graph: {api_url}/explore
+> **Open the explorer to see your knowledge graph:**
+> {api_url}/explore
+
+Always display the full clickable explorer URL. Read the `api_url` from `.arkeon/state.json` (typically `http://localhost:8000`).
 
 ## 5. Offer next steps
 
