@@ -178,7 +178,10 @@ async function processItem(row: QueueRow): Promise<void> {
 
   console.log(`${tag} processing "${placeholder.label}" (depth=${row.depth}, attempt=${row.attempts})`);
 
-  // --- Step 1: Reconcile — does a wiki already cover this subject? ---
+  // --- Step 1: Reconcile — does a published wiki already cover this subject? ---
+  // Only check wikis, not other placeholders. If no wiki exists, the first
+  // placeholder through drafts one. Subsequent duplicates find that wiki and
+  // merge into it, preserving the original wiki's content.
   let reconcileCandidates: EntityMatch[] = [];
   try {
     reconcileCandidates = await findSimilarEntities(
@@ -194,6 +197,18 @@ async function processItem(row: QueueRow): Promise<void> {
     if (reconcileCandidates.length > 0 && reconcileCandidates[0]!.confidence >= 0.8) {
       const match = reconcileCandidates[0]!;
       console.log(`${tag} reconcile match: ${match.id} (confidence=${match.confidence})`);
+      // Merge transfers relationships from this placeholder to the wiki,
+      // creates a redirect, and deletes the placeholder.
+      const target = await api.getWikiEntity(match.id);
+      if (target) {
+        const { status, body: mergeBody } = await api.postMerge(target.id, placeholder.id, target.ver);
+        if (status === 200) {
+          console.log(`${tag} merged into ${target.id}`);
+          await markComplete(row.entity_id, { mergedInto: target.id });
+          return;
+        }
+        console.warn(`${tag} merge returned ${status}, falling back to redirect:`, JSON.stringify(mergeBody).slice(0, 300));
+      }
       await api.postRedirect(placeholder.id, match.id);
       await markComplete(row.entity_id, { mergedInto: match.id });
       return;

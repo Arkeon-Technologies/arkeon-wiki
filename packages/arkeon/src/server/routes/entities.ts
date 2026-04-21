@@ -44,7 +44,7 @@ import {
   queryParam,
 } from "../lib/schemas";
 import { setActorContext } from "../lib/actor-context";
-import { createSql } from "../lib/sql";
+import { createSql, withTransaction } from "../lib/sql";
 import type { Actor } from "../types";
 import {
   processWikiContent,
@@ -1425,10 +1425,11 @@ const createPlaceholdersRoute = createRoute({
   },
   responses: {
     201: {
-      description: "Placeholders created",
+      description: "Placeholders created (or reused if duplicates existed)",
       content: jsonContent(
         z.object({
-          created: z.number().int(),
+          created: z.number().int().describe("Number of new placeholders created"),
+          reused: z.number().int().describe("Number of existing placeholders/wikis reused (deduplication)"),
           placeholders: z.array(z.object({ id: UlidSchema, label: z.string() })),
         }),
       ),
@@ -1460,16 +1461,42 @@ wikisRouter.openapi(createPlaceholdersRoute, async (c) => {
     throw new ApiError(400, "missing_required_field", "space_id is required");
   }
 
-  const sql = createSql();
   const now = new Date().toISOString();
-  const created: Array<{ id: string; label: string }> = [];
 
-  await sql.transaction([
-    ...setActorContext(sql, actor),
-    ...(function buildQueries() {
-      const queries: ReturnType<typeof sql.query>[] = [];
-      for (const ph of body.placeholders) {
-        const phId = generateUlid();
+  const result = await withTransaction(async (tx) => {
+    for (const q of setActorContext(tx, actor)) await q;
+
+    // Batch-query existing placeholders/wikis in this space with matching labels
+    const requestedLabels = body.placeholders.map((ph) => ph.label.trim().toLowerCase());
+    const existingRows = await tx`
+      SELECT e.id, lower(trim(e.properties->>'label')) AS norm_label
+      FROM entities e
+      JOIN space_entities se ON se.entity_id = e.id
+      WHERE se.space_id = ${body.space_id}
+        AND e.kind = 'entity'
+        AND e.type IN ('placeholder', 'wiki')
+        AND lower(trim(e.properties->>'label')) = ANY(${requestedLabels})
+    `;
+    const existingByLabel = new Map<string, string>();
+    for (const row of existingRows) {
+      existingByLabel.set(String(row.norm_label), String(row.id));
+    }
+
+    const created: Array<{ id: string; label: string }> = [];
+    const reused: Array<{ id: string; label: string }> = [];
+
+    for (const ph of body.placeholders) {
+      const normLabel = ph.label.trim().toLowerCase();
+      const existingId = existingByLabel.get(normLabel);
+      let phId: string;
+
+      if (existingId) {
+        // Reuse existing entity — skip INSERT
+        phId = existingId;
+        reused.push({ id: phId, label: ph.label });
+      } else {
+        // Create new placeholder entity
+        phId = generateUlid();
         const phProps: Record<string, unknown> = {
           label: ph.label,
           status: "assigned",
@@ -1477,69 +1504,69 @@ wikisRouter.openapi(createPlaceholdersRoute, async (c) => {
         if (ph.description) phProps.description = ph.description;
         if (ph.subject_type) phProps.subject_type = ph.subject_type;
 
-        // Create placeholder entity
-        queries.push(
-          sql`INSERT INTO entities (
+        await tx`INSERT INTO entities (
+          id, kind, type, ver, properties, owner_id,
+          edited_by, note, created_at, updated_at
+        ) VALUES (
+          ${phId}, 'entity', 'placeholder', 1, ${phProps}::jsonb, ${actor.id},
+          ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
+        )`;
+
+        await tx`INSERT INTO space_entities (space_id, entity_id, added_by, added_at)
+          VALUES (${body.space_id}, ${phId}, ${actor.id}, ${now}::timestamptz)
+          ON CONFLICT (space_id, entity_id) DO NOTHING`;
+
+        // Track this new entity so later placeholders in the same batch dedup
+        existingByLabel.set(normLabel, phId);
+        created.push({ id: phId, label: ph.label });
+      }
+
+      // Always create relationships (links this source to the entity).
+      // Skip if an identical edge already exists (same-source re-extraction).
+      if (ph.relationships) {
+        for (const rel of ph.relationships) {
+          const dupeCheck = await tx`
+            SELECT 1 FROM relationship_edges
+            WHERE source_id = ${phId} AND target_id = ${rel.target_id} AND predicate = ${rel.predicate}
+            LIMIT 1`;
+          if (dupeCheck.length > 0) continue;
+
+          const relId = generateUlid();
+          const relProps: Record<string, unknown> = {};
+          if (rel.detail) relProps.detail = rel.detail;
+
+          await tx`INSERT INTO entities (
             id, kind, type, ver, properties, owner_id,
             edited_by, note, created_at, updated_at
           ) VALUES (
-            ${phId}, 'entity', 'placeholder', 1, ${phProps}::jsonb, ${actor.id},
-            ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
-          )`,
-        );
-
-        // Add to space
-        queries.push(
-          sql`INSERT INTO space_entities (space_id, entity_id, added_by, added_at)
-            VALUES (${body.space_id}, ${phId}, ${actor.id}, ${now}::timestamptz)
-            ON CONFLICT (space_id, entity_id) DO NOTHING`,
-        );
-
-        // Create relationships
-        if (ph.relationships) {
-          for (const rel of ph.relationships) {
-            const relId = generateUlid();
-            const relProps: Record<string, unknown> = {};
-            if (rel.detail) relProps.detail = rel.detail;
-
-            queries.push(
-              sql`INSERT INTO entities (
-                id, kind, type, ver, properties, owner_id,
-                edited_by, note, created_at, updated_at
-              ) VALUES (
-                ${relId}, 'relationship', 'relationship', 1, ${relProps}::jsonb,
-                ${actor.id}, ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
-              )`,
-            );
-            queries.push(
-              sql`INSERT INTO relationship_edges (id, source_id, target_id, predicate)
-                VALUES (${relId}, ${phId}, ${rel.target_id}, ${rel.predicate})`,
-            );
-            queries.push(
-              sql`INSERT INTO space_entities (space_id, entity_id, added_by, added_at)
-                VALUES (${body.space_id}, ${relId}, ${actor.id}, ${now}::timestamptz)
-                ON CONFLICT (space_id, entity_id) DO NOTHING`,
-            );
-          }
+            ${relId}, 'relationship', 'relationship', 1, ${relProps}::jsonb,
+            ${actor.id}, ${actor.id}, NULL, ${now}::timestamptz, ${now}::timestamptz
+          )`;
+          await tx`INSERT INTO relationship_edges (id, source_id, target_id, predicate)
+            VALUES (${relId}, ${phId}, ${rel.target_id}, ${rel.predicate})`;
+          await tx`INSERT INTO space_entities (space_id, entity_id, added_by, added_at)
+            VALUES (${body.space_id}, ${relId}, ${actor.id}, ${now}::timestamptz)
+            ON CONFLICT (space_id, entity_id) DO NOTHING`;
         }
-
-        // Optionally enqueue for drafting in the same transaction
-        if (body.enqueue_draft) {
-          const deadline = new Date(Date.now() + 3600_000).toISOString();
-          queries.push(
-            sql`INSERT INTO wiki_draft_queue (entity_id, depth, owner_agent, deadline, status, created_at)
-              VALUES (${phId}, 0, ${actor.id}, ${deadline}::timestamptz, 'pending', ${now}::timestamptz)
-              ON CONFLICT (entity_id) DO NOTHING`,
-          );
-        }
-
-        created.push({ id: phId, label: ph.label });
       }
-      return queries;
-    })(),
-  ]);
 
-  return c.json({ created: created.length, placeholders: created }, 201);
+      // Enqueue for drafting (ON CONFLICT DO NOTHING handles already-queued)
+      if (body.enqueue_draft) {
+        const deadline = new Date(Date.now() + 3600_000).toISOString();
+        await tx`INSERT INTO wiki_draft_queue (entity_id, depth, owner_agent, deadline, status, created_at)
+          VALUES (${phId}, 0, ${actor.id}, ${deadline}::timestamptz, 'pending', ${now}::timestamptz)
+          ON CONFLICT (entity_id) DO NOTHING`;
+      }
+    }
+
+    return { created, reused };
+  });
+
+  return c.json({
+    created: result.created.length,
+    reused: result.reused.length,
+    placeholders: [...result.created, ...result.reused],
+  }, 201);
 });
 
 // ---------------------------------------------------------------------------

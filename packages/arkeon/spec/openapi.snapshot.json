@@ -7327,6 +7327,7 @@
                 "schema": {
                   "properties": {
                     "created": {
+                      "description": "Number of new placeholders created",
                       "type": "integer"
                     },
                     "placeholders": {
@@ -7348,17 +7349,22 @@
                         "type": "object"
                       },
                       "type": "array"
+                    },
+                    "reused": {
+                      "description": "Number of existing placeholders/wikis reused (deduplication)",
+                      "type": "integer"
                     }
                   },
                   "required": [
                     "created",
+                    "reused",
                     "placeholders"
                   ],
                   "type": "object"
                 }
               }
             },
-            "description": "Placeholders created"
+            "description": "Placeholders created (or reused if duplicates existed)"
           },
           "400": {
             "content": {
