@@ -500,6 +500,80 @@ describe("API read endpoints", () => {
   });
 });
 
+describe("include=relationships on list endpoint", () => {
+  it("returns relationships alongside entities", async () => {
+    const data = await api("/entities?include=relationships");
+    expect(data.entities.length).toBeGreaterThan(0);
+    expect(data.relationships).toBeDefined();
+    expect(Array.isArray(data.relationships)).toBe(true);
+
+    // Should have relationship edges (we created linked wikis earlier)
+    expect(data.relationships.length).toBeGreaterThan(0);
+
+    // Each relationship should have the expected shape
+    const rel = data.relationships[0];
+    expect(rel.source_id).toBeTruthy();
+    expect(rel.target_id).toBeTruthy();
+    expect(rel.predicate).toBeTruthy();
+  });
+
+  it("does not return relationships without the flag", async () => {
+    const data = await api("/entities");
+    expect(data.relationships).toBeUndefined();
+  });
+
+  it("scopes relationships to the space filter", async () => {
+    const spaces = await api("/spaces");
+    const spaceId = spaces.spaces[0].id;
+    const data = await api(`/entities?space_id=${spaceId}&include=relationships`);
+
+    expect(data.entities.length).toBeGreaterThan(0);
+    expect(data.relationships).toBeDefined();
+
+    // All entities should be in the requested space
+    for (const e of data.entities) {
+      expect(e.space_id).toBe(spaceId);
+    }
+  });
+});
+
+describe("include=content on detail endpoint", () => {
+  it("returns file content when requested", async () => {
+    const entities = await getEntities();
+    const wiki = entities.find((e: any) => e.type === "wiki" && e.label === "Alan Turing");
+    expect(wiki).toBeTruthy();
+
+    const withContent = await api(`/entities/${wiki.id}?include=content`);
+    expect(withContent.content).toBeTruthy();
+    expect(typeof withContent.content).toBe("string");
+    // Content should contain the frontmatter and body
+    expect(withContent.content).toContain("Alan Turing");
+    expect(withContent.content).toContain("---");
+  });
+
+  it("does not return content without the flag", async () => {
+    const entities = await getEntities();
+    const wiki = entities.find((e: any) => e.type === "wiki");
+
+    const withoutContent = await api(`/entities/${wiki.id}`);
+    expect(withoutContent.content).toBeUndefined();
+  });
+
+  it("returns null content for missing files", async () => {
+    // Create an entity, then delete its file but keep the entity
+    const entities = await getEntities();
+    const wiki = entities.find((e: any) => e.type === "wiki" && e.label === "Quantum Entanglement");
+    expect(wiki).toBeTruthy();
+
+    // Delete the file manually (without going through the watcher)
+    const absPath = join(testDir, wiki.source_path);
+    if (existsSync(absPath)) unlinkSync(absPath);
+
+    const result = await api(`/entities/${wiki.id}?include=content`);
+    expect(result.content).toBeNull();
+  });
+});
+
 describe("entity deletion via API", () => {
   it("deletes an entity", async () => {
     const entities = await getEntities();
