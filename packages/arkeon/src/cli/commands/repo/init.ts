@@ -110,7 +110,7 @@ function writeFocusTemplate(cwd: string): void {
 
 function ensureGitignore(cwd: string): void {
   const gitignorePath = join(cwd, ".gitignore");
-  const entries = [".arkeon/state.json", ".arkeon/manifest.json", ".arkeon/focus.yaml"];
+  const entries = [".arkeon/state.json", ".arkeon/manifest.json"];
   if (existsSync(gitignorePath)) {
     const content = readFileSync(gitignorePath, "utf-8");
     const missing = entries.filter((e) => !content.includes(e));
