@@ -14,6 +14,7 @@ import { registerEntityContentCommands } from "./cli/commands/entities/index.js"
 import { registerGuideCommand } from "./cli/commands/guide/index.js";
 import { registerLocalCommands } from "./cli/commands/local/index.js";
 import { registerInstallCommands } from "./cli/commands/install/index.js";
+import { registerFocusCommand } from "./cli/commands/focus.js";
 import { registerRepoCommands } from "./cli/commands/repo/index.js";
 import { syncSkillsIfNeeded } from "./cli/lib/skill-sync.js";
 import { checkForUpdate } from "./cli/lib/version-check.js";
@@ -56,6 +57,7 @@ program.hook("preAction", (command) => {
 });
 
 registerRepoCommands(program);
+registerFocusCommand(program);
 registerInstallCommands(program);
 registerLocalCommands(program);
 registerAuthCommands(program);

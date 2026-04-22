@@ -225,8 +225,12 @@ async function processItem(row: QueueRow): Promise<void> {
     `${dossier.usage.turns} turns`,
   );
 
+  // Load space focus for drafting guidance
+  const spaceFocus = await api.getSpaceFocus(placeholder.spaceId);
+  const draftFocus = spaceFocus.draft || undefined;
+
   // --- Step 3: Draft ---
-  const { draft, usage: draftUsage } = await generateDraft(placeholder, dossier, row.depth);
+  const { draft, usage: draftUsage } = await generateDraft(placeholder, dossier, row.depth, draftFocus);
 
   if (!draft.can_draft) {
     console.log(`${tag} undraftable: ${draft.refused_reason}`);

@@ -16,6 +16,7 @@
  */
 
 import { getLlmClient, isLlmConfigured } from "../llm.js";
+import { buildPrompt } from "../worker-config.js";
 import { withSystemActorContext } from "../actor-context.js";
 import * as api from "./internal-api.js";
 
@@ -204,8 +205,14 @@ async function extractSubjects(
   content: string,
   sourceLabel: string,
   existing: ExistingExtraction[],
+  spaceFocus?: string,
 ): Promise<ExtractedSubject[]> {
   const { client, model } = getLlmClient("draft"); // use draft config — extraction needs more tokens than exists
+
+  // Merge space focus into the extraction prompt
+  const systemPrompt = spaceFocus
+    ? buildPrompt(EXTRACT_PROMPT, { mode: "append", text: spaceFocus })
+    : EXTRACT_PROMPT;
 
   const parts: string[] = [`Source document: "${sourceLabel}"\n\n${content.slice(0, 50_000)}`];
 
@@ -220,7 +227,7 @@ async function extractSubjects(
   const response = await client.chat.completions.create({
     model,
     messages: [
-      { role: "system", content: EXTRACT_PROMPT },
+      { role: "system", content: systemPrompt },
       { role: "user", content: parts.join("\n") },
     ],
     response_format: { type: "json_object" },
@@ -307,8 +314,12 @@ async function processItem(row: QueueRow): Promise<void> {
     `${tag} extracting from "${source.label}" (${source.content.length} chars, ${existing.length} known entities)`,
   );
 
+  // Load space focus for extraction guidance
+  const spaceFocus = await api.getSpaceFocus(source.spaceId);
+  const extractFocus = spaceFocus.extract || undefined;
+
   // Call LLM to identify subjects (passes existing subjects so it can focus on what's new)
-  const subjects = await extractSubjects(source.content, source.label, existing);
+  const subjects = await extractSubjects(source.content, source.label, existing, extractFocus);
   if (subjects.length === 0) {
     console.log(`${tag} no new subjects extracted`);
     await markComplete(row.entity_id, 0);

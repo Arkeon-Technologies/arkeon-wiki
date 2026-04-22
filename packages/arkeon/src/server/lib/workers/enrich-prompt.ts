@@ -112,13 +112,17 @@ function buildUserMessage(ctx: EnrichContext): string {
 // Main export
 // ---------------------------------------------------------------------------
 
-export async function generateEnrichment(ctx: EnrichContext): Promise<EnrichResult> {
+export async function generateEnrichment(ctx: EnrichContext, enrichFocus?: string): Promise<EnrichResult> {
   const { client, model, maxTokens } = getLlmClient("enrich");
+
+  const systemPrompt = enrichFocus
+    ? `${SYSTEM_PROMPT}\n\nAdditional guidance for this space:\n${enrichFocus}`
+    : SYSTEM_PROMPT;
 
   const response = await client.chat.completions.create({
     model,
     messages: [
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: systemPrompt },
       { role: "user", content: buildUserMessage(ctx) },
     ],
     response_format: { type: "json_object" },

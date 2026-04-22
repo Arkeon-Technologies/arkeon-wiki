@@ -4775,6 +4775,247 @@
         "x-arke-rules": []
       }
     },
+    "/spaces/{id}/focus": {
+      "delete": {
+        "operationId": "clearSpaceFocus",
+        "parameters": [
+          {
+            "description": "Space ULID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Space ULID",
+              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Focus cleared"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          }
+        },
+        "summary": "Clear all extraction focus prompts for a space",
+        "tags": [
+          "Spaces"
+        ],
+        "x-arke-auth": "required",
+        "x-arke-related": [
+          "PUT /spaces/{id}/focus"
+        ],
+        "x-arke-rules": []
+      },
+      "get": {
+        "operationId": "getSpaceFocus",
+        "parameters": [
+          {
+            "description": "Space ULID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Space ULID",
+              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "focus": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "description": "Per-worker focus prompts",
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "focus"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Current focus prompts"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          }
+        },
+        "summary": "Get extraction focus prompts for a space",
+        "tags": [
+          "Spaces"
+        ],
+        "x-arke-auth": "optional",
+        "x-arke-related": [
+          "PUT /spaces/{id}/focus"
+        ],
+        "x-arke-rules": []
+      },
+      "put": {
+        "description": "Set per-worker focus prompts that guide extraction and drafting. Merges with existing focus — omitted keys are preserved. Pass empty string to clear a single worker's focus.",
+        "operationId": "setSpaceFocus",
+        "parameters": [
+          {
+            "description": "Space ULID",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "description": "Space ULID",
+              "example": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+              "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$/i",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": {
+                  "description": "Focus prompt for a named worker",
+                  "type": "string"
+                },
+                "properties": {
+                  "draft": {
+                    "description": "Focus prompt for the draft worker — guides how wiki articles are written",
+                    "type": "string"
+                  },
+                  "extract": {
+                    "description": "Focus prompt for the extract worker — guides what subjects to extract from documents",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "focus": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "description": "Per-worker focus prompts",
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "focus"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Focus updated"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Bad request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found"
+          }
+        },
+        "summary": "Set extraction focus prompts for a space",
+        "tags": [
+          "Spaces"
+        ],
+        "x-arke-auth": "required",
+        "x-arke-related": [
+          "GET /spaces/{id}/focus",
+          "DELETE /spaces/{id}/focus"
+        ],
+        "x-arke-rules": [
+          "Focus prompts are appended to built-in worker prompts at processing time"
+        ]
+      }
+    },
     "/wiki": {
       "delete": {
         "operationId": "bulkDeleteWikis",

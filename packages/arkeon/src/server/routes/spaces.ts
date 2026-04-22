@@ -239,6 +239,77 @@ const removeSpaceEntityRoute = createRoute({
   },
 });
 
+const FocusBodySchema = z.object({
+  extract: z.string().optional().describe("Focus prompt for the extract worker — guides what subjects to extract from documents"),
+  draft: z.string().optional().describe("Focus prompt for the draft worker — guides how wiki articles are written"),
+}).catchall(z.string().describe("Focus prompt for a named worker"));
+
+const FocusResponseSchema = z.object({
+  focus: z.record(z.string(), z.string()).describe("Per-worker focus prompts"),
+});
+
+const setSpaceFocusRoute = createRoute({
+  method: "put",
+  path: "/{id}/focus",
+  operationId: "setSpaceFocus",
+  tags: ["Spaces"],
+  summary: "Set extraction focus prompts for a space",
+  description: "Set per-worker focus prompts that guide extraction and drafting. Merges with existing focus — omitted keys are preserved. Pass empty string to clear a single worker's focus.",
+  "x-arke-auth": "required",
+  "x-arke-related": ["GET /spaces/{id}/focus", "DELETE /spaces/{id}/focus"],
+  "x-arke-rules": ["Focus prompts are appended to built-in worker prompts at processing time"],
+  request: {
+    params: entityIdParams("Space ULID"),
+    body: { required: true, content: jsonContent(FocusBodySchema) },
+  },
+  responses: {
+    200: {
+      description: "Focus updated",
+      content: jsonContent(FocusResponseSchema),
+    },
+    ...errorResponses([400, 401, 403, 404]),
+  },
+});
+
+const getSpaceFocusRoute = createRoute({
+  method: "get",
+  path: "/{id}/focus",
+  operationId: "getSpaceFocus",
+  tags: ["Spaces"],
+  summary: "Get extraction focus prompts for a space",
+  "x-arke-auth": "optional",
+  "x-arke-related": ["PUT /spaces/{id}/focus"],
+  "x-arke-rules": [],
+  request: {
+    params: entityIdParams("Space ULID"),
+  },
+  responses: {
+    200: {
+      description: "Current focus prompts",
+      content: jsonContent(FocusResponseSchema),
+    },
+    ...errorResponses([404]),
+  },
+});
+
+const clearSpaceFocusRoute = createRoute({
+  method: "delete",
+  path: "/{id}/focus",
+  operationId: "clearSpaceFocus",
+  tags: ["Spaces"],
+  summary: "Clear all extraction focus prompts for a space",
+  "x-arke-auth": "required",
+  "x-arke-related": ["PUT /spaces/{id}/focus"],
+  "x-arke-rules": [],
+  request: {
+    params: entityIdParams("Space ULID"),
+  },
+  responses: {
+    204: { description: "Focus cleared" },
+    ...errorResponses([401, 403, 404]),
+  },
+});
+
 export const spacesRouter = createRouter();
 
 spacesRouter.openapi(createSpaceRoute, async (c) => {
@@ -509,3 +580,98 @@ spacesRouter.openapi(removeSpaceEntityRoute, async (c) => {
   return new Response(null, { status: 204 });
 });
 
+// ---------------------------------------------------------------------------
+// Focus routes
+// ---------------------------------------------------------------------------
+
+spacesRouter.openapi(setSpaceFocusRoute, async (c) => {
+  const actor = requireActor(c);
+  const spaceId = c.req.param("id");
+  const body = await parseJsonBody<Record<string, unknown>>(c);
+  const sql = createSql();
+  const now = new Date().toISOString();
+
+  const space = await fetchSpaceForActor(actor, spaceId);
+  if (!space) {
+    throw new ApiError(404, "not_found", "Space not found");
+  }
+
+  // Validate: all values must be strings
+  const focus: Record<string, string> = {};
+  for (const [key, val] of Object.entries(body)) {
+    if (typeof val !== "string") {
+      throw new ApiError(400, "invalid_body", `focus.${key} must be a string`);
+    }
+    focus[key] = val;
+  }
+
+  if (Object.keys(focus).length === 0) {
+    throw new ApiError(400, "invalid_body", "At least one focus prompt is required");
+  }
+
+  // Merge with existing focus (omitted keys are preserved, empty strings clear a key)
+  const existingFocus = (space.properties?.focus as Record<string, string>) ?? {};
+  const merged: Record<string, string> = { ...existingFocus };
+  for (const [key, val] of Object.entries(focus)) {
+    if (val === "") {
+      delete merged[key];
+    } else {
+      merged[key] = val;
+    }
+  }
+
+  // Update properties with new focus
+  const updatedProps = { ...space.properties, focus: merged };
+
+  const txResults = await sql.transaction([
+    ...setActorContext(sql, actor),
+    sql.query(
+      `UPDATE spaces SET properties = $1::jsonb, updated_at = $2::timestamptz WHERE id = $3 RETURNING *`,
+      [JSON.stringify(updatedProps), now, spaceId],
+    ),
+  ]);
+
+  const updated = (txResults[txResults.length - 1] as SpaceRecord[])[0];
+  if (!updated) {
+    throw new ApiError(404, "not_found", "Space not found");
+  }
+
+  return c.json({ focus: merged }, 200);
+});
+
+spacesRouter.openapi(getSpaceFocusRoute, async (c) => {
+  const spaceId = c.req.param("id");
+  const actor = c.get("actor") ?? null;
+
+  const space = await fetchSpaceForActor(actor, spaceId);
+  if (!space) {
+    throw new ApiError(404, "not_found", "Space not found");
+  }
+
+  const focus = (space.properties?.focus as Record<string, string>) ?? {};
+  return c.json({ focus }, 200);
+});
+
+spacesRouter.openapi(clearSpaceFocusRoute, async (c) => {
+  const actor = requireActor(c);
+  const spaceId = c.req.param("id");
+  const sql = createSql();
+  const now = new Date().toISOString();
+
+  const space = await fetchSpaceForActor(actor, spaceId);
+  if (!space) {
+    throw new ApiError(404, "not_found", "Space not found");
+  }
+
+  const { focus: _, ...restProps } = space.properties ?? {};
+
+  await sql.transaction([
+    ...setActorContext(sql, actor),
+    sql.query(
+      `UPDATE spaces SET properties = $1::jsonb, updated_at = $2::timestamptz WHERE id = $3`,
+      [JSON.stringify(restProps), now, spaceId],
+    ),
+  ]);
+
+  return new Response(null, { status: 204 });
+});

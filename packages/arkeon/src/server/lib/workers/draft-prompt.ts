@@ -38,7 +38,7 @@ export interface DraftResult {
 
 const MAX_DEPTH = 2;
 
-function buildSystemPrompt(depth: number): string {
+function buildSystemPrompt(depth: number, draftFocus?: string): string {
   const depthRemaining = MAX_DEPTH - depth;
 
   return `You are a wiki author for a collaborative knowledge graph. Given a subject entity and a research dossier, write a wiki article or determine that there is insufficient information.
@@ -78,7 +78,8 @@ Rules for metadata:
 - keywords: 3-10 search terms (acronyms, alternate names, related concepts)
 - short_description: 1-2 sentences shown in search previews
 - aliases: alternate titles/spellings (optional, only if the subject has well-known alternatives)
-- subject_type: semantic type like person, organization, concept, event, place, book, theory (optional)`;
+- subject_type: semantic type like person, organization, concept, event, place, book, theory (optional)`
+  + (draftFocus ? `\n\nAdditional guidance for this space:\n${draftFocus}` : "");
 }
 
 function buildUserMessage(placeholder: PlaceholderInfo, dossier: Dossier): string {
@@ -148,13 +149,14 @@ export async function generateDraft(
   placeholder: PlaceholderInfo,
   dossier: Dossier,
   depth: number,
+  draftFocus?: string,
 ): Promise<DraftResult> {
   const { client, model, maxTokens } = getLlmClient("draft");
 
   const response = await client.chat.completions.create({
     model,
     messages: [
-      { role: "system", content: buildSystemPrompt(depth) },
+      { role: "system", content: buildSystemPrompt(depth, draftFocus) },
       { role: "user", content: buildUserMessage(placeholder, dossier) },
     ],
     response_format: { type: "json_object" },

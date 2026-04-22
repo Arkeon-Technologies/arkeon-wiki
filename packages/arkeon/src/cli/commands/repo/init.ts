@@ -9,7 +9,7 @@
  */
 
 import type { Command } from "commander";
-import { existsSync, readFileSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import { apiPost } from "../../lib/api-client.js";
@@ -86,9 +86,31 @@ function resolveApiUrl(opts: { apiUrl?: string; instance?: string }): string {
   return "http://localhost:8000";
 }
 
+const FOCUS_TEMPLATE = `# Worker focus prompts — guide what the wiki extracts and how it writes.
+# Edit these prompts, then run \`arkeon-wiki focus\` to apply.
+# Keys correspond to worker names. Current workers: extract, draft, enrich.
+
+# What subjects to extract from documents
+extract: ""
+
+# How to write new wiki articles
+draft: ""
+
+# How to update existing wikis when new sources arrive (falls back to draft if empty)
+enrich: ""
+`;
+
+function writeFocusTemplate(cwd: string): void {
+  const focusPath = join(cwd, ".arkeon", "focus.yaml");
+  if (existsSync(focusPath)) return;
+  const dir = join(cwd, ".arkeon");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(focusPath, FOCUS_TEMPLATE);
+}
+
 function ensureGitignore(cwd: string): void {
   const gitignorePath = join(cwd, ".gitignore");
-  const entries = [".arkeon/state.json", ".arkeon/manifest.json"];
+  const entries = [".arkeon/state.json", ".arkeon/manifest.json", ".arkeon/focus.yaml"];
   if (existsSync(gitignorePath)) {
     const content = readFileSync(gitignorePath, "utf-8");
     const missing = entries.filter((e) => !content.includes(e));
@@ -171,6 +193,9 @@ export function registerInitCommand(program: Command): void {
           },
           cwd,
         );
+
+        // Write focus.yaml template for worker prompt customization
+        writeFocusTemplate(cwd);
 
         // Gitignore the state file (contains no secrets but keep it out of version control by default)
         ensureGitignore(cwd);

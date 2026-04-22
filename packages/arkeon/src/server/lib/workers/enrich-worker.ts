@@ -181,7 +181,11 @@ async function processItem(row: QueueRow): Promise<void> {
     incorporatedSources,
   };
 
-  const { response: enrichResult, usage } = await generateEnrichment(ctx);
+  // Load space focus for enrichment guidance
+  const spaceFocus = await api.getSpaceFocus(row.space_id);
+  const enrichFocus = spaceFocus.enrich || spaceFocus.draft || undefined;
+
+  const { response: enrichResult, usage } = await generateEnrichment(ctx, enrichFocus);
 
   console.log(
     `${tag} LLM complete: enriched=${enrichResult.enriched} ` +

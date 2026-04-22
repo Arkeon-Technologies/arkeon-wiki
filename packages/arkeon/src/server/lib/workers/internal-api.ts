@@ -106,6 +106,18 @@ interface ApiEntity {
   space_ids?: string[];
 }
 
+interface ApiSpace {
+  id: string;
+  name: string;
+  description: string | null;
+  owner_id: string;
+  status: string;
+  entity_count: number;
+  properties: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
 interface ApiRelationship {
   id: string;
   predicate: string;
@@ -346,5 +358,21 @@ export async function postEnrich(
   return post<Record<string, unknown>>(`/wiki/${wikiId}/enrich`, { source_id: sourceId });
 }
 
+/**
+ * Fetch a space by ID. Returns null if not found.
+ */
+export async function getSpace(id: string): Promise<ApiSpace | null> {
+  const data = await get<{ space: ApiSpace } | null>(`/spaces/${id}`);
+  return data?.space ?? null;
+}
+
+/**
+ * Read space focus prompts. Returns empty object if none set.
+ */
+export async function getSpaceFocus(spaceId: string): Promise<Record<string, string>> {
+  const data = await get<{ focus: Record<string, string> } | null>(`/spaces/${spaceId}/focus`);
+  return data?.focus ?? {};
+}
+
 // Re-export the ApiEntity type for consumers
-export type { ApiEntity, ApiRelationship };
+export type { ApiEntity, ApiRelationship, ApiSpace };

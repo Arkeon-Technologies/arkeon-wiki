@@ -41,6 +41,27 @@ If not initialized, run:
 arkeon-wiki init
 ```
 
+## 0. Set extraction focus (if not already configured)
+
+Check if the space has focus prompts configured:
+
+```bash
+arkeon-wiki focus --show
+```
+
+If no focus is set (status is "empty"), ask the user what they want this wiki to cover. For example:
+- What themes or topics should the wiki focus on?
+- Should it prioritize cross-cutting connections between documents, or per-document details?
+- What kind of wiki articles should it produce? (character profiles, thematic analyses, concept maps, etc.)
+
+Based on their answer, edit `.arkeon/focus.yaml` with appropriate prompts for the `extract` and `draft` workers, then apply:
+
+```bash
+arkeon-wiki focus
+```
+
+If focus is already configured, show the user what it is and ask if they want to change it before proceeding.
+
 ## 1. Scan for changes
 
 Check what files are new or modified compared to the graph:

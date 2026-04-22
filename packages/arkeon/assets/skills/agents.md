@@ -57,6 +57,7 @@ arkeon-wiki watch                 # live queue monitoring dashboard
 
 ### Key workflows
 
+- **Set extraction focus:** Before first ingest, ask the user what the wiki should cover. Edit `.arkeon/focus.yaml` with prompts for the `extract` and `draft` workers, then run `arkeon-wiki focus` to apply. Use `arkeon-wiki focus --show` to check current focus.
 - **Add documents:** `arkeon-wiki init <space>`, then `arkeon-wiki add <files>`
 - **Monitor drafting:** `arkeon-wiki watch` — shows extraction and drafting queue progress
 - **Pull and edit:** `arkeon-wiki pull` → edit markdown → `arkeon-wiki add wiki/`
