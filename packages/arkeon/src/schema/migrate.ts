@@ -23,15 +23,8 @@ import postgres from "postgres";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export interface MigrateOptions {
-  /** Superuser connection string — must have permission to run DDL. */
+  /** Connection string — must have permission to run DDL. */
   databaseUrl: string;
-  /**
-   * Password to assign to the arke_app role. Substituted into
-   * 001-foundation.sql via the :'arke_app_password' template token. Defaults
-   * to the legacy "arke" password for ad-hoc local dev runs; the CLI
-   * passes the value from ~/.arkeon-wiki/secrets.json at start time.
-   */
-  arkeAppPassword?: string;
 }
 
 export async function runMigrations(opts: MigrateOptions): Promise<void> {
@@ -39,9 +32,7 @@ export async function runMigrations(opts: MigrateOptions): Promise<void> {
   console.log(`Deploying schema to: ${url.replace(/:[^@]*@/, ":***@")}`);
   console.log("");
 
-  const templateVars: Record<string, string> = {
-    arke_app_password: opts.arkeAppPassword ?? "arke",
-  };
+  const templateVars: Record<string, string> = {};
 
   const schemaDir = await locateSchemaDir();
   const files = (await readdir(schemaDir))

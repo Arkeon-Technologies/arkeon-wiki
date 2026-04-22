@@ -2,194 +2,145 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `arkeon init [space-name]` — bind a repository to an Arkeon space.
+ * `arkeon-wiki init [name]` — register the current directory as a space.
  *
- * Creates an agent actor, a space, and writes .arkeon/state.json.
- * API key is stored in the global credential store, not in state.json.
+ * Creates a space in the running Arkeon instance with watch_dir pointing
+ * to the current directory. Writes .arkeon/state.json with the space ID.
+ * Triggers an initial sync of all eligible files.
  */
 
 import type { Command } from "commander";
-import { existsSync, readFileSync, appendFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
 
-import { apiPost } from "../../lib/api-client.js";
-import { credentials } from "../../lib/credentials.js";
-import { findInstanceByName, listInstances, resolveAdminKeyForUrl, saveInstanceActor } from "../../lib/instances.js";
-import { installAgentsMd } from "../install/providers.js";
-import { isProcessAlive, readSecrets } from "../../lib/local-runtime.js";
+import { DEFAULT_API_PORT } from "../../lib/local-runtime.js";
 import { output } from "../../lib/output.js";
-import { saveRepoState, stateFilePath } from "../../lib/repo-state.js";
+import { loadRepoState, type RepoState } from "../../lib/repo-state.js";
 
 interface InitOptions {
   apiUrl?: string;
-  instance?: string;
-  force?: boolean;
-}
-
-type ActorResponse = {
-  actor: { id: string };
-  api_key: string;
-};
-
-type SpaceResponse = {
-  space: { id: string; name: string };
-};
-
-function resolveAdminKey(apiUrl: string): string {
-  // 1. Env var
-  const envKey = process.env.ARKE_ADMIN_KEY?.trim();
-  if (envKey) return envKey;
-
-  // 2. Instance registry — find the stack serving this URL and read its secrets
-  const registryKey = resolveAdminKeyForUrl(apiUrl);
-  if (registryKey) return registryKey;
-
-  // 3. Default ARKEON_WIKI_HOME secrets.json (fallback for single-stack setups)
-  const secrets = readSecrets();
-  if (secrets?.adminBootstrapKey) return secrets.adminBootstrapKey;
-
-  throw new Error(
-    "No admin key found for " + apiUrl + ". Set ARKE_ADMIN_KEY or start the local stack first (`arkeon up`).",
-  );
-}
-
-function resolveApiUrl(opts: { apiUrl?: string; instance?: string }): string {
-  if (opts.apiUrl) return opts.apiUrl.replace(/\/$/, "");
-  if (process.env.ARKE_API_URL) return process.env.ARKE_API_URL.replace(/\/$/, "");
-
-  // --instance flag: look up by name
-  if (opts.instance) {
-    const inst = findInstanceByName(opts.instance);
-    if (!inst) {
-      const running = listInstances().filter((i) => isProcessAlive(i.pid));
-      const names = running.map((i) => i.name).join(", ");
-      throw new Error(
-        `No instance named "${opts.instance}". Running instances: ${names || "(none)"}`,
-      );
-    }
-    return inst.api_url;
-  }
-
-  // Auto-detect: if exactly one instance is running, use it
-  const running = listInstances().filter((i) => isProcessAlive(i.pid));
-  if (running.length === 1) {
-    return running[0]!.api_url;
-  }
-  if (running.length > 1) {
-    const list = running.map((i) => `  ${i.name} — ${i.api_url}`).join("\n");
-    throw new Error(
-      `Multiple Arkeon instances are running:\n${list}\n\n` +
-      `Specify which one with: arkeon init --instance <name>`,
-    );
-  }
-
-  return "http://localhost:8000";
-}
-
-function ensureGitignore(cwd: string): void {
-  const gitignorePath = join(cwd, ".gitignore");
-  const entries = [".arkeon/state.json", ".arkeon/manifest.json"];
-  if (existsSync(gitignorePath)) {
-    const content = readFileSync(gitignorePath, "utf-8");
-    const missing = entries.filter((e) => !content.includes(e));
-    if (missing.length === 0) return;
-    appendFileSync(gitignorePath, `\n${missing.join("\n")}\n`);
-  } else {
-    appendFileSync(gitignorePath, `${entries.join("\n")}\n`);
-  }
 }
 
 export function registerInitCommand(program: Command): void {
   program
     .command("init")
-    .description("Bind this repo to an Arkeon space — creates a space, an agent actor, and writes .arkeon/state.json")
-    .argument("[space-name]", "Name for the space (defaults to directory name)")
-    .option("--api-url <url>", "Override API base URL")
-    .option("--instance <name>", "Connect to a named instance (from `arkeon up --name`)")
-    .option("--force", "Re-initialize even if .arkeon/state.json exists")
-    .action(async (spaceName: string | undefined, opts: InitOptions) => {
+    .argument("[name]", "Space name (defaults to directory name)")
+    .description("Register this directory as an Arkeon space")
+    .option("--api-url <url>", "API URL (default: http://localhost:8000)")
+    .action(async (name: string | undefined, options: InitOptions) => {
       try {
-        const cwd = process.cwd();
-
-        // Check if already initialized
-        if (!opts.force && existsSync(stateFilePath(cwd))) {
-          output.error(
-            new Error(".arkeon/state.json already exists. Use --force to re-initialize."),
-            { operation: "init" },
-          );
-          process.exitCode = 1;
-          return;
-        }
-
-        const apiUrl = resolveApiUrl(opts);
-        const adminKey = resolveAdminKey(apiUrl);
-        const name = spaceName ?? basename(cwd);
-
-        // Verify stack is reachable
-        output.progress(`Connecting to ${apiUrl}...`);
-        try {
-          const healthResp = await fetch(`${apiUrl}/health`);
-          if (!healthResp.ok) throw new Error(`Health check returned ${healthResp.status}`);
-        } catch (err) {
-          throw new Error(
-            `Cannot reach ${apiUrl}. Is the stack running? Try \`arkeon up\` first.\n(${(err as Error).message})`,
-          );
-        }
-
-        // Create agent actor
-        output.progress("Creating agent actor...");
-        const actorResp = await apiPost<ActorResponse>(apiUrl, "/actors", adminKey, {
-          kind: "agent",
-          properties: { label: `ingestor-${name}` },
-        });
-        const actorId = actorResp.actor.id;
-        const actorApiKey = actorResp.api_key;
-
-        // Store key in global credential store + instance actor registry
-        credentials.saveActorKey(actorId, actorApiKey, `ingestor-${name}`);
-        saveInstanceActor(apiUrl, "ingestor", actorId);
-
-        // Create space (using the new actor's key — actor becomes owner)
-        output.progress(`Creating space "${name}"...`);
-        const spaceResp = await apiPost<SpaceResponse>(apiUrl, "/spaces", actorApiKey, {
-          name,
-          description: `Repository: ${name}`,
-          properties: { repo_root: cwd },
-        });
-
-        // Write state file
-        saveRepoState(
-          {
-            api_url: apiUrl,
-            space_id: spaceResp.space.id,
-            space_name: spaceResp.space.name,
-            current_actor: "ingestor",
-            actors: {
-              ingestor: { actor_id: actorId },
-            },
-            created_at: new Date().toISOString(),
-          },
-          cwd,
-        );
-
-        // Gitignore the state file (contains no secrets but keep it out of version control by default)
-        ensureGitignore(cwd);
-
-        // Write AGENTS.md for universal AI coding tool support
-        installAgentsMd();
-
-        output.result({
-          operation: "init",
-          space_id: spaceResp.space.id,
-          space_name: spaceResp.space.name,
-          actor_id: actorId,
-          api_url: apiUrl,
-          state_file: stateFilePath(cwd),
-          next: "arkeon diff / arkeon add <files>",
-        });
+        await runInit(name, options);
       } catch (error) {
         output.error(error, { operation: "init" });
         process.exitCode = 1;
       }
     });
+}
+
+async function runInit(name: string | undefined, options: InitOptions): Promise<void> {
+  const cwd = process.cwd();
+  const spaceName = name ?? basename(cwd);
+  const apiUrl = options.apiUrl ?? process.env.ARKE_API_URL ?? `http://localhost:${DEFAULT_API_PORT}`;
+
+  // Check if already initialized
+  const existing = loadRepoState();
+  if (existing) {
+    console.log(`This directory is already initialized (space: ${existing.space_name}).`);
+    console.log(`Space ID: ${existing.space_id}`);
+    return;
+  }
+
+  // Create space via API
+  const res = await fetch(`${apiUrl}/spaces`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: spaceName, watch_dir: resolve(cwd) }),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as Record<string, unknown>;
+    throw new Error(
+      `Failed to create space: ${res.status} ${(body as { error?: { message?: string } }).error?.message ?? res.statusText}`,
+    );
+  }
+
+  const space = (await res.json()) as { id: string; name: string; watch_dir: string };
+
+  // Write .arkeon/state.json
+  const arkeonDir = join(cwd, ".arkeon");
+  if (!existsSync(arkeonDir)) mkdirSync(arkeonDir, { recursive: true });
+
+  const state: RepoState = {
+    api_url: apiUrl,
+    space_id: space.id,
+    space_name: space.name,
+    created_at: new Date().toISOString(),
+  };
+  writeFileSync(join(arkeonDir, "state.json"), JSON.stringify(state, null, 2));
+
+  // Add .arkeon/ to .gitignore if it exists
+  const gitignorePath = join(cwd, ".gitignore");
+  if (existsSync(gitignorePath)) {
+    const gitignoreContent = readFileSync(gitignorePath, "utf-8");
+    if (!gitignoreContent.includes(".arkeon/")) {
+      writeFileSync(gitignorePath, `${gitignoreContent.trimEnd()}\n.arkeon/\n`);
+    }
+  }
+
+  // Create wiki/ directory
+  const wikiDir = join(cwd, "wiki");
+  if (!existsSync(wikiDir)) mkdirSync(wikiDir, { recursive: true });
+
+  // Trigger initial sync of existing files
+  const files = walkFiles(cwd);
+  if (files.length > 0) {
+    console.log(`[arkeon-wiki] Syncing ${files.length} files...`);
+    const syncRes = await fetch(`${apiUrl}/spaces/${space.id}/sync`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ files }),
+    });
+    if (syncRes.ok) {
+      const body = (await syncRes.json()) as { results: Array<{ action: string }> };
+      const created = body.results.filter((r) => r.action === "created").length;
+      const updated = body.results.filter((r) => r.action === "updated").length;
+      console.log(`[arkeon-wiki] Synced: ${created} created, ${updated} updated`);
+    }
+  }
+
+  output.result({
+    operation: "init",
+    space_id: space.id,
+    space_name: space.name,
+    watch_dir: resolve(cwd),
+    files_synced: files.length,
+  });
+}
+
+// Dirs to skip when walking
+const IGNORE_DIRS = new Set([".arkeon", ".git", "node_modules", ".claude", "__pycache__", ".venv"]);
+
+// File extensions to index
+const INDEX_EXTENSIONS = new Set([".md", ".txt", ".json", ".csv", ".xml", ".html", ".rst"]);
+
+function walkFiles(root: string, prefix = ""): string[] {
+  const results: string[] = [];
+
+  for (const entry of readdirSync(join(root, prefix), { withFileTypes: true })) {
+    if (entry.name.startsWith(".") && entry.name !== ".") continue;
+
+    const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+
+    if (entry.isDirectory()) {
+      if (IGNORE_DIRS.has(entry.name)) continue;
+      results.push(...walkFiles(root, relativePath));
+    } else if (entry.isFile()) {
+      const ext = entry.name.slice(entry.name.lastIndexOf(".")).toLowerCase();
+      if (INDEX_EXTENSIONS.has(ext)) {
+        results.push(relativePath);
+      }
+    }
+  }
+
+  return results;
 }
