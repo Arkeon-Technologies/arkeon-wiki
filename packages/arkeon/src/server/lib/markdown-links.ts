@@ -34,16 +34,18 @@ export function extractMarkdownLinks(content: string): MarkdownLink[] {
     const text = match[1];
     let path = match[2];
 
-    // Skip URLs, anchors, and non-md links
+    // Skip URLs and anchors
     if (path.startsWith("http://") || path.startsWith("https://")) continue;
     if (path.startsWith("#")) continue;
-    if (!path.endsWith(".md")) continue;
 
     // Strip any anchor fragment from the path
     const hashIndex = path.indexOf("#");
     if (hashIndex !== -1) {
       path = path.slice(0, hashIndex);
     }
+
+    // Only index .md links
+    if (!path.endsWith(".md")) continue;
 
     links.push({ text, path });
   }
