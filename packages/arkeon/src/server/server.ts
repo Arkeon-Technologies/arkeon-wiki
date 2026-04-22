@@ -12,6 +12,7 @@ import { serve } from "@hono/node-server";
 import type { AddressInfo } from "node:net";
 
 import { createApp } from "./app.js";
+import { startAllWatchers, stopAllWatchers } from "./lib/fs-watcher.js";
 
 export interface ArkeonApiConfig {
   port?: number;
@@ -36,8 +37,13 @@ export async function startApi(config: ArkeonApiConfig = {}): Promise<ArkeonApi>
 
   const address = server.address() as AddressInfo;
 
+  // Start file watchers for all registered spaces
+  await startAllWatchers();
+
   async function stop(opts: { drainTimeoutMs?: number } = {}): Promise<void> {
     const DRAIN_TIMEOUT_MS = opts.drainTimeoutMs ?? 10_000;
+
+    stopAllWatchers();
 
     const drainPromise = new Promise<void>((resolve, reject) =>
       server.close((err) => (err ? reject(err) : resolve())),

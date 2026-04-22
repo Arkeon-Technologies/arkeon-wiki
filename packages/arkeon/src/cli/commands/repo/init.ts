@@ -4,13 +4,12 @@
 /**
  * `arkeon-wiki init [name]` — register the current directory as a space.
  *
- * Creates a space in the running Arkeon instance with watch_dir pointing
- * to the current directory. Writes .arkeon/state.json with the space ID.
- * Triggers an initial sync of all eligible files.
+ * Creates a space in the running Arkeon instance. The daemon automatically
+ * starts watching the directory and syncs all files.
  */
 
 import type { Command } from "commander";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
 import { DEFAULT_API_PORT } from "../../lib/local-runtime.js";
@@ -50,7 +49,7 @@ async function runInit(name: string | undefined, options: InitOptions): Promise<
     return;
   }
 
-  // Create space via API
+  // Create space via API — the server will automatically start watching
   const res = await fetch(`${apiUrl}/spaces`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -78,7 +77,7 @@ async function runInit(name: string | undefined, options: InitOptions): Promise<
   };
   writeFileSync(join(arkeonDir, "state.json"), JSON.stringify(state, null, 2));
 
-  // Add .arkeon/ to .gitignore if it exists
+  // Add .arkeon/ to .gitignore
   const gitignorePath = join(cwd, ".gitignore");
   if (existsSync(gitignorePath)) {
     const gitignoreContent = readFileSync(gitignorePath, "utf-8");
@@ -91,56 +90,11 @@ async function runInit(name: string | undefined, options: InitOptions): Promise<
   const wikiDir = join(cwd, "wiki");
   if (!existsSync(wikiDir)) mkdirSync(wikiDir, { recursive: true });
 
-  // Trigger initial sync of existing files
-  const files = walkFiles(cwd);
-  if (files.length > 0) {
-    console.log(`[arkeon-wiki] Syncing ${files.length} files...`);
-    const syncRes = await fetch(`${apiUrl}/spaces/${space.id}/sync`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ files }),
-    });
-    if (syncRes.ok) {
-      const body = (await syncRes.json()) as { results: Array<{ action: string }> };
-      const created = body.results.filter((r) => r.action === "created").length;
-      const updated = body.results.filter((r) => r.action === "updated").length;
-      console.log(`[arkeon-wiki] Synced: ${created} created, ${updated} updated`);
-    }
-  }
-
   output.result({
     operation: "init",
     space_id: space.id,
     space_name: space.name,
     watch_dir: resolve(cwd),
-    files_synced: files.length,
+    hint: "The daemon is now watching this directory. Any files you add will be synced automatically.",
   });
-}
-
-// Dirs to skip when walking
-const IGNORE_DIRS = new Set([".arkeon", ".git", "node_modules", ".claude", "__pycache__", ".venv"]);
-
-// File extensions to index
-const INDEX_EXTENSIONS = new Set([".md", ".txt", ".json", ".csv", ".xml", ".html", ".rst"]);
-
-function walkFiles(root: string, prefix = ""): string[] {
-  const results: string[] = [];
-
-  for (const entry of readdirSync(join(root, prefix), { withFileTypes: true })) {
-    if (entry.name.startsWith(".") && entry.name !== ".") continue;
-
-    const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
-
-    if (entry.isDirectory()) {
-      if (IGNORE_DIRS.has(entry.name)) continue;
-      results.push(...walkFiles(root, relativePath));
-    } else if (entry.isFile()) {
-      const ext = entry.name.slice(entry.name.lastIndexOf(".")).toLowerCase();
-      if (INDEX_EXTENSIONS.has(ext)) {
-        results.push(relativePath);
-      }
-    }
-  }
-
-  return results;
 }

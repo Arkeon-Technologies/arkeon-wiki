@@ -6,10 +6,11 @@ import type { AppBindings } from "../types.js";
 import { createSql } from "../lib/sql.js";
 import { generateUlid } from "../lib/ids.js";
 import { ApiError } from "../lib/errors.js";
+import { startWatching } from "../lib/fs-watcher.js";
 
 export const spacesRouter = new Hono<AppBindings>();
 
-// POST /spaces — register a new space
+// POST /spaces — register a new space and start watching
 spacesRouter.post("/", async (c) => {
   const body = await c.req.json<{ name: string; watch_dir: string }>();
 
@@ -25,7 +26,14 @@ spacesRouter.post("/", async (c) => {
     VALUES (${id}, ${body.name}, ${body.watch_dir})
   `;
 
-  return c.json({ id, name: body.name, watch_dir: body.watch_dir }, 201);
+  const space = { id, name: body.name, watch_dir: body.watch_dir };
+
+  // Start watching + reconcile in the background (don't block the response)
+  startWatching(space).catch((err) => {
+    console.error(`[spaces] Failed to start watcher for "${body.name}":`, err.message);
+  });
+
+  return c.json(space, 201);
 });
 
 // GET /spaces — list spaces
@@ -60,33 +68,4 @@ spacesRouter.get("/:id", async (c) => {
   }
 
   return c.json(rows[0]);
-});
-
-// POST /spaces/:id/sync — trigger sync for a file or directory
-spacesRouter.post("/:id/sync", async (c) => {
-  const spaceId = c.req.param("id");
-  const sql = createSql();
-
-  const spaceRows = await sql`SELECT id, name, watch_dir FROM spaces WHERE id = ${spaceId}`;
-  if (spaceRows.length === 0) {
-    throw new ApiError(404, "not_found", "Space not found");
-  }
-
-  const space = spaceRows[0] as { id: string; name: string; watch_dir: string };
-  const body = await c.req.json<{ files: string[] }>().catch(() => ({ files: [] as string[] }));
-
-  if (!body.files || body.files.length === 0) {
-    throw new ApiError(400, "validation_error", "files array is required");
-  }
-
-  // Dynamic import to avoid circular dependency
-  const { syncFile } = await import("../lib/sync.js");
-
-  const results = [];
-  for (const file of body.files) {
-    const result = await syncFile(space, file);
-    results.push(result);
-  }
-
-  return c.json({ results });
 });
