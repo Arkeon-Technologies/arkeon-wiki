@@ -235,7 +235,64 @@ export async function removeByPath(spaceId: string, relativePath: string): Promi
 }
 
 /**
+ * Resolve links for a single wiki entity. Called during the second pass
+ * of syncDirectory() after all entities have been created.
+ */
+async function resolveLinks(space: Space, relativePath: string): Promise<{ resolved: number; dangling: number }> {
+  const absPath = join(space.watch_dir, relativePath);
+  const content = readFileSync(absPath, "utf-8");
+  const parsed = parseFrontmatter(content);
+  const links = extractMarkdownLinks(parsed.body);
+
+  if (links.length === 0) return { resolved: 0, dangling: 0 };
+
+  const sql = createSql();
+
+  // Look up the entity ID for this file
+  const rows = await sql`
+    SELECT id FROM entities WHERE space_id = ${space.id} AND source_path = ${relativePath}
+  `;
+  if (rows.length === 0) return { resolved: 0, dangling: 0 };
+  const entityId = rows[0].id as string;
+
+  return withTransaction(async (tx) => {
+    // Clear existing relationships and re-resolve
+    await tx`DELETE FROM relationships WHERE source_id = ${entityId}`;
+
+    let resolved = 0;
+    let dangling = 0;
+
+    for (const link of links) {
+      const targetPath = resolveRelativeLink(relativePath, link.path);
+      const target = await tx`
+        SELECT id FROM entities WHERE space_id = ${space.id} AND source_path = ${targetPath}
+      `;
+
+      if (target.length > 0) {
+        const relId = generateUlid();
+        await tx`
+          INSERT INTO relationships (id, source_id, target_id, predicate, link_text, link_path)
+          VALUES (${relId}, ${entityId}, ${target[0].id}, 'references', ${link.text}, ${link.path})
+          ON CONFLICT (source_id, target_id, predicate) DO UPDATE
+          SET link_text = EXCLUDED.link_text, link_path = EXCLUDED.link_path
+        `;
+        resolved++;
+      } else {
+        dangling++;
+      }
+    }
+
+    return { resolved, dangling };
+  });
+}
+
+/**
  * Sync an entire directory by walking all files and calling syncFile().
+ *
+ * Two passes:
+ *   1. Create/update all entities (links may dangle if targets don't exist yet)
+ *   2. Re-resolve all wiki links (now that all entities exist)
+ *
  * Returns a summary of actions taken.
  */
 export async function syncDirectory(
@@ -244,10 +301,16 @@ export async function syncDirectory(
 ): Promise<{ created: number; updated: number; unchanged: number; removed: number }> {
   const summary = { created: 0, updated: 0, unchanged: 0, removed: 0 };
 
-  // Sync all files
+  // Pass 1: create/update all entities
   for (const file of files) {
     const result = await syncFile(space, file);
     summary[result.action]++;
+  }
+
+  // Pass 2: re-resolve links for all wiki files (now all targets exist)
+  const wikiFiles = files.filter((f) => f.startsWith("wiki/") && f.endsWith(".md"));
+  for (const file of wikiFiles) {
+    await resolveLinks(space, file);
   }
 
   // Find entities in Postgres that no longer exist on disk
