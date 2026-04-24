@@ -6,7 +6,7 @@ import { Hono } from "hono";
 import type { AppBindings } from "./types.js";
 import { requestContextMiddleware } from "./middleware/request-context.js";
 import { ApiError, errorBody } from "./lib/errors.js";
-import { mapPostgresError } from "./lib/pg-errors.js";
+import { mapDatabaseError } from "./lib/db-errors.js";
 import { createSql } from "./lib/sql.js";
 import { spacesRouter } from "./routes/spaces.js";
 import { entitiesRouter } from "./routes/entities.js";
@@ -25,10 +25,10 @@ export function createApp() {
 
   app.get("/health", (c) => c.json({ status: "ok" }));
 
-  app.get("/ready", async (c) => {
+  app.get("/ready", (c) => {
     try {
       const sql = createSql();
-      await sql`SELECT 1`;
+      sql`SELECT 1`;
       return c.json({ status: "ready" });
     } catch {
       return c.json({ status: "unavailable" }, 503);
@@ -62,11 +62,11 @@ export function createApp() {
       });
     }
 
-    const pgError = mapPostgresError(error);
-    if (pgError) {
-      console.error("[pg]", error);
-      return new Response(JSON.stringify(errorBody(pgError, requestId)), {
-        status: pgError.status,
+    const dbError = mapDatabaseError(error);
+    if (dbError) {
+      console.error("[db]", error);
+      return new Response(JSON.stringify(errorBody(dbError, requestId)), {
+        status: dbError.status,
         headers: { "content-type": "application/json; charset=utf-8" },
       });
     }

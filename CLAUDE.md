@@ -1,16 +1,16 @@
 # arkeon-wiki
 
-Filesystem-first knowledge graph. You point it at directories, it watches for changes, indexes files into Postgres, and builds a relationship graph from markdown links between them.
+Filesystem-first knowledge graph. You point it at directories, it watches for changes, indexes files into SQLite, and builds a relationship graph from markdown links between them.
 
 **Repo**: `Arkeon-Technologies/arkeon-wiki` (branch: `fs-first`)
 
 ## How it works
 
-1. `arkeon-wiki start` — starts embedded Postgres + API server as a long-running daemon
+1. `arkeon-wiki start` — starts SQLite database + API server as a long-running daemon
 2. `arkeon-wiki init` — registers the current directory as a space; the daemon starts watching it
-3. You add/edit/delete files — the file watcher detects changes and syncs to Postgres automatically
+3. You add/edit/delete files — the file watcher detects changes and syncs to SQLite automatically
 4. Wiki files (`wiki/**/*.md`) use JSON frontmatter for structured metadata and standard markdown links for cross-references
-5. Links between wiki files become relationship edges in Postgres
+5. Links between wiki files become relationship edges in SQLite
 
 There are no manual sync commands. The filesystem is the source of truth.
 
@@ -22,7 +22,7 @@ Two npm workspaces. Only one is published.
   - `src/index.ts` — CLI entry (commander)
   - `src/cli/commands/` — CLI commands (start, stop, status, init)
   - `src/server/` — Hono API server, routes, sync engine, file watcher
-  - `src/schema/` — Postgres migrations + runner
+  - `src/schema/` — SQLite migrations + runner
 - `packages/explorer/` — browser SPA (Vite), not published. Currently needs updating for the new API.
 
 ## Wiki file format
@@ -43,17 +43,17 @@ Claude Shannon was the father of information theory.
 He worked at [Bell Labs](../organization/bell-labs.md).
 ```
 
-- JSON between `---` fences (not YAML). Maps 1:1 to Postgres JSONB.
+- JSON between `---` fences (not YAML). Properties stored as JSON text in SQLite.
 - `id` is auto-generated on first sync if missing, written back to the file.
 - `label` is required. Everything else is arbitrary.
 - Standard markdown links (`[text](path.md)`) become relationship edges.
 
 ## Schema
 
-Three tables in Postgres — that's it:
+Three tables in SQLite — that's it:
 
 - `spaces` — registered directories (id, name, watch_dir)
-- `entities` — wikis and source files (id, space_id, type, label, source_path, source_hash, properties JSONB)
+- `entities` — wikis and source files (id, space_id, type, label, source_path, source_hash, properties JSON text)
 - `relationships` — edges between entities (source_id, target_id, predicate, link_text, link_path)
 
 No actors, no auth, no queues, no versioning. Schema in `src/schema/001-foundation.sql`.
@@ -90,14 +90,15 @@ npx tsx packages/arkeon/src/index.ts init     # register cwd as a space
 ```bash
 npm run typecheck -w packages/arkeon    # type checking
 npm test -w packages/arkeon             # unit tests (frontmatter, link parsing)
-npm run test:e2e -w packages/arkeon     # e2e tests (spins up embedded Postgres)
+npm run test:e2e -w packages/arkeon     # e2e tests (spins up SQLite + API server)
 ```
 
 E2e tests start a real stack in-process — no running instance needed.
 
 ## State
 
-- `~/.arkeon-wiki/` — daemon state (embedded Postgres data, secrets, pidfile)
+- `~/.arkeon-wiki/` — daemon state (SQLite database, pidfile)
+- `~/.arkeon-wiki/data/arke.db` — the SQLite database file
 - `.arkeon/state.json` — per-directory space binding (space_id, api_url)
 
 Override the state dir with `ARKEON_WIKI_HOME` env var.
@@ -108,7 +109,8 @@ Single file: `001-foundation.sql`. Must be idempotent (all `IF NOT EXISTS`). Run
 
 ## What's NOT here (yet)
 
-- No Meilisearch / search
+- No vector search (sqlite-vec planned)
+- No Meilisearch / full-text search
 - No auth / API keys
 - No workers (extract, draft, enrich)
 - No explorer (needs updating for new API)

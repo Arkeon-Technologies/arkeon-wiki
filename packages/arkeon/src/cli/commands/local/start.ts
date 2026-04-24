@@ -6,11 +6,10 @@
  *
  * Flow:
  *   1. Refuse to start if already running (pidfile check).
- *   2. Create ~/.arkeon-wiki/, load or generate secrets.
- *   3. Start embedded Postgres.
- *   4. Run migrations.
- *   5. Start API server.
- *   6. Write pidfile and wait for SIGTERM/SIGINT.
+ *   2. Create ~/.arkeon-wiki/.
+ *   3. Run migrations against SQLite database.
+ *   4. Start API server.
+ *   5. Write pidfile and wait for SIGTERM/SIGINT.
  */
 
 import type { Command } from "commander";
@@ -20,30 +19,25 @@ const IS_WIN = platform() === "win32";
 
 import {
   arkeonDir,
+  dbPath,
   DEFAULT_API_PORT,
-  DEFAULT_PG_PORT,
   ensureArkeonDir,
   isProcessAlive,
-  killOrphanedPostgres,
-  loadOrCreateSecrets,
   readPidfile,
   removePidfile,
-  startEmbeddedPostgres,
   writePidfile,
 } from "../../lib/local-runtime.js";
 import { runMigrations } from "../../../schema/index.js";
 
 interface StartOptions {
   port?: string;
-  pgPort?: string;
 }
 
 export function registerStartCommand(program: Command): void {
   program
     .command("start")
-    .description("Start the Arkeon stack (Postgres + API) on this machine")
+    .description("Start the Arkeon stack (SQLite + API) on this machine")
     .option("--port <port>", "API port", String(DEFAULT_API_PORT))
-    .option("--pg-port <port>", "Embedded Postgres port", String(DEFAULT_PG_PORT))
     .action(async (options: StartOptions) => {
       await runStart(options);
     });
@@ -51,13 +45,9 @@ export function registerStartCommand(program: Command): void {
 
 async function runStart(options: StartOptions): Promise<void> {
   const apiPort = Number(options.port ?? DEFAULT_API_PORT);
-  const pgPort = Number(options.pgPort ?? DEFAULT_PG_PORT);
-
-  const externalDatabaseUrl =
-    process.env.ARKEON_DATABASE_URL ?? process.env.DATABASE_URL;
 
   const existingPid = readPidfile();
-  if (existingPid && isProcessAlive(existingPid) && !externalDatabaseUrl) {
+  if (existingPid && isProcessAlive(existingPid)) {
     console.error(`arkeon-wiki is already running (pid ${existingPid}). Run \`arkeon-wiki stop\` first.`);
     process.exit(1);
   }
@@ -66,13 +56,13 @@ async function runStart(options: StartOptions): Promise<void> {
   }
 
   ensureArkeonDir();
-  const secrets = loadOrCreateSecrets();
+  const db = dbPath();
 
   console.log("[arkeon-wiki] Starting local stack");
   console.log(`              state dir: ${arkeonDir()}`);
+  console.log(`              database:  ${db}`);
 
   // --- Shutdown handler ---
-  let pg: { url: string; stop: () => Promise<void> } | null = null;
   let api: { stop: () => Promise<void> } | null = null;
 
   let shuttingDown = false;
@@ -86,11 +76,13 @@ async function runStart(options: StartOptions): Promise<void> {
         console.warn("[arkeon-wiki] api.stop error:", (err as Error).message);
       }
     }
-    if (pg) {
-      try { await pg.stop(); } catch (err) {
-        console.warn("[arkeon-wiki] pg stop error:", (err as Error).message);
-      }
-    }
+
+    // Close the database connection
+    try {
+      const { closeDb } = await import("../../../server/lib/sql.js");
+      closeDb();
+    } catch { /* ignore */ }
+
     removePidfile();
     process.exit(0);
   };
@@ -101,29 +93,12 @@ async function runStart(options: StartOptions): Promise<void> {
     process.on("SIGBREAK", () => void shutdown("SIGBREAK"));
   }
 
-  // --- Postgres ---
-  let dbUrl: string;
-
-  if (externalDatabaseUrl) {
-    console.log(`[arkeon-wiki] Using external Postgres (DATABASE_URL set)`);
-    dbUrl = externalDatabaseUrl;
-  } else {
-    await killOrphanedPostgres();
-    console.log(`[arkeon-wiki] Starting embedded Postgres on port ${pgPort}`);
-    pg = await startEmbeddedPostgres({
-      port: pgPort,
-      password: secrets.pgPassword,
-    });
-    dbUrl = pg.url;
-  }
-
   // --- Migrations ---
   console.log("[arkeon-wiki] Running schema migrations");
   try {
-    await runMigrations({ databaseUrl: dbUrl });
+    await runMigrations({ dbPath: db });
   } catch (err) {
     console.error("[arkeon-wiki] migrations failed:", err);
-    if (pg) await pg.stop();
     process.exit(1);
   }
 
@@ -133,7 +108,7 @@ async function runStart(options: StartOptions): Promise<void> {
 
   api = await startApi({
     port: apiPort,
-    databaseUrl: dbUrl,
+    dbPath: db,
   });
 
   writePidfile(process.pid);

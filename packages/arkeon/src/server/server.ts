@@ -13,10 +13,11 @@ import type { AddressInfo } from "node:net";
 
 import { createApp } from "./app.js";
 import { startAllWatchers, stopAllWatchers } from "./lib/fs-watcher.js";
+import { initDb, closeDb } from "./lib/sql.js";
 
 export interface ArkeonApiConfig {
   port?: number;
-  databaseUrl?: string;
+  dbPath?: string;
 }
 
 export interface ArkeonApi {
@@ -25,7 +26,10 @@ export interface ArkeonApi {
 }
 
 export async function startApi(config: ArkeonApiConfig = {}): Promise<ArkeonApi> {
-  if (config.databaseUrl) process.env.DATABASE_URL = config.databaseUrl;
+  if (config.dbPath) {
+    process.env.DATABASE_PATH = config.dbPath;
+    initDb(config.dbPath);
+  }
 
   const app = createApp();
 
@@ -44,6 +48,7 @@ export async function startApi(config: ArkeonApiConfig = {}): Promise<ArkeonApi>
     const DRAIN_TIMEOUT_MS = opts.drainTimeoutMs ?? 10_000;
 
     stopAllWatchers();
+    closeDb();
 
     const drainPromise = new Promise<void>((resolve, reject) =>
       server.close((err) => (err ? reject(err) : resolve())),

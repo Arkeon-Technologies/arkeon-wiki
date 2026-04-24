@@ -41,7 +41,7 @@ spacesRouter.get("/", async (c) => {
   const sql = createSql();
   const spaces = await sql`
     SELECT s.id, s.name, s.watch_dir, s.created_at,
-           COUNT(e.id)::int AS entity_count
+           COUNT(e.id) AS entity_count
     FROM spaces s
     LEFT JOIN entities e ON e.space_id = s.id
     GROUP BY s.id
@@ -56,7 +56,7 @@ spacesRouter.get("/:id", async (c) => {
   const sql = createSql();
   const rows = await sql`
     SELECT s.id, s.name, s.watch_dir, s.created_at,
-           COUNT(e.id)::int AS entity_count
+           COUNT(e.id) AS entity_count
     FROM spaces s
     LEFT JOIN entities e ON e.space_id = s.id
     WHERE s.id = ${c.req.param("id")}

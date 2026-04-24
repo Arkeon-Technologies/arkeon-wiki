@@ -33,11 +33,11 @@ entitiesRouter.get("/", async (c) => {
 
   if (spaceId) {
     params.push(spaceId);
-    conditions.push(`e.space_id = $${params.length}`);
+    conditions.push(`e.space_id = ?`);
   }
   if (type) {
     params.push(type);
-    conditions.push(`e.type = $${params.length}`);
+    conditions.push(`e.type = ?`);
   }
 
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -48,12 +48,12 @@ entitiesRouter.get("/", async (c) => {
      FROM entities e
      ${where}
      ORDER BY e.updated_at DESC
-     LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+     LIMIT ? OFFSET ?`,
     [...params, limit, offset],
   );
 
   const countResult = await sql.query(
-    `SELECT COUNT(*)::int AS total FROM entities e ${where}`,
+    `SELECT COUNT(*) AS total FROM entities e ${where}`,
     params,
   );
 
@@ -65,14 +65,15 @@ entitiesRouter.get("/", async (c) => {
   };
 
   if (includeRelationships) {
-    // Fetch all relationships for the matched entities
     const entityIds = entities.map((e: Record<string, unknown>) => e.id as string);
     if (entityIds.length > 0) {
-      const relationships = await sql`
-        SELECT id, source_id, target_id, predicate, link_text, link_path
-        FROM relationships
-        WHERE source_id = ANY(${entityIds}) OR target_id = ANY(${entityIds})
-      `;
+      const placeholders = entityIds.map(() => "?").join(",");
+      const relationships = await sql.query(
+        `SELECT id, source_id, target_id, predicate, link_text, link_path
+         FROM relationships
+         WHERE source_id IN (${placeholders}) OR target_id IN (${placeholders})`,
+        [...entityIds, ...entityIds],
+      );
       result.relationships = relationships;
     } else {
       result.relationships = [];
