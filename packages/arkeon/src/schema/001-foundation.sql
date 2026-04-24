@@ -1,5 +1,5 @@
 -- 001-foundation.sql
--- Filesystem-first knowledge graph schema.
+-- Filesystem-first knowledge graph schema (SQLite).
 -- All migrations must be idempotent (run twice = no error).
 
 -- Spaces: a watched directory on disk
@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS spaces (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   watch_dir TEXT UNIQUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Entities: wikis and source files
@@ -18,9 +18,9 @@ CREATE TABLE IF NOT EXISTS entities (
   label TEXT NOT NULL,
   source_path TEXT NOT NULL,
   source_hash TEXT,
-  properties JSONB NOT NULL DEFAULT '{}',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  properties TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(space_id, source_path)
 );
 
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS relationships (
   predicate TEXT NOT NULL DEFAULT 'references',
   link_text TEXT,
   link_path TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(source_id, target_id, predicate)
 );
 

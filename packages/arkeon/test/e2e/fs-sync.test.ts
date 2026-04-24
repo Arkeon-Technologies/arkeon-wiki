@@ -4,7 +4,7 @@
 /**
  * End-to-end tests for the filesystem-first sync engine.
  *
- * These tests start an embedded Postgres + API server, register a temp
+ * These tests start a SQLite database + API server, register a temp
  * directory as a space, and exercise the full lifecycle: file creation,
  * modification, deletion, link resolution, and watcher-based auto-sync.
  *
@@ -26,9 +26,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 
-// Ports that won't collide with other services
+// Port that won't collide with other services
 const API_PORT = 18787;
-const PG_PORT = 15499;
 const BASE_URL = `http://localhost:${API_PORT}`;
 
 // Temp dirs — created fresh per test suite
@@ -121,38 +120,28 @@ beforeAll(async () => {
   testDir = join(base, "repo");
   stateDir = join(base, "state");
   mkdirSync(testDir, { recursive: true });
-  mkdirSync(stateDir, { recursive: true });
+  mkdirSync(join(stateDir, "data"), { recursive: true });
   mkdirSync(join(testDir, "wiki"), { recursive: true });
 
-  // Set env for embedded postgres location
+  // Set env for state directory
   process.env.ARKEON_WIKI_HOME = stateDir;
 
-  // Start the stack in-process
-  const { startEmbeddedPostgres, killOrphanedPostgres } = await import(
-    "../../src/cli/lib/local-runtime.js"
-  );
+  const dbFile = join(stateDir, "data", "arke.db");
+
+  // Run migrations
   const { runMigrations } = await import("../../src/schema/index.js");
+  await runMigrations({ dbPath: dbFile });
 
-  const secrets = { pgPassword: randomBytes(8).toString("hex") };
-  writeFileSync(join(stateDir, "secrets.json"), JSON.stringify(secrets), { mode: 0o600 });
-
-  await killOrphanedPostgres();
-  const pg = await startEmbeddedPostgres({ port: PG_PORT, password: secrets.pgPassword });
-
-  await runMigrations({ databaseUrl: pg.url });
-
-  process.env.DATABASE_URL = pg.url;
-
+  // Start the API server
   const { startApi } = await import("../../src/server/server.js");
-  const apiHandle = await startApi({ port: API_PORT, databaseUrl: pg.url });
+  const apiHandle = await startApi({ port: API_PORT, dbPath: dbFile });
 
   serverHandle = {
     stop: async () => {
       await apiHandle.stop();
-      await pg.stop();
     },
   };
-}, 60_000);
+}, 30_000);
 
 afterAll(async () => {
   if (serverHandle) {
@@ -591,7 +580,8 @@ describe("entity deletion via API", () => {
 describe("schema idempotency", () => {
   it("runs migrations twice without error", async () => {
     const { runMigrations } = await import("../../src/schema/index.js");
-    // Should not throw — all statements use IF NOT EXISTS / ON CONFLICT
-    await runMigrations({ databaseUrl: process.env.DATABASE_URL! });
+    const dbFile = join(stateDir, "data", "arke.db");
+    // Should not throw — all statements use IF NOT EXISTS
+    await runMigrations({ dbPath: dbFile });
   });
 });

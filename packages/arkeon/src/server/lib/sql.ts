@@ -1,151 +1,161 @@
 // Copyright (c) 2026 Arkeon Technologies, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-import postgres from "postgres";
+import Database from "better-sqlite3";
+import type { Database as DatabaseType } from "better-sqlite3";
 
 type Row = Record<string, unknown>;
 
-interface QueryDescriptor {
-  _kind: "tagged" | "parameterized";
-  _strings?: TemplateStringsArray;
-  _values?: unknown[];
-  _text?: string;
-  _params?: unknown[];
-  then<T1 = Row[], T2 = never>(
-    onfulfilled?: ((value: Row[]) => T1 | PromiseLike<T1>) | null,
-    onrejected?: ((reason: unknown) => T2 | PromiseLike<T2>) | null,
-  ): PromiseLike<T1 | T2>;
-}
-
 export interface SqlClient {
-  (strings: TemplateStringsArray, ...values: unknown[]): QueryDescriptor;
-  query(text: string, params?: unknown[]): QueryDescriptor;
-  transaction(queries: QueryDescriptor[]): Promise<Row[][]>;
+  (strings: TemplateStringsArray, ...values: unknown[]): Promise<Row[]>;
+  query(text: string, params?: unknown[]): Promise<Row[]>;
 }
 
-/**
- * postgres.js .unsafe() sends string params as text, so a JSON.stringify'd
- * object passed to a ::jsonb column becomes a JSON *string* rather than a
- * JSON object. Pre-parse JSON string params back into objects so postgres.js
- * serializes them correctly.
- */
-function prepareParams(params: unknown[]): unknown[] {
-  return params.map((p) => {
-    if (typeof p !== "string") return p;
-    const ch = p[0];
-    if (ch !== "{" && ch !== "[") return p;
-    try {
-      return JSON.parse(p);
-    } catch {
-      return p;
-    }
-  });
+let _db: DatabaseType | null = null;
+
+export function initDb(path: string): DatabaseType {
+  if (_db) return _db;
+  _db = new Database(path);
+  _db.pragma("journal_mode = WAL");
+  _db.pragma("foreign_keys = ON");
+  return _db;
 }
 
-const DEFAULT_DATABASE_URL = "postgresql://arke_app:arke@localhost:5432/arke";
-
-let _pg: postgres.Sql | null = null;
-
-function getPg(): postgres.Sql {
-  if (!_pg) {
-    _pg = postgres(process.env.DATABASE_URL ?? DEFAULT_DATABASE_URL);
+export function getDb(): DatabaseType {
+  if (!_db) {
+    const path = process.env.DATABASE_PATH;
+    if (!path) throw new Error("DATABASE_PATH not set and database not initialised");
+    return initDb(path);
   }
-  return _pg;
+  return _db;
+}
+
+export function closeDb(): void {
+  if (_db) {
+    _db.close();
+    _db = null;
+  }
 }
 
 /**
- * Run a callback inside a transaction with a scoped sql client.
- * Guarantees all queries in the callback use the same connection.
+ * Convert a tagged template into a SQL string with ? placeholders and a
+ * flat array of parameter values.
+ */
+function buildFromTemplate(
+  strings: TemplateStringsArray,
+  values: unknown[],
+): { sql: string; params: unknown[] } {
+  let sql = "";
+  const params: unknown[] = [];
+  for (let i = 0; i < strings.length; i++) {
+    sql += strings[i];
+    if (i < values.length) {
+      sql += "?";
+      params.push(values[i]);
+    }
+  }
+  return { sql, params };
+}
+
+/**
+ * Convert Postgres-style positional params ($1, $2, ...) to SQLite ? params.
+ * Returns the reordered params array matching the ? positions.
+ */
+function convertPositionalParams(
+  text: string,
+  params: unknown[],
+): { sql: string; params: unknown[] } {
+  // If the query already uses ? placeholders (no $N patterns), pass through
+  if (!/\$\d+/.test(text)) {
+    return { sql: text, params };
+  }
+  const ordered: unknown[] = [];
+  const sql = text.replace(/\$(\d+)/g, (_match, num) => {
+    ordered.push(params[Number(num) - 1]);
+    return "?";
+  });
+  return { sql, params: ordered };
+}
+
+function parseJson(val: unknown): unknown {
+  if (typeof val !== "string") return val;
+  try {
+    return JSON.parse(val);
+  } catch {
+    return val;
+  }
+}
+
+/**
+ * SQLite stores JSON as TEXT. When reading rows back, parse any column
+ * that looks like a JSON object/array so callers get objects, not strings.
+ */
+function hydrateRow(row: Row): Row {
+  const out: Row = {};
+  for (const [key, val] of Object.entries(row)) {
+    if (key === "properties" && typeof val === "string") {
+      out[key] = parseJson(val);
+    } else {
+      out[key] = val;
+    }
+  }
+  return out;
+}
+
+function runQuery(sql: string, params: unknown[]): Row[] {
+  const db = getDb();
+  const trimmed = sql.trim();
+
+  // Determine if this is a read or write query
+  const isRead = /^(SELECT|PRAGMA|EXPLAIN|WITH\s)/i.test(trimmed);
+
+  if (isRead) {
+    const stmt = db.prepare(trimmed);
+    const rows = stmt.all(...params) as Row[];
+    return rows.map(hydrateRow);
+  }
+
+  // Write queries — check for RETURNING clause
+  const hasReturning = /\bRETURNING\b/i.test(trimmed);
+  if (hasReturning) {
+    const stmt = db.prepare(trimmed);
+    const rows = stmt.all(...params) as Row[];
+    return rows.map(hydrateRow);
+  }
+
+  const stmt = db.prepare(trimmed);
+  stmt.run(...params);
+  return [];
+}
+
+/**
+ * Run a callback inside a transaction.
  * Automatically commits on success, rolls back on error.
  */
 export async function withTransaction<T>(fn: (sql: SqlClient) => Promise<T>): Promise<T> {
-  const pg = getPg();
-  return pg.begin(async (tx) => {
-    // Wrap the transaction-scoped `tx` in our SqlClient interface
-    const sql = ((strings: TemplateStringsArray, ...values: unknown[]) => ({
-      _kind: "tagged" as const,
-      _strings: strings,
-      _values: values,
-      then(onfulfilled: any, onrejected: any) {
-        return (tx as any)(strings, ...values).then(
-          (r: unknown) => onfulfilled?.(r as Row[]),
-          onrejected,
-        );
-      },
-    })) as unknown as SqlClient;
-
-    sql.query = (text: string, params: unknown[] = []) => ({
-      _kind: "parameterized" as const,
-      _text: text,
-      _params: params,
-      then(onfulfilled: any, onrejected: any) {
-        return (tx as any).unsafe(text, prepareParams(params) as any[]).then(
-          (r: unknown) => onfulfilled?.(r as Row[]),
-          onrejected,
-        );
-      },
-    });
-
-    sql.transaction = async (descriptors) => {
-      // Already in a transaction — just execute sequentially
-      const results: Row[][] = [];
-      for (const desc of descriptors) {
-        if (desc._kind === "tagged") {
-          const r = await (tx as any)(desc._strings, ...desc._values!);
-          results.push(r as unknown as Row[]);
-        } else {
-          const r = await (tx as any).unsafe(desc._text, prepareParams(desc._params!));
-          results.push(r as unknown as Row[]);
-        }
-      }
-      return results;
-    };
-
-    return fn(sql);
-  }) as T;
+  const db = getDb();
+  // We need to run the async function inside a manual BEGIN/COMMIT
+  // because better-sqlite3's db.transaction() is synchronous.
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = await fn(createSql());
+    db.exec("COMMIT");
+    return result;
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
 }
 
 export function createSql(): SqlClient {
-  const pg = getPg();
+  const sql = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const built = buildFromTemplate(strings, values);
+    return runQuery(built.sql, built.params);
+  }) as unknown as SqlClient;
 
-  const sql = ((strings: TemplateStringsArray, ...values: unknown[]) => ({
-    _kind: "tagged" as const,
-    _strings: strings,
-    _values: values,
-    then(onfulfilled: any, onrejected: any) {
-      return (pg as any)(strings, ...values).then(
-        (r: unknown) => onfulfilled?.(r as Row[]),
-        onrejected,
-      );
-    },
-  })) as unknown as SqlClient;
-
-  sql.query = (text: string, params: unknown[] = []) => ({
-    _kind: "parameterized" as const,
-    _text: text,
-    _params: params,
-    then(onfulfilled: any, onrejected: any) {
-      return (pg as any).unsafe(text, prepareParams(params) as any[]).then(
-        (r: unknown) => onfulfilled?.(r as Row[]),
-        onrejected,
-      );
-    },
-  });
-
-  sql.transaction = async (descriptors) => {
-    return pg.begin(async (tx) => {
-      const results: Row[][] = [];
-      for (const desc of descriptors) {
-        if (desc._kind === "tagged") {
-          const r = await (tx as any)(desc._strings, ...desc._values!);
-          results.push(r as unknown as Row[]);
-        } else {
-          const r = await (tx as any).unsafe(desc._text, prepareParams(desc._params!));
-          results.push(r as unknown as Row[]);
-        }
-      }
-      return results;
-    });
+  sql.query = async (text: string, params: unknown[] = []) => {
+    const converted = convertPositionalParams(text, params);
+    return runQuery(converted.sql, converted.params);
   };
 
   return sql;

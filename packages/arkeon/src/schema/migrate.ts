@@ -2,11 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * In-process schema migration runner.
+ * In-process schema migration runner (SQLite).
  *
- * Replaces the old packages/schema/migrate.js top-level-await script.
  * The CLI's `arkeon start` command imports runMigrations() directly
- * now instead of spawning a child process, which lets the CLI reason
+ * instead of spawning a child process, which lets the CLI reason
  * about lifecycle errors with normal try/catch.
  *
  * The SQL files live next to this module at build time (src/schema/*.sql
@@ -18,71 +17,64 @@
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import postgres from "postgres";
+import Database from "better-sqlite3";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export interface MigrateOptions {
-  /** Connection string — must have permission to run DDL. */
-  databaseUrl: string;
+  /** Path to the SQLite database file. */
+  dbPath: string;
 }
 
 export async function runMigrations(opts: MigrateOptions): Promise<void> {
-  const url = opts.databaseUrl;
-  console.log(`Deploying schema to: ${url.replace(/:[^@]*@/, ":***@")}`);
+  console.log(`Deploying schema to: ${opts.dbPath}`);
   console.log("");
-
-  const templateVars: Record<string, string> = {};
 
   const schemaDir = await locateSchemaDir();
   const files = (await readdir(schemaDir))
     .filter((f) => f.endsWith(".sql"))
     .sort();
 
-  const sql = postgres(url);
+  const db = new Database(opts.dbPath);
+  db.pragma("journal_mode = WAL");
+  db.pragma("foreign_keys = ON");
+
   let failed = false;
 
   try {
     for (const file of files) {
-      const rawContent = await readFile(join(schemaDir, file), "utf-8");
-      const content = applyTemplate(rawContent, file, templateVars);
+      const content = await readFile(join(schemaDir, file), "utf-8");
       const statements = splitStatements(content);
       process.stdout.write(`  ${file} ... `);
 
       let fileOk = true;
-      let skipped = false;
 
-      for (const stmt of statements) {
-        // Skip comment-only blocks — splitStatements keeps the raw
-        // whitespace/comments, so an "empty after stripping -- line
-        // comments" check catches the leading banner in each file.
-        if (stmt.replace(/--[^\n]*/g, "").trim() === "") continue;
-
-        try {
-          await sql.unsafe(stmt);
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          const code = (err as { code?: string }).code;
-          if (code === "42P07" || msg.includes("already exists")) {
-            skipped = true;
-          } else if (code === "42703" && msg.includes("does not exist")) {
-            // Column was renamed by a later migration — index already covers it.
-            skipped = true;
-          } else {
-            console.log(`ERROR: ${msg}`);
-            fileOk = false;
-            failed = true;
-            break;
-          }
+      try {
+        // Run all statements for a migration file in a single transaction
+        db.exec("BEGIN");
+        for (const stmt of statements) {
+          if (stmt.replace(/--[^\n]*/g, "").trim() === "") continue;
+          db.exec(stmt);
+        }
+        db.exec("COMMIT");
+      } catch (err: unknown) {
+        try { db.exec("ROLLBACK"); } catch { /* ignore */ }
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("already exists")) {
+          // Table/index already exists — idempotent, that's fine
+        } else {
+          console.log(`ERROR: ${msg}`);
+          fileOk = false;
+          failed = true;
         }
       }
 
       if (fileOk) {
-        console.log(skipped ? "OK (exists)" : "OK");
+        console.log("OK");
       }
     }
   } finally {
-    await sql.end();
+    db.close();
   }
 
   console.log("");
@@ -120,28 +112,6 @@ async function locateSchemaDir(): Promise<string> {
   throw new Error(
     `Could not locate schema SQL files. Tried: ${candidates.join(", ")}`,
   );
-}
-
-function quoteSqlLiteral(value: string): string {
-  return `'${String(value).replace(/'/g, "''")}'`;
-}
-
-function applyTemplate(
-  content: string,
-  file: string,
-  vars: Record<string, string>,
-): string {
-  // Replace :'name' tokens. The set of recognized names is fixed by
-  // templateVars — anything else is a typo and should fail loudly
-  // rather than send broken SQL to Postgres.
-  return content.replace(/:'([a-zA-Z_][a-zA-Z0-9_]*)'/g, (_match, name) => {
-    if (!Object.prototype.hasOwnProperty.call(vars, name)) {
-      throw new Error(
-        `${file}: unknown template variable :'${name}'. Known: ${Object.keys(vars).join(", ")}`,
-      );
-    }
-    return quoteSqlLiteral(vars[name]);
-  });
 }
 
 /**

@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Core sync primitive: bridge files on disk to entities in Postgres.
+ * Core sync primitive: bridge files on disk to entities in the database.
  *
  * `syncFile()` is the heart of arkeon-wiki. It reads a file from the
  * filesystem, parses it, and upserts the corresponding entity and
- * relationship edges in Postgres. Everything else — CLI commands, API
+ * relationship edges in the database. Everything else — CLI commands, API
  * routes, file watchers — calls this function.
  */
 
@@ -39,7 +39,7 @@ function contentHash(content: string): string {
 }
 
 /**
- * Sync a single file from disk into Postgres.
+ * Sync a single file from disk into the database.
  *
  * @param space - The space this file belongs to
  * @param relativePath - Path relative to the space's watch_dir
@@ -111,7 +111,7 @@ async function syncWikiFile(
         SET label = ${label},
             source_hash = ${hash},
             properties = ${JSON.stringify(storedProps)},
-            updated_at = now()
+            updated_at = datetime('now')
         WHERE id = ${entityId}
       `;
     } else {
@@ -206,7 +206,7 @@ async function syncSourceFile(
       SET label = ${label},
           source_hash = ${hash},
           properties = ${JSON.stringify(properties)},
-          updated_at = now()
+          updated_at = datetime('now')
       WHERE id = ${entityId}
     `;
     return { entityId, action: "updated", label, type: "file", linksResolved: 0, linksDangling: 0 };
@@ -313,7 +313,7 @@ export async function syncDirectory(
     await resolveLinks(space, file);
   }
 
-  // Find entities in Postgres that no longer exist on disk
+  // Find entities in the database that no longer exist on disk
   const sql = createSql();
   const dbEntities = await sql`
     SELECT id, source_path FROM entities WHERE space_id = ${space.id}
