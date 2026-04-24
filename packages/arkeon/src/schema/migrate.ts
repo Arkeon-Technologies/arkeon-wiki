@@ -17,7 +17,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import Database from "better-sqlite3";
+import { initDb, closeDb, getDb } from "../server/lib/sql.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -35,46 +35,40 @@ export async function runMigrations(opts: MigrateOptions): Promise<void> {
     .filter((f) => f.endsWith(".sql"))
     .sort();
 
-  const db = new Database(opts.dbPath);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
+  const db = initDb(opts.dbPath);
 
   let failed = false;
 
-  try {
-    for (const file of files) {
-      const content = await readFile(join(schemaDir, file), "utf-8");
-      const statements = splitStatements(content);
-      process.stdout.write(`  ${file} ... `);
+  for (const file of files) {
+    const content = await readFile(join(schemaDir, file), "utf-8");
+    const statements = splitStatements(content);
+    process.stdout.write(`  ${file} ... `);
 
-      let fileOk = true;
+    let fileOk = true;
 
-      try {
-        // Run all statements for a migration file in a single transaction
-        db.exec("BEGIN");
-        for (const stmt of statements) {
-          if (stmt.replace(/--[^\n]*/g, "").trim() === "") continue;
-          db.exec(stmt);
-        }
-        db.exec("COMMIT");
-      } catch (err: unknown) {
-        try { db.exec("ROLLBACK"); } catch { /* ignore */ }
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes("already exists")) {
-          // Table/index already exists — idempotent, that's fine
-        } else {
-          console.log(`ERROR: ${msg}`);
-          fileOk = false;
-          failed = true;
-        }
+    try {
+      // Run all statements for a migration file in a single transaction
+      db.exec("BEGIN");
+      for (const stmt of statements) {
+        if (stmt.replace(/--[^\n]*/g, "").trim() === "") continue;
+        db.exec(stmt);
       }
-
-      if (fileOk) {
-        console.log("OK");
+      db.exec("COMMIT");
+    } catch (err: unknown) {
+      try { db.exec("ROLLBACK"); } catch { /* ignore */ }
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("already exists")) {
+        // Table/index already exists — idempotent, that's fine
+      } else {
+        console.log(`ERROR: ${msg}`);
+        fileOk = false;
+        failed = true;
       }
     }
-  } finally {
-    db.close();
+
+    if (fileOk) {
+      console.log("OK");
+    }
   }
 
   console.log("");

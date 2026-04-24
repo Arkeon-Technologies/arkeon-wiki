@@ -128,23 +128,39 @@ function runQuery(sql: string, params: unknown[]): Row[] {
   return [];
 }
 
+// ── Transaction mutex ───────────────────────────────────────────────
+//
+// better-sqlite3 is single-connection and synchronous. If two async
+// callers both enter withTransaction concurrently, the second BEGIN
+// IMMEDIATE would hit SQLITE_BUSY. A simple queue serializes access.
+
+let _txQueue: Promise<unknown> = Promise.resolve();
+
 /**
  * Run a callback inside a transaction.
  * Automatically commits on success, rolls back on error.
+ * Concurrent calls are serialized via a queue to prevent SQLITE_BUSY.
  */
-export async function withTransaction<T>(fn: (sql: SqlClient) => Promise<T>): Promise<T> {
-  const db = getDb();
-  // We need to run the async function inside a manual BEGIN/COMMIT
-  // because better-sqlite3's db.transaction() is synchronous.
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const result = await fn(createSql());
-    db.exec("COMMIT");
-    return result;
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
+export function withTransaction<T>(fn: (sql: SqlClient) => Promise<T>): Promise<T> {
+  const run = async (): Promise<T> => {
+    const db = getDb();
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = await fn(createSql());
+      db.exec("COMMIT");
+      return result;
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
+  };
+
+  // Chain onto the queue so transactions never overlap
+  const p = _txQueue.then(run, run);
+  // Update the queue head, swallowing errors so a failed transaction
+  // doesn't block subsequent ones
+  _txQueue = p.catch(() => {});
+  return p;
 }
 
 export function createSql(): SqlClient {
