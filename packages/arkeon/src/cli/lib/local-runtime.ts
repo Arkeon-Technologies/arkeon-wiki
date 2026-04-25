@@ -9,6 +9,7 @@
  *   2. SQLite database      — single file at ~/.arkeon-wiki/data/arke.db
  */
 
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -36,6 +37,44 @@ export function pidfile(): string { return join(arkeonHome(), "arkeon.pid"); }
 export function logfile(): string { return join(arkeonHome(), "arkeon.log"); }
 
 export const DEFAULT_API_PORT = 8000;
+
+// =====================================================================
+// Named instances
+// =====================================================================
+
+/**
+ * Deterministic port offset from instance name. Maps to slot 1–999 so
+ * `--name foo` always picks the same port across machines/runs.
+ */
+export function nameToPortSlot(name: string): number {
+  const hash = createHash("sha256").update(name).digest();
+  return ((hash[0]! << 8 | hash[1]!) % 999) + 1;
+}
+
+/**
+ * State directory for a named instance: `~/.arkeon-wiki/<name>`. The
+ * default (no name) lives directly under `~/.arkeon-wiki/`.
+ */
+export function homeForName(name: string): string {
+  return join(homedir(), ".arkeon-wiki", name);
+}
+
+/**
+ * Apply --name semantics:
+ *   1. Set ARKEON_WIKI_HOME to ~/.arkeon-wiki/<name> (unless already set
+ *      by --data-dir, which wins).
+ *   2. Return the derived port (DEFAULT_API_PORT + slot).
+ *
+ * Path helpers in this module read ARKEON_WIKI_HOME at call time, so
+ * setting it here propagates through `dbPath()`, `pidfile()`, etc.
+ */
+export function applyName(name: string): { port: number; home: string } {
+  const home = homeForName(name);
+  if (!process.env.ARKEON_WIKI_HOME) {
+    process.env.ARKEON_WIKI_HOME = home;
+  }
+  return { port: DEFAULT_API_PORT + nameToPortSlot(name), home };
+}
 
 // =====================================================================
 // Directory bootstrap

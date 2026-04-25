@@ -4,6 +4,7 @@
 import type { Command } from "commander";
 
 import {
+  applyName,
   arkeonDir,
   DEFAULT_API_PORT,
   isProcessAlive,
@@ -12,12 +13,18 @@ import {
 } from "../../lib/local-runtime.js";
 import { output } from "../../lib/output.js";
 
+interface StatusOptions {
+  name?: string;
+  port?: string;
+}
+
 export function registerStatusCommand(program: Command): void {
   program
     .command("status")
     .description("Show the local stack's process and health state")
-    .option("--port <port>", "API port to probe", String(DEFAULT_API_PORT))
-    .action(async (opts: { port?: string }) => {
+    .option("--name <name>", "Check a named instance started with `start --name <name>`")
+    .option("--port <port>", `API port to probe (default: ${DEFAULT_API_PORT}, or derived from --name)`)
+    .action(async (opts: StatusOptions) => {
       try {
         await runStatus(opts);
       } catch (error) {
@@ -27,8 +34,9 @@ export function registerStatusCommand(program: Command): void {
     });
 }
 
-async function runStatus(opts: { port?: string }): Promise<void> {
-  const port = Number(opts.port ?? DEFAULT_API_PORT);
+async function runStatus(opts: StatusOptions): Promise<void> {
+  const named = opts.name ? applyName(opts.name) : null;
+  const port = Number(opts.port ?? named?.port ?? DEFAULT_API_PORT);
   const apiUrl = `http://localhost:${port}`;
   const pid = readPidfile();
 

@@ -18,6 +18,7 @@ import { platform } from "node:os";
 const IS_WIN = platform() === "win32";
 
 import {
+  applyName,
   arkeonDir,
   dbPath,
   DEFAULT_API_PORT,
@@ -30,6 +31,7 @@ import {
 import { runMigrations } from "../../../schema/index.js";
 
 interface StartOptions {
+  name?: string;
   port?: string;
 }
 
@@ -37,14 +39,19 @@ export function registerStartCommand(program: Command): void {
   program
     .command("start")
     .description("Start the Arkeon stack (SQLite + API) on this machine")
-    .option("--port <port>", "API port", String(DEFAULT_API_PORT))
+    .option(
+      "--name <name>",
+      "Named instance — isolates state under ~/.arkeon-wiki/<name>/ and derives a unique port from the name",
+    )
+    .option("--port <port>", `API port (default: ${DEFAULT_API_PORT}, or derived from --name)`)
     .action(async (options: StartOptions) => {
       await runStart(options);
     });
 }
 
 async function runStart(options: StartOptions): Promise<void> {
-  const apiPort = Number(options.port ?? DEFAULT_API_PORT);
+  const named = options.name ? applyName(options.name) : null;
+  const apiPort = Number(options.port ?? named?.port ?? DEFAULT_API_PORT);
 
   const existingPid = readPidfile();
   if (existingPid && isProcessAlive(existingPid)) {
@@ -59,6 +66,9 @@ async function runStart(options: StartOptions): Promise<void> {
   const db = dbPath();
 
   console.log("[arkeon-wiki] Starting local stack");
+  if (options.name) {
+    console.log(`              instance:  ${options.name}`);
+  }
   console.log(`              state dir: ${arkeonDir()}`);
   console.log(`              database:  ${db}`);
 
