@@ -28,6 +28,11 @@ import {
   removePidfile,
   writePidfile,
 } from "../../lib/local-runtime.js";
+import {
+  DEFAULT_INSTANCE_NAME,
+  registerInstance,
+  unregisterInstance,
+} from "../../lib/instances.js";
 import { runMigrations } from "../../../schema/index.js";
 
 interface StartOptions {
@@ -52,6 +57,7 @@ export function registerStartCommand(program: Command): void {
 async function runStart(options: StartOptions): Promise<void> {
   const named = options.name ? applyName(options.name) : null;
   const apiPort = Number(options.port ?? named?.port ?? DEFAULT_API_PORT);
+  const instanceName = options.name ?? DEFAULT_INSTANCE_NAME;
 
   const existingPid = readPidfile();
   if (existingPid && isProcessAlive(existingPid)) {
@@ -93,6 +99,7 @@ async function runStart(options: StartOptions): Promise<void> {
       closeDb();
     } catch { /* ignore */ }
 
+    unregisterInstance(instanceName);
     removePidfile();
     process.exit(0);
   };
@@ -122,6 +129,14 @@ async function runStart(options: StartOptions): Promise<void> {
   });
 
   writePidfile(process.pid);
+  registerInstance({
+    name: instanceName,
+    api_url: `http://localhost:${apiPort}`,
+    api_port: apiPort,
+    home: arkeonDir(),
+    pid: process.pid,
+    started_at: new Date().toISOString(),
+  });
 
   console.log("");
   console.log("[arkeon-wiki] Ready.");

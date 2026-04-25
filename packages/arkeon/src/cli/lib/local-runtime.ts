@@ -117,6 +117,39 @@ export function isProcessAlive(pid: number): boolean {
   }
 }
 
+/**
+ * Test whether a TCP port is currently accepting connections on
+ * localhost. Used by `up` to fail fast if the requested port is
+ * squatted, instead of spawning a daemon that crashes with EADDRINUSE
+ * while another service (potentially with its own /health endpoint)
+ * keeps responding.
+ *
+ * We attempt a connect (not a listen) because a listen-based check
+ * misses dual-stack mismatches: a server bound to `::` doesn't appear
+ * occupied to a fresh `127.0.0.1` listener on macOS.
+ */
+export async function isPortInUse(port: number): Promise<boolean> {
+  const { createConnection } = await import("node:net");
+  return new Promise<boolean>((resolve) => {
+    const socket = createConnection({ host: "127.0.0.1", port });
+    let settled = false;
+    const settle = (inUse: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(inUse);
+    };
+    socket.once("connect", () => settle(true));
+    socket.once("error", (err: NodeJS.ErrnoException) => {
+      // ECONNREFUSED → nothing listening (port is free).
+      // Anything else (timeout, host unreachable) we conservatively
+      // treat as "not in use" so we don't block legitimate starts.
+      settle(err.code !== "ECONNREFUSED" && false);
+    });
+    socket.setTimeout(500, () => settle(false));
+  });
+}
+
 // =====================================================================
 // CLI entry point resolution (for `arkeon up` → detached `arkeon start`)
 // =====================================================================

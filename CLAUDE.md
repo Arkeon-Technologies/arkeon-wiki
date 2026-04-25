@@ -2,11 +2,11 @@
 
 Filesystem-first knowledge graph. You point it at directories, it watches for changes, indexes files into SQLite, and builds a relationship graph from markdown links between them.
 
-**Repo**: `Arkeon-Technologies/arkeon-wiki` (branch: `fs-first`)
+**Repo**: `Arkeon-Technologies/arkeon-wiki` (branch: `main`)
 
 ## How it works
 
-1. `arkeon-wiki start` — starts SQLite database + API server as a long-running daemon
+1. `arkeon-wiki up` — starts SQLite database + API server as a detached background daemon (survives the terminal closing)
 2. `arkeon-wiki init` — registers the current directory as a space; the daemon starts watching it
 3. You add/edit/delete files — the file watcher detects changes and syncs to SQLite automatically
 4. Wiki files (`wiki/**/*.md`) use JSON frontmatter for structured metadata and standard markdown links for cross-references
@@ -14,13 +14,20 @@ Filesystem-first knowledge graph. You point it at directories, it watches for ch
 
 There are no manual sync commands. The filesystem is the source of truth.
 
+`up` is the recommended entry point. Power users running under their own
+process supervisor (pm2, launchd, systemd, docker) can use `start` for
+foreground operation instead.
+
 ## Project structure
 
 Two npm workspaces. Only one is published.
 
 - `packages/arkeon/` — the main package, published as `arkeon-wiki` on npm. CLI binary, Hono API server, schema migrations, sync engine.
   - `src/index.ts` — CLI entry (commander)
-  - `src/cli/commands/` — CLI commands (start, stop, status, init)
+  - `src/cli/commands/local/` — daemon lifecycle (up, down, start, stop, status, ls, logs)
+  - `src/cli/commands/repo/` — directory-scoped commands (init)
+  - `src/cli/lib/local-runtime.ts` — paths, pidfile, named-instance helpers
+  - `src/cli/lib/instances.ts` — running-instance registry
   - `src/server/` — Hono API server, routes, sync engine, file watcher
   - `src/schema/` — SQLite migrations + runner
 - `packages/explorer/` — browser SPA (Vite), not published. Currently needs updating for the new API.
@@ -79,11 +86,26 @@ No auth required. Content lives on disk — the API returns metadata and relatio
 ## Commands
 
 ```bash
-npx tsx packages/arkeon/src/index.ts start    # start the stack
-npx tsx packages/arkeon/src/index.ts stop     # stop it
-npx tsx packages/arkeon/src/index.ts status   # check if running
-npx tsx packages/arkeon/src/index.ts init     # register cwd as a space
+arkeon-wiki up                  # start as a detached background daemon
+arkeon-wiki down                # stop the daemon (alias: stop)
+arkeon-wiki status              # is it running?
+arkeon-wiki ls                  # list all running instances
+arkeon-wiki logs [-f]           # print/tail the daemon log
+arkeon-wiki init                # register cwd as a space
+arkeon-wiki start               # foreground (for use under pm2/launchd/etc.)
 ```
+
+Run multiple instances side by side with `--name`:
+
+```bash
+arkeon-wiki up --name dev-a     # state at ~/.arkeon-wiki/dev-a/, port derived from name
+arkeon-wiki up --name dev-b     # independent daemon, different port
+arkeon-wiki ls
+arkeon-wiki down --name dev-a
+```
+
+The port for a named instance is `8000 + sha256(name) mod 999 + 1`, so the
+same name always picks the same port.
 
 ## Testing
 
@@ -97,11 +119,15 @@ E2e tests start a real stack in-process — no running instance needed.
 
 ## State
 
-- `~/.arkeon-wiki/` — daemon state (SQLite database, pidfile)
-- `~/.arkeon-wiki/data/arke.db` — the SQLite database file
+- `~/.arkeon-wiki/` — default instance home (SQLite database, pidfile, log)
+- `~/.arkeon-wiki/<name>/` — named instance home (one per `--name`)
+- `~/.arkeon-wiki/<home>/data/arke.db` — the SQLite database file
+- `~/.arkeon-wiki/<home>/arkeon.pid` — pidfile for the daemon
+- `~/.arkeon-wiki/<home>/arkeon.log` — daemon stdout/stderr (rotated by user, not by us)
+- `~/.arkeon-wiki/instances/<name>.json` — registry of running instances (powers `ls`)
 - `.arkeon/state.json` — per-directory space binding (space_id, api_url)
 
-Override the state dir with `ARKEON_WIKI_HOME` env var.
+Override the state dir with `ARKEON_WIKI_HOME` env var or `--data-dir`.
 
 ## Schema migrations
 
