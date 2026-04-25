@@ -1,76 +1,42 @@
--- =============================================================================
--- Foundation: Roles, Session Context, Actors, Auth, Config
--- =============================================================================
+-- 001-foundation.sql
+-- Filesystem-first knowledge graph schema (SQLite).
+-- All migrations must be idempotent (run twice = no error).
 
--- Application role (idempotent). Password supplied via :'arke_app_password'
--- template token from migrate.ts.
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'arke_app') THEN
-    CREATE ROLE arke_app LOGIN PASSWORD :'arke_app_password';
-  ELSE
-    ALTER ROLE arke_app WITH LOGIN PASSWORD :'arke_app_password';
-  END IF;
-END $$;
-
-GRANT USAGE ON SCHEMA public TO arke_app;
-
--- Session context helper. Middleware sets per request via SET LOCAL.
-CREATE OR REPLACE FUNCTION current_actor_id() RETURNS TEXT AS $$
-  SELECT COALESCE(NULLIF(current_setting('app.actor_id', true), ''), NULL);
-$$ LANGUAGE sql STABLE;
-
-
--- =============================================================================
--- Actors
--- =============================================================================
-
-CREATE TABLE IF NOT EXISTS actors (
-  id                 TEXT PRIMARY KEY,
-  kind               TEXT NOT NULL DEFAULT 'agent',
-  owner_id           TEXT REFERENCES actors(id),
-  properties         JSONB NOT NULL DEFAULT '{}',
-  status             TEXT NOT NULL DEFAULT 'active',
-  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
-
-  CONSTRAINT valid_actor_kind CHECK (kind = 'agent'),
-  CONSTRAINT valid_actor_status CHECK (status IN ('active', 'suspended', 'deactivated'))
+-- Spaces: a watched directory on disk
+CREATE TABLE IF NOT EXISTS spaces (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  watch_dir TEXT UNIQUE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_actors_owner ON actors (owner_id);
-CREATE INDEX IF NOT EXISTS idx_actors_status ON actors (status);
-
-GRANT SELECT, INSERT, UPDATE, DELETE ON actors TO arke_app;
-
-
--- =============================================================================
--- API Keys
--- =============================================================================
-
-CREATE TABLE IF NOT EXISTS api_keys (
-  id         TEXT PRIMARY KEY,
-  key_prefix TEXT NOT NULL,
-  key_hash   TEXT NOT NULL UNIQUE,
-  actor_id   TEXT NOT NULL REFERENCES actors(id),
-  label      TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  last_used_at TIMESTAMPTZ,
-  revoked_at TIMESTAMPTZ
+-- Entities: wikis and source files
+CREATE TABLE IF NOT EXISTS entities (
+  id TEXT PRIMARY KEY,
+  space_id TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+  type TEXT NOT NULL CHECK (type IN ('wiki', 'file')),
+  label TEXT NOT NULL,
+  source_path TEXT NOT NULL,
+  source_hash TEXT,
+  properties TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(space_id, source_path)
 );
 
-CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
-CREATE INDEX IF NOT EXISTS idx_api_keys_actor ON api_keys(actor_id);
-
-GRANT SELECT, INSERT, UPDATE, DELETE ON api_keys TO arke_app;
-
-
--- =============================================================================
--- System Config
--- =============================================================================
-
-CREATE TABLE IF NOT EXISTS system_config (
-  key   TEXT PRIMARY KEY,
-  value TEXT NOT NULL
+-- Relationship edges between entities
+CREATE TABLE IF NOT EXISTS relationships (
+  id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+  target_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+  predicate TEXT NOT NULL DEFAULT 'references',
+  link_text TEXT,
+  link_path TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(source_id, target_id, predicate)
 );
 
-GRANT SELECT, INSERT, UPDATE ON system_config TO arke_app;
+CREATE INDEX IF NOT EXISTS idx_entities_space ON entities(space_id);
+CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(space_id, type);
+CREATE INDEX IF NOT EXISTS idx_relationships_source ON relationships(source_id);
+CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships(target_id);

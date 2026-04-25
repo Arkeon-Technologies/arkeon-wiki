@@ -2,41 +2,35 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { type ArkeInstanceClient } from '@/lib/arke-client'
+import type { ArkeClient } from '@/lib/arke-client'
 import {
+  type Entity,
+  type Relationship,
+  type Space,
   type LoadedEntity,
-  type ArkeSpace,
-  type GraphNode,
-  type GraphEdge,
   createLoadedEntity,
 } from '@/lib/arke-types'
 
-const POLL_INTERVAL = 3_000
-
 export interface UseMapDataResult {
-  nodes: Map<string, GraphNode>
-  edges: GraphEdge[]
-  spaces: ArkeSpace[]
+  entities: Map<string, Entity>
+  relationships: Relationship[]
+  spaces: Space[]
   loading: boolean
-  fetchRelationships: (id: string) => Promise<LoadedEntity | null>
+  fetchEntity: (id: string) => Promise<LoadedEntity | null>
   ensureEntity: (id: string) => Promise<void>
   resetView: () => void
 }
 
-export function useMapData(
-  client: ArkeInstanceClient,
-  nodeCap: number,
-): UseMapDataResult {
-  const [nodes, setNodes] = useState<Map<string, GraphNode>>(new Map())
-  const [edges, setEdges] = useState<GraphEdge[]>([])
-  const [spaces, setSpaces] = useState<ArkeSpace[]>([])
+export function useMapData(client: ArkeClient): UseMapDataResult {
+  const [entities, setEntities] = useState<Map<string, Entity>>(new Map())
+  const [relationships, setRelationships] = useState<Relationship[]>([])
+  const [spaces, setSpaces] = useState<Space[]>([])
   const [loading, setLoading] = useState(true)
   const [resetCounter, setResetCounter] = useState(0)
 
-  const lastActivityTsRef = useRef('')
   const abortRef = useRef<AbortController | null>(null)
 
-  // ── Initial load: paginate /graph/data + fetch spaces, set state once ──
+  // ── Initial load: one call for entities+relationships, one for spaces ──
   useEffect(() => {
     abortRef.current?.abort()
     const ac = new AbortController()
@@ -45,39 +39,20 @@ export function useMapData(
     setLoading(true)
 
     async function load() {
-      const startTs = new Date().toISOString()
-      const allNodes = new Map<string, GraphNode>()
-      let allEdges: GraphEdge[] = []
-      let cursor: string | null = null
-
       try {
-        // Fetch graph data and spaces in parallel
-        const spacesPromise = client.getSpaces()
-
-        do {
-          if (ac.signal.aborted) return
-          const result = await client.getGraphData({
-            limit: nodeCap,
-            cursor: cursor ?? undefined,
-          })
-          if (ac.signal.aborted) return
-
-          for (const node of result.nodes) {
-            if (allNodes.size >= nodeCap) break
-            allNodes.set(node.id, node)
-          }
-          allEdges = allEdges.concat(result.edges)
-          cursor = result.cursor
-        } while (cursor && allNodes.size < nodeCap)
-
+        const [data, fetchedSpaces] = await Promise.all([
+          client.fetchEntities(),
+          client.fetchSpaces(),
+        ])
         if (ac.signal.aborted) return
 
-        const fetchedSpaces = await spacesPromise
-        if (ac.signal.aborted) return
+        const entityMap = new Map<string, Entity>()
+        for (const e of data.entities) {
+          entityMap.set(e.id, e)
+        }
 
-        lastActivityTsRef.current = startTs
-        setNodes(allNodes)
-        setEdges(allEdges)
+        setEntities(entityMap)
+        setRelationships(data.relationships)
         setSpaces(fetchedSpaces)
       } catch (err) {
         console.error('Graph initial load failed:', err)
@@ -88,151 +63,60 @@ export function useMapData(
 
     load()
     return () => ac.abort()
-  }, [client, nodeCap, resetCounter])
+  }, [client, resetCounter])
 
-  // ── Poll for new entities and relationships ──
-  useEffect(() => {
-    if (loading) return
-
-    const interval = setInterval(async () => {
-      if (!lastActivityTsRef.current) return
-
-      try {
-        const result = await client.getActivitySince(lastActivityTsRef.current)
-        if (result.activity.length === 0) return
-
-        const latestTs = result.activity[0]?.ts
-        if (latestTs) lastActivityTsRef.current = latestTs
-
-        const newEntityIds = new Set<string>()
-        const newEdges: GraphEdge[] = []
-
-        for (const item of result.activity) {
-          if (item.action === 'entity_created' || item.action === 'content_uploaded') {
-            newEntityIds.add(item.entity_id)
-          }
-          if (item.action === 'relationship_created') {
-            const raw = item.detail
-            const detail: Record<string, unknown> | null =
-              typeof raw === 'string' ? JSON.parse(raw) : (raw as Record<string, unknown> | null)
-            if (detail?.relationship_id && detail?.target_id && detail?.predicate) {
-              newEdges.push({
-                id: detail.relationship_id as string,
-                source_id: item.entity_id,
-                target_id: detail.target_id as string,
-                predicate: detail.predicate as string,
-              })
-            }
-          }
-        }
-
-        // Fetch full entity for each new entity
-        if (newEntityIds.size > 0) {
-          const fetches = Array.from(newEntityIds).map(async (id) => {
-            try {
-              return await client.getEntity(id)
-            } catch {
-              return null
-            }
-          })
-          const results = await Promise.all(fetches)
-
-          setNodes((prev) => {
-            const next = new Map(prev)
-            for (const entity of results) {
-              if (!entity || entity.kind === 'relationship') continue
-              if (next.size >= nodeCap) break
-              if (next.has(entity.id)) continue
-              next.set(entity.id, {
-                id: entity.id,
-                label:
-                  (entity.properties.label as string) ??
-                  (entity.properties.title as string) ??
-                  (entity.properties.name as string) ??
-                  entity.type,
-                type: entity.type,
-                space_ids: entity.space_ids ?? [],
-              })
-            }
-            return next
-          })
-        }
-
-        if (newEdges.length > 0) {
-          setEdges((prev) => {
-            const existing = new Set(prev.map((e) => e.id))
-            const additions = newEdges.filter((e) => !existing.has(e.id))
-            return additions.length > 0 ? [...prev, ...additions] : prev
-          })
-        }
-      } catch (err) {
-        console.error('Graph polling error:', err)
-      }
-    }, POLL_INTERVAL)
-
-    return () => clearInterval(interval)
-  }, [loading, client, nodeCap])
-
-  // ── On-demand: fetch relationships for EntityPanel ──
-  const fetchRelationships = useCallback(
+  // ── On-demand: fetch entity detail for EntityPanel ──
+  const fetchEntity = useCallback(
     async (id: string): Promise<LoadedEntity | null> => {
       try {
-        const [entity, rels] = await Promise.all([
-          client.getEntity(id),
-          client.getRelationships(id),
-        ])
-        return createLoadedEntity(
-          entity,
-          rels.relationships,
-          rels.outCursor,
-          rels.inCursor,
-          (entity as typeof entity & { _wikiDetail?: import('@/lib/arke-types').WikiDetail })._wikiDetail,
-        )
+        const data = await client.fetchEntity(id)
+        const entity: Entity = {
+          id: data.id,
+          space_id: data.space_id,
+          type: data.type,
+          label: data.label,
+          source_path: data.source_path,
+          properties: data.properties,
+          created_at: data.created_at,
+          updated_at: data.updated_at,
+          content: (data as Entity).content,
+        }
+        return createLoadedEntity(entity, data.relationships.outgoing, data.relationships.incoming)
       } catch (err) {
-        console.error(`Failed to fetch relationships for ${id}:`, err)
+        console.error(`Failed to fetch entity ${id}:`, err)
         return null
       }
     },
     [client],
   )
 
-  // ── Ensure a node exists in the graph (for URL deep-links) ──
+  // ── Ensure an entity exists in the graph (for URL deep-links) ──
   const ensureEntity = useCallback(
     async (id: string) => {
+      if (entities.has(id)) return
       try {
-        const entity = await client.getEntity(id)
-        if (entity.kind === 'relationship') return
-        setNodes((prev) => {
+        const data = await client.fetchEntity(id)
+        setEntities((prev) => {
           if (prev.has(id)) return prev
           const next = new Map(prev)
-          next.set(id, {
-            id: entity.id,
-            label:
-              (entity.properties.label as string) ??
-              (entity.properties.title as string) ??
-              (entity.properties.name as string) ??
-              entity.type,
-            type: entity.type,
-            space_ids: entity.space_ids ?? [],
-          })
+          next.set(id, data)
           return next
         })
       } catch (err) {
         console.error(`Failed to ensure entity ${id}:`, err)
       }
     },
-    [client],
+    [client, entities],
   )
 
   // ── Reset ──
   const resetView = useCallback(() => {
     abortRef.current?.abort()
-    setNodes(new Map())
-    setEdges([])
+    setEntities(new Map())
+    setRelationships([])
     setSpaces([])
-    lastActivityTsRef.current = ''
     setResetCounter((n) => n + 1)
   }, [])
 
-  return { nodes, edges, spaces, loading, fetchRelationships, ensureEntity, resetView }
+  return { entities, relationships, spaces, loading, fetchEntity, ensureEntity, resetView }
 }

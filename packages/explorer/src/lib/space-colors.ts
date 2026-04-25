@@ -41,9 +41,8 @@ export function getSpaceColor(spaceId: string | undefined): string {
 }
 
 /**
- * Get the primary space color for an entity based on its space_ids.
- * Uses the first space_id if multiple exist, falls back to neutral gray.
+ * Get the color for an entity based on its space_id.
  */
-export function getEntitySpaceColor(spaceIds?: string[]): string {
-  return getSpaceColor(spaceIds?.[0])
+export function getEntitySpaceColor(spaceId?: string): string {
+  return getSpaceColor(spaceId)
 }

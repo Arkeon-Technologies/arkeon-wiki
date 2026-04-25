@@ -16,12 +16,7 @@ export default defineConfig({
     port: 3100,
     proxy: {
       '/entities': 'http://localhost:8000',
-      '/relationships': 'http://localhost:8000',
-      '/activity': 'http://localhost:8000',
-      '/search': 'http://localhost:8000',
-      '/graph': 'http://localhost:8000',
       '/spaces': 'http://localhost:8000',
-      '/arkes': 'http://localhost:8000',
       '/health': 'http://localhost:8000',
     },
   },

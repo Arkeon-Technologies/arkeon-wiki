@@ -1,128 +1,72 @@
 // Copyright (c) 2026 Arkeon Technologies, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-export interface ArkeRelationship {
+export interface Entity {
   id: string
-  predicate: string
-  source_id: string
-  target_id: string
-  properties: string | Record<string, unknown>
-  target?: {
-    id: string
-    kind: string
-    type: string
-    properties: Record<string, unknown>
-  }
-  source?: {
-    id: string
-    kind: string
-    type: string
-    properties: Record<string, unknown>
-  }
-}
-
-export interface ArkeEntity {
-  id: string
-  cid?: string
-  kind: string
+  space_id: string
   type: string
-  properties: Record<string, unknown>
-  ver: number
+  label: string
+  source_path: string
+  properties: string | Record<string, unknown>
   created_at: string
   updated_at: string
-  owner_id?: string
-  space_ids?: string[]
+  content?: string | null
 }
 
-/** A reference link from the single-wiki endpoint */
-export interface WikiLink {
+export interface Relationship {
   id: string
-  label: string
-  type: string
+  source_id: string
+  target_id: string
   predicate: string
-  span_text?: string
+  link_text?: string
+  link_path?: string
 }
 
-/** Extended data returned by GET /wiki/:id for wiki-type entities */
-export interface WikiDetail {
-  links_to: WikiLink[]
-  linked_from: WikiLink[]
-  sources: unknown[]
+export interface OutgoingRel extends Relationship {
+  target_label: string
+  target_type: string
+  target_source_path: string
+}
+
+export interface IncomingRel extends Relationship {
+  source_label: string
+  source_type: string
+  source_source_path: string
+}
+
+export interface Space {
+  id: string
+  name: string
+  watch_dir: string
+  entity_count: number
+  created_at: string
 }
 
 export interface LoadedEntity {
-  entity: ArkeEntity
-  label?: string
-  description?: string
-  relationships: ArkeRelationship[]
-  outCursor: string | null
-  inCursor: string | null
-  hasMore: boolean
-  triplet?: ArkeRelationship
-  /** Wiki-specific detail (links_to, linked_from) from the single-wiki endpoint */
-  wikiDetail?: WikiDetail
+  entity: Entity
+  label: string
+  description: string
+  outgoing: OutgoingRel[]
+  incoming: IncomingRel[]
+  content: string | null
+}
+
+export function parseProps(entity: Entity): Record<string, unknown> {
+  if (typeof entity.properties === 'string') {
+    try { return JSON.parse(entity.properties) } catch { return {} }
+  }
+  return entity.properties ?? {}
 }
 
 export function createLoadedEntity(
-  entity: ArkeEntity,
-  relationships: ArkeRelationship[],
-  outCursor: string | null = null,
-  inCursor: string | null = null,
-  wikiDetail?: WikiDetail,
+  entity: Entity,
+  outgoing: OutgoingRel[],
+  incoming: IncomingRel[],
 ): LoadedEntity {
-  const label = (entity.properties.label ?? entity.properties.title ?? entity.properties.name) as string | undefined
-  const description = (entity.properties.short_description ?? entity.properties.description ?? entity.properties.body) as string | undefined
-  return {
-    entity, label, description, relationships,
-    outCursor, inCursor, hasMore: outCursor !== null || inCursor !== null,
-    wikiDetail,
-  }
-}
+  const props = parseProps(entity)
+  const label = (props.label ?? entity.label) as string
+  const description = (props.short_description ?? props.description ?? '') as string
+  const content = entity.content ?? null
 
-// Lightweight types for graph visualization
-export interface GraphNode {
-  id: string
-  label: string
-  type: string
-  space_ids: string[]
-}
-
-export interface GraphEdge {
-  id: string
-  source_id: string
-  target_id: string
-  predicate: string
-}
-
-export interface ActivityItem {
-  id: number | string
-  entity_id: string
-  actor_id: string
-  action: string
-  detail: unknown
-  ts: string
-}
-
-export interface ArkeActor {
-  id: string
-  kind: string
-  properties: Record<string, unknown>
-  status: string
-}
-
-export interface ArkeSpace {
-  id: string
-  name: string
-  description: string | null
-  entity_count: number
-}
-
-export interface ArkeComment {
-  id: string
-  entity_id: string
-  author_id: string
-  body: string
-  parent_id: string | null
-  created_at: string
-  replies?: ArkeComment[]
+  return { entity, label, description, outgoing, incoming, content }
 }

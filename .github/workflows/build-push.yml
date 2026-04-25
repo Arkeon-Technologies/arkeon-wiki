@@ -1,9 +1,9 @@
-name: Test and Check CLI Drift
+name: Test
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, fs-first]
     paths:
       - 'packages/arkeon/**'
       - 'packages/explorer/**'
@@ -11,7 +11,6 @@ on:
       - 'package-lock.json'
       - '.github/workflows/build-push.yml'
   pull_request:
-    branches: [main]
     paths:
       - 'packages/arkeon/**'
       - 'packages/explorer/**'
@@ -20,11 +19,7 @@ on:
       - '.github/workflows/build-push.yml'
 
 jobs:
-  # Job name pinned to `test-and-push` because branch protection on `main`
-  # requires a status check with exactly that name (historical — it used
-  # to also push to ECR, which this job no longer does). Rename carefully;
-  # any change here needs a matching branch-protection update.
-  test-and-push:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,152 +31,42 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck arkeon
+      - name: Typecheck
         run: npm run typecheck -w packages/arkeon
 
-      - name: arkeon unit tests
+      - name: Unit tests
         run: npm test -w packages/arkeon
 
-      # Start the full Arkeon stack via the CLI: embedded Postgres, Meilisearch
-      # (downloaded on first run, cached between runs via GHA cache), schema
-      # migrations, API. No Docker required.
-      - name: Cache Arkeon local dir
-        id: cache-arkeon
-        uses: actions/cache@v4
-        with:
-          path: ~/.arkeon-wiki/bin
-          key: arkeon-bin-${{ runner.os }}-${{ runner.arch }}-meili-1.41.0
-
-      - name: Start Arkeon stack
-        run: |
-          nohup npx tsx packages/arkeon/src/index.ts start \
-            --port 8000 \
-            --pg-port 15433 \
-            --meili-port 17700 \
-            > /tmp/arkeon.log 2>&1 &
-          echo $! > /tmp/arkeon.pid
-
-      - name: Wait for API health
-        run: |
-          for i in $(seq 1 60); do
-            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
-              echo "API is healthy"
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "API failed to start within 120s"
-          echo "--- log ---"
-          cat /tmp/arkeon.log
-          exit 1
-
-      - name: Extract admin key
-        id: adminkey
-        run: |
-          key=$(grep "Admin API key" /tmp/arkeon.log | tail -1 | awk '{print $NF}')
-          echo "ADMIN_BOOTSTRAP_KEY=$key" >> "$GITHUB_ENV"
-
-      - name: Run API e2e tests
-        env:
-          E2E_BASE_URL: http://localhost:8000
+      - name: E2e tests
         run: npm run test:e2e -w packages/arkeon
 
-      - name: Stop Arkeon stack
-        if: always()
-        run: |
-          if [ -f /tmp/arkeon.pid ]; then
-            kill -TERM "$(cat /tmp/arkeon.pid)" 2>/dev/null || true
-            wait "$(cat /tmp/arkeon.pid)" 2>/dev/null || true
-          fi
-
-      - name: Tail Arkeon log on failure
-        if: failure()
-        run: tail -200 /tmp/arkeon.log || true
-
-  # Pack the tarball, install it in a clean scratch directory, and run
-  # the full lifecycle (init, up, seed, entities, down) — exactly as a
-  # first-time npm user would. Catches packaging bugs (missing dist
-  # files, broken imports, dependency conflicts) that source-tree tests
-  # miss because they run via tsx, never exercising the real tarball.
-  #
-  # Runs in parallel with test-and-push on different ports (19000 vs 8000).
-  smoke-pack:
+  license-headers:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Cache Meilisearch binary
-        uses: actions/cache@v4
-        with:
-          path: ~/.arkeon-wiki/bin
-          key: arkeon-bin-${{ runner.os }}-${{ runner.arch }}-meili-1.41.0
-
-      - name: Run pack smoke test
-        run: ./scripts/smoke-pack.sh
-
-      - name: Tail log on failure
-        if: failure()
+      - name: Verify SPDX headers
         run: |
-          SCRATCH=$(ls -td /tmp/arkeon-smoke-pack-* 2>/dev/null | head -1)
-          if [ -n "$SCRATCH" ] && [ -f "$SCRATCH/arkeon.log" ]; then
-            tail -200 "$SCRATCH/arkeon.log"
-          else
-            echo "No smoke test log found"
-          fi
+          set -euo pipefail
 
-  check-cli-spec-drift:
-    # Fails if any of the three checked-in generated files are out of
-    # date relative to their sources:
-    #   - packages/arkeon/spec/openapi.snapshot.json    <- live API surface
-    #   - packages/arkeon/src/generated/index.ts        <- openapi.snapshot.json
-    #   - packages/arkeon/src/generated/assets.ts       <- Genesis seed envelope
-    #
-    # PR authors fix drift locally with `npm run build -w packages/arkeon`
-    # (which runs fetch-spec + generate + bundle-assets ahead of tsup)
-    # and commit the result, so both API-surface changes and bundled-
-    # asset changes show up in the PR diff where reviewers can see them.
-    #
-    # No `needs: test` — this is a pure static check and runs
-    # independently so drift is visible even when the runtime suite is red.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+          mapfile -t files < <(find packages -type f \
+            \( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.mjs" -o -name "*.cjs" \) \
+            -not -path "*/node_modules/*" \
+            -not -path "*/dist/*" \
+            -not -path "*/build/*" \
+            -not -path "*/generated/*")
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
+          missing=()
+          for f in "${files[@]}"; do
+            if ! head -4 "$f" | grep -q "SPDX-License-Identifier"; then
+              missing+=("$f")
+            fi
+          done
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Regenerate arkeon spec + generated commands + bundled assets
-        run: npm run build -w packages/arkeon
-
-      - name: Fail if checked-in generated files are stale
-        run: |
-          GENERATED=(
-            packages/arkeon/spec/openapi.snapshot.json
-            packages/arkeon/src/generated/index.ts
-            packages/arkeon/src/generated/assets.ts
-          )
-          if ! git diff --quiet "${GENERATED[@]}"; then
-            echo "::error::One or more checked-in generated arkeon files are out of date."
-            echo ""
-            echo "Fix:"
-            echo "  npm run build -w packages/arkeon"
-            echo "  git add ${GENERATED[*]}"
-            echo "  git commit"
-            echo ""
-            echo "Drift detected:"
-            git --no-pager diff --stat "${GENERATED[@]}"
-            git --no-pager diff "${GENERATED[@]}"
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing SPDX license header:"
+            printf '  %s\n' "${missing[@]}"
             exit 1
           fi
-          echo "arkeon generated files are in sync with their sources."
+
+          echo "All ${#files[@]} source files have SPDX headers."
