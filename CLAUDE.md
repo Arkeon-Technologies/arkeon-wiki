@@ -145,4 +145,4 @@ Single file: `001-foundation.sql`. Must be idempotent (all `IF NOT EXISTS`). Run
 - No workers (extract, draft, enrich)
 - No explorer (needs updating for new API)
 
-The old architecture with all of these features is preserved on the `main` branch and in a local worktree at `../arkeon-wiki-archive/` for reference.
+The old architecture with all of these features is preserved on the `archive/pre-fs-first` branch and in a local worktree at `../arkeon-wiki-archive/` for reference.
