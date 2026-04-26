@@ -162,6 +162,29 @@ describe("serializeFrontmatter", () => {
     expect(parsed.body).toBe(body);
   });
 
+  it("auto-quotes ID-shaped strings so they round-trip as strings", () => {
+    // ULIDs (e.g. 01JSG…), digit-only strings, and YAML 1.1 boolean-likes
+    // must always round-trip as strings. js-yaml's dump handles this
+    // defensively when it detects ambiguity.
+    const cases = [
+      "01JSG7H3K8FZ4PV6XAY5DR9MQT",
+      "0123456789",
+      "99999999999",
+      "01234",
+      "YES",
+      "no",
+      "on",
+      "true",
+      "null",
+    ];
+    for (const id of cases) {
+      const serialized = serializeFrontmatter({ id, label: "T" }, "\nbody");
+      const parsed = parseFrontmatter(serialized);
+      expect(typeof parsed.properties.id).toBe("string");
+      expect(parsed.properties.id).toBe(id);
+    }
+  });
+
   it("preserves key insertion order", () => {
     const result = serializeFrontmatter(
       { id: "01ABC", label: "Test", subject_type: "person" },

@@ -52,9 +52,12 @@ He worked at [Bell Labs](../organization/bell-labs.md).
 
 - YAML between `---` fences. Parsed with js-yaml's `JSON_SCHEMA` so values map cleanly to JSON-compatible types (no Norway problem — `country: NO` stays the string `"NO"`). Properties are serialized to JSON text in SQLite.
 - Supports nested mappings, sequences, multi-line strings (`|` literal, `>` folded), and `#` comments.
+- **Quote numeric-looking strings** you want to keep as strings (e.g. `version: "1.10"` — unquoted `1.10` becomes the float `1.1`). The serializer is defensive on the way out — IDs and digit-only strings are auto-quoted on write — but on read, what you write is what you get.
 - `id` is auto-generated on first sync if missing, written back to the file.
 - `label` is required. Everything else is arbitrary.
 - Standard markdown links (`[text](path.md)`) become relationship edges.
+
+YAML is a superset of JSON, so wikis written with the old JSON-style frontmatter (`---\n{ ... }\n---`) still parse correctly. The first sync that writes back a generated `id` will rewrite the file in YAML form — heads-up if you have uncommitted changes to a wiki that was authored with JSON frontmatter.
 
 ## Schema
 
