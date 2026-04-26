@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Browser-side frontmatter parser. Strips JSON frontmatter from wiki
+ * Browser-side frontmatter parser. Strips YAML frontmatter from wiki
  * content so the EntityPanel can render just the body.
  */
+
+import yaml from 'js-yaml'
 
 export function parseFrontmatter(content: string): { properties: Record<string, unknown>; body: string } {
   const trimmed = content.trimStart()
@@ -20,15 +22,18 @@ export function parseFrontmatter(content: string): { properties: Record<string, 
   const closingIndex = rest.indexOf('\n---')
   if (closingIndex === -1) return { properties: {}, body: content }
 
-  const jsonStr = rest.slice(0, closingIndex).trim()
+  const yamlStr = rest.slice(0, closingIndex)
   const body = rest.slice(closingIndex + 4).replace(/^\n/, '')
 
-  let properties: Record<string, unknown>
+  let parsed: unknown
   try {
-    properties = JSON.parse(jsonStr)
+    parsed = yaml.load(yamlStr, { schema: yaml.JSON_SCHEMA })
   } catch {
     return { properties: {}, body: content }
   }
 
-  return { properties, body }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    return { properties: parsed as Record<string, unknown>, body }
+  }
+  return { properties: {}, body }
 }

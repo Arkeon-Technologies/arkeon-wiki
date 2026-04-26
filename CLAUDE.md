@@ -9,7 +9,7 @@ Filesystem-first knowledge graph. You point it at directories, it watches for ch
 1. `arkeon-wiki up` — starts SQLite database + API server as a detached background daemon (survives the terminal closing)
 2. `arkeon-wiki init` — registers the current directory as a space; the daemon starts watching it
 3. You add/edit/delete files — the file watcher detects changes and syncs to SQLite automatically
-4. Wiki files (`wiki/**/*.md`) use JSON frontmatter for structured metadata and standard markdown links for cross-references
+4. Wiki files (`wiki/**/*.md`) use YAML frontmatter for structured metadata and standard markdown links for cross-references
 5. Links between wiki files become relationship edges in SQLite
 
 There are no manual sync commands. The filesystem is the source of truth.
@@ -36,13 +36,13 @@ Two npm workspaces. Only one is published.
 
 ```markdown
 ---
-{
-  "id": "01JSG...",
-  "label": "Claude Shannon",
-  "subject_type": "person",
-  "birth_year": 1916,
-  "fields": ["mathematics", "information theory"]
-}
+id: 01JSG...
+label: Claude Shannon
+subject_type: person
+birth_year: 1916
+fields:
+  - mathematics
+  - information theory
 ---
 
 Claude Shannon was the father of information theory.
@@ -50,10 +50,14 @@ Claude Shannon was the father of information theory.
 He worked at [Bell Labs](../organization/bell-labs.md).
 ```
 
-- JSON between `---` fences (not YAML). Properties stored as JSON text in SQLite.
+- YAML between `---` fences. Parsed with js-yaml's `JSON_SCHEMA` so values map cleanly to JSON-compatible types (no Norway problem — `country: NO` stays the string `"NO"`). Properties are serialized to JSON text in SQLite.
+- Supports nested mappings, sequences, multi-line strings (`|` literal, `>` folded), and `#` comments.
+- **Quote numeric-looking strings** you want to keep as strings (e.g. `version: "1.10"` — unquoted `1.10` becomes the float `1.1`). The serializer is defensive on the way out — IDs and digit-only strings are auto-quoted on write — but on read, what you write is what you get.
 - `id` is auto-generated on first sync if missing, written back to the file.
 - `label` is required. Everything else is arbitrary.
 - Standard markdown links (`[text](path.md)`) become relationship edges.
+
+YAML is a superset of JSON, so wikis written with the old JSON-style frontmatter (`---\n{ ... }\n---`) still parse correctly. The first sync that writes back a generated `id` will rewrite the file in YAML form — heads-up if you have uncommitted changes to a wiki that was authored with JSON frontmatter.
 
 ## Schema
 
@@ -69,7 +73,7 @@ No actors, no auth, no queues, no versioning. Schema in `src/schema/001-foundati
 
 - `src/server/lib/sync.ts` — `syncFile()`: the core primitive. Reads a file, parses frontmatter, upserts entity, resolves links to relationship edges.
 - `src/server/lib/fs-watcher.ts` — watches registered directories, debounces changes, calls `syncFile()` / `removeByPath()`.
-- `src/server/lib/frontmatter.ts` — parse/serialize JSON frontmatter.
+- `src/server/lib/frontmatter.ts` — parse/serialize YAML frontmatter.
 - `src/server/lib/markdown-links.ts` — extract and resolve markdown links.
 
 ## API endpoints

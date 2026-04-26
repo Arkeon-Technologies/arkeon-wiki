@@ -25,6 +25,7 @@ import {
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
+import yaml from "js-yaml";
 
 // Port that won't collide with other services
 const API_PORT = 18787;
@@ -45,8 +46,8 @@ function writeWiki(
   const absPath = join(testDir, relativePath);
   const dir = absPath.substring(0, absPath.lastIndexOf("/"));
   mkdirSync(dir, { recursive: true });
-  const json = JSON.stringify(properties, null, 2);
-  writeFileSync(absPath, `---\n${json}\n---\n\n${body}\n`);
+  const fm = yaml.dump(properties, { schema: yaml.JSON_SCHEMA, sortKeys: false }).trimEnd();
+  writeFileSync(absPath, `---\n${fm}\n---\n\n${body}\n`);
 }
 
 function writeSourceFile(relativePath: string, content: string): void {
@@ -215,7 +216,7 @@ describe("space registration + auto-sync", () => {
 
     // Read the file and check frontmatter has the ID
     const content = readFile("wiki/person/alan-turing.md");
-    expect(content).toContain(`"id": "${turing.id}"`);
+    expect(content).toContain(`id: ${turing.id}`);
   });
 
   it("auto-detects file modifications", async () => {
@@ -392,7 +393,7 @@ describe("space registration + auto-sync", () => {
     expect(props.edit_count).toBe(5);
   });
 
-  it("handles complex JSON properties", async () => {
+  it("handles complex nested properties", async () => {
     writeWiki("wiki/concept/complex-props.md", {
       label: "Complex Properties Test",
       subject_type: "concept",
