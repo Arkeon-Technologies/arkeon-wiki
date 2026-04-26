@@ -5,23 +5,32 @@ import type { Command } from "commander";
 import { platform } from "node:os";
 
 import {
+  applyName,
   isProcessAlive,
   readPidfile,
   removePidfile,
 } from "../../lib/local-runtime.js";
 import { output } from "../../lib/output.js";
 
+export interface StopOptions {
+  name?: string;
+  timeout: string;
+}
+
 export function registerStopCommand(program: Command): void {
   program
     .command("stop")
-    .description("Stop the running Arkeon instance")
+    .description("Stop a running Arkeon instance (alias: down)")
+    .option("--name <name>", "Stop a named instance started with `--name <name>`")
     .option("--timeout <ms>", "How long to wait for graceful shutdown", "30000")
-    .action(async (options: { timeout: string }) => {
+    .action(async (options: StopOptions) => {
       await runStop(options);
     });
 }
 
-async function runStop(options: { timeout: string }): Promise<void> {
+export async function runStop(options: StopOptions): Promise<void> {
+  if (options.name) applyName(options.name);
+
   const pid = readPidfile();
   if (!pid) {
     output.result({ operation: "stop", state: "not_running", reason: "no_pidfile" });
