@@ -27,7 +27,7 @@ import {
   readPidfile,
   removePidfile,
 } from "../../lib/local-runtime.js";
-import { DEFAULT_INSTANCE_NAME, findInstance } from "../../lib/instances.js";
+import { DEFAULT_INSTANCE_NAME, findInstance, findInstanceByPort } from "../../lib/instances.js";
 import { output } from "../../lib/output.js";
 
 interface UpOptions {
@@ -77,6 +77,16 @@ async function runUp(options: UpOptions): Promise<void> {
   // crash with EADDRINUSE inside the detached child while some unrelated
   // service holding the port keeps answering /health, fooling our poller.
   if (await isPortInUse(apiPort)) {
+    // Two named instances can hash to the same port slot. Surface that
+    // case explicitly so the user knows it's a collision with another
+    // arkeon-wiki, not just a generic squatter.
+    const owner = findInstanceByPort(apiPort);
+    if (owner && owner.name !== (options.name ?? DEFAULT_INSTANCE_NAME)) {
+      throw new Error(
+        `Port ${apiPort} is already in use by arkeon-wiki instance "${owner.name}" (pid ${owner.pid}). ` +
+          `Two named instances hashed to the same port — pick a different --name, or pass --port to override.`,
+      );
+    }
     throw new Error(
       `Port ${apiPort} is already in use. Pick another with --port, or stop the service that's holding it.`,
     );

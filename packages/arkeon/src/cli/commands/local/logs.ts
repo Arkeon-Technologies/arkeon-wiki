@@ -8,7 +8,8 @@
 import { createReadStream, existsSync, statSync, watch } from "node:fs";
 import type { Command } from "commander";
 
-import { applyName, logfile } from "../../lib/local-runtime.js";
+import { applyName, isProcessAlive, logfile } from "../../lib/local-runtime.js";
+import { DEFAULT_INSTANCE_NAME, findInstance } from "../../lib/instances.js";
 import { output } from "../../lib/output.js";
 
 interface LogsOptions {
@@ -61,8 +62,32 @@ async function runLogs(options: LogsOptions): Promise<void> {
     } catch { /* transient — try again on next event */ }
   });
 
-  process.on("SIGINT", () => { watcher.close(); process.exit(0); });
-  process.on("SIGTERM", () => { watcher.close(); process.exit(0); });
+  // If the daemon was running when we started, watch for its death so we
+  // exit cleanly instead of silently sitting on a file that will never
+  // grow. Skip the check if no instance was registered (logs after stop).
+  const instanceName = options.name ?? DEFAULT_INSTANCE_NAME;
+  const initial = findInstance(instanceName);
+  let deathCheck: NodeJS.Timeout | null = null;
+  if (initial) {
+    deathCheck = setInterval(() => {
+      if (!isProcessAlive(initial.pid)) {
+        process.stdout.write(
+          `\n[arkeon-wiki] daemon (pid ${initial.pid}) exited — log will not grow further.\n`,
+        );
+        clearInterval(deathCheck!);
+        watcher.close();
+        process.exit(0);
+      }
+    }, 1000);
+  }
+
+  const cleanup = () => {
+    if (deathCheck) clearInterval(deathCheck);
+    watcher.close();
+    process.exit(0);
+  };
+  process.on("SIGINT", cleanup);
+  process.on("SIGTERM", cleanup);
 
   // Keep the process alive
   await new Promise(() => { /* run forever until signal */ });

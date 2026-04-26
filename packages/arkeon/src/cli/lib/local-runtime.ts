@@ -141,10 +141,12 @@ export async function isPortInUse(port: number): Promise<boolean> {
     };
     socket.once("connect", () => settle(true));
     socket.once("error", (err: NodeJS.ErrnoException) => {
-      // ECONNREFUSED → nothing listening (port is free).
-      // Anything else (timeout, host unreachable) we conservatively
-      // treat as "not in use" so we don't block legitimate starts.
-      settle(err.code !== "ECONNREFUSED" && false);
+      // ECONNREFUSED is the only definitive "free" signal — nothing was
+      // listening to even refuse us. Anything else (ECONNRESET from a
+      // half-open socket, host unreachable, etc.) means something *is*
+      // there or we can't tell, so we err on the side of "in use" rather
+      // than letting the spawned daemon crash silently behind a squatter.
+      settle(err.code !== "ECONNREFUSED");
     });
     socket.setTimeout(500, () => settle(false));
   });

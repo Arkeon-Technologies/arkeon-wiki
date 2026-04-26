@@ -59,6 +59,18 @@ export function findInstance(name: string): Instance | null {
 }
 
 /**
+ * Find the instance currently running on a given port, if any. Used by
+ * `up` to give a friendlier error when a port collision is caused by
+ * another arkeon instance rather than an unrelated service.
+ */
+export function findInstanceByPort(port: number): Instance | null {
+  for (const inst of listInstances()) {
+    if (inst.api_port === port) return inst;
+  }
+  return null;
+}
+
+/**
  * List all registered instances. Prunes entries whose pid is no longer alive.
  */
 export function listInstances(): Instance[] {
