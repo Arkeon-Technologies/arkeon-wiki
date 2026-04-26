@@ -5,12 +5,10 @@ import { describe, it, expect } from "vitest";
 import { parseFrontmatter, serializeFrontmatter } from "../../src/server/lib/frontmatter.js";
 
 describe("parseFrontmatter", () => {
-  it("parses valid JSON frontmatter", () => {
+  it("parses valid YAML frontmatter", () => {
     const content = `---
-{
-  "label": "Test",
-  "count": 42
-}
+label: Test
+count: 42
 ---
 
 Body content here.`;
@@ -29,14 +27,15 @@ Body content here.`;
 
   it("handles complex nested properties", () => {
     const content = `---
-{
-  "label": "Complex",
-  "tags": ["a", "b", "c"],
-  "metadata": {
-    "source": "test",
-    "nested": { "deep": true }
-  }
-}
+label: Complex
+tags:
+  - a
+  - b
+  - c
+metadata:
+  source: test
+  nested:
+    deep: true
 ---
 
 Body.`;
@@ -46,29 +45,68 @@ Body.`;
     expect((result.properties.metadata as any).nested.deep).toBe(true);
   });
 
-  it("throws on invalid JSON", () => {
+  it("does not fall into the Norway problem (NO stays a string)", () => {
+    // Under YAML 1.1's default schema, `country: NO` would coerce to false.
+    // We use JSON_SCHEMA, which keeps unquoted "NO" as a string.
     const content = `---
-{ not valid json
+country: NO
+language: no
+---
+
+Body.`;
+    const result = parseFrontmatter(content);
+    expect(result.properties.country).toBe("NO");
+    expect(result.properties.language).toBe("no");
+  });
+
+  it("preserves version-like strings as strings", () => {
+    const content = `---
+version: "1.10"
+---
+
+Body.`;
+    const result = parseFrontmatter(content);
+    expect(result.properties.version).toBe("1.10");
+  });
+
+  it("supports multi-line strings via block scalar", () => {
+    const content = `---
+label: Test
+bio: |
+  Line one.
+  Line two.
+---
+
+Body.`;
+    const result = parseFrontmatter(content);
+    expect(result.properties.bio).toBe("Line one.\nLine two.\n");
+  });
+
+  it("throws on invalid YAML", () => {
+    const content = `---
+label: "unterminated
 ---
 
 Body.`;
 
-    expect(() => parseFrontmatter(content)).toThrow("Invalid JSON in frontmatter");
+    expect(() => parseFrontmatter(content)).toThrow("Invalid YAML in frontmatter");
   });
 
-  it("throws when frontmatter is an array", () => {
+  it("throws when frontmatter is a sequence", () => {
     const content = `---
-[1, 2, 3]
+- one
+- two
+- three
 ---
 
 Body.`;
 
-    expect(() => parseFrontmatter(content)).toThrow("Frontmatter JSON must be an object");
+    expect(() => parseFrontmatter(content)).toThrow("Frontmatter YAML must be a mapping");
   });
 
-  it("handles empty properties object", () => {
+  it("handles empty frontmatter (blank line between fences)", () => {
     const content = `---
-{}
+
 ---
 
 Body.`;
@@ -80,7 +118,7 @@ Body.`;
 
   it("handles no closing fence", () => {
     const content = `---
-{ "label": "Test" }
+label: Test
 No closing fence here`;
 
     const result = parseFrontmatter(content);
@@ -90,9 +128,7 @@ No closing fence here`;
 
   it("handles leading whitespace before frontmatter", () => {
     const content = `  ---
-{
-  "label": "Test"
-}
+label: Test
 ---
 
 Body.`;
@@ -100,28 +136,14 @@ Body.`;
     const result = parseFrontmatter(content);
     expect(result.properties.label).toBe("Test");
   });
-
-  it("preserves special characters in values", () => {
-    const content = `---
-{
-  "label": "Test with \\"quotes\\" and\\nnewlines",
-  "emoji": "Hello"
-}
----
-
-Body.`;
-
-    const result = parseFrontmatter(content);
-    expect(result.properties.label).toBe('Test with "quotes" and\nnewlines');
-  });
 });
 
 describe("serializeFrontmatter", () => {
   it("serializes properties and body", () => {
     const result = serializeFrontmatter({ label: "Test", count: 42 }, "\nBody content.");
-    expect(result).toContain("---\n");
-    expect(result).toContain('"label": "Test"');
-    expect(result).toContain('"count": 42');
+    expect(result.startsWith("---\n")).toBe(true);
+    expect(result).toContain("label: Test");
+    expect(result).toContain("count: 42");
     expect(result).toContain("Body content.");
   });
 
@@ -138,6 +160,18 @@ describe("serializeFrontmatter", () => {
 
     expect(parsed.properties).toEqual(original);
     expect(parsed.body).toBe(body);
+  });
+
+  it("preserves key insertion order", () => {
+    const result = serializeFrontmatter(
+      { id: "01ABC", label: "Test", subject_type: "person" },
+      "\nbody",
+    );
+    const idIdx = result.indexOf("id:");
+    const labelIdx = result.indexOf("label:");
+    const typeIdx = result.indexOf("subject_type:");
+    expect(idIdx).toBeLessThan(labelIdx);
+    expect(labelIdx).toBeLessThan(typeIdx);
   });
 
   it("adds leading newline to body if missing", () => {

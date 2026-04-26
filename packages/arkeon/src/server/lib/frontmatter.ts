@@ -2,20 +2,27 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * JSON frontmatter parser/serializer.
+ * YAML frontmatter parser/serializer.
  *
- * Wiki files use JSON between --- fences for structured metadata:
+ * Wiki files use YAML between --- fences for structured metadata:
  *
  *   ---
- *   {
- *     "id": "01JSG...",
- *     "label": "Claude Shannon",
- *     "subject_type": "person"
- *   }
+ *   id: 01JSG...
+ *   label: Claude Shannon
+ *   subject_type: person
+ *   fields:
+ *     - mathematics
+ *     - information theory
  *   ---
  *
  *   Markdown body here...
+ *
+ * We use js-yaml's JSON_SCHEMA so values map cleanly to JSON-compatible types
+ * (string, number, bool, null, array, object) and we don't get the "Norway
+ * problem" where `country: NO` becomes the boolean false.
  */
+
+import yaml from "js-yaml";
 
 export interface ParsedWiki {
   /** Frontmatter properties (id, label, and arbitrary metadata). */
@@ -25,19 +32,17 @@ export interface ParsedWiki {
 }
 
 /**
- * Parse a markdown file with JSON frontmatter.
+ * Parse a markdown file with YAML frontmatter.
  * Returns the parsed properties and the body content.
- * Throws if the frontmatter is not valid JSON.
+ * Throws if the frontmatter is not valid YAML or is not a mapping.
  */
 export function parseFrontmatter(content: string): ParsedWiki {
   const trimmed = content.trimStart();
 
   if (!trimmed.startsWith("---")) {
-    // No frontmatter — treat entire content as body, no properties
     return { properties: {}, body: content };
   }
 
-  // Find the closing ---
   const firstNewline = trimmed.indexOf("\n");
   if (firstNewline === -1) {
     return { properties: {}, body: content };
@@ -47,33 +52,41 @@ export function parseFrontmatter(content: string): ParsedWiki {
   const closingIndex = rest.indexOf("\n---");
 
   if (closingIndex === -1) {
-    // No closing fence — treat as no frontmatter
     return { properties: {}, body: content };
   }
 
-  const jsonStr = rest.slice(0, closingIndex).trim();
-  const body = rest.slice(closingIndex + 4).replace(/^\n/, ""); // skip the \n--- and optional leading newline
+  const yamlStr = rest.slice(0, closingIndex);
+  const body = rest.slice(closingIndex + 4).replace(/^\n/, "");
 
-  let properties: Record<string, unknown>;
+  let parsed: unknown;
   try {
-    properties = JSON.parse(jsonStr);
+    parsed = yaml.load(yamlStr, { schema: yaml.JSON_SCHEMA });
   } catch (err) {
-    throw new Error(`Invalid JSON in frontmatter: ${(err as Error).message}`);
+    throw new Error(`Invalid YAML in frontmatter: ${(err as Error).message}`);
   }
 
-  if (typeof properties !== "object" || properties === null || Array.isArray(properties)) {
-    throw new Error("Frontmatter JSON must be an object");
+  if (parsed === null || parsed === undefined) {
+    return { properties: {}, body };
   }
 
-  return { properties, body };
+  if (typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Frontmatter YAML must be a mapping (key: value pairs)");
+  }
+
+  return { properties: parsed as Record<string, unknown>, body };
 }
 
 /**
- * Serialize properties and body back into a markdown file with JSON frontmatter.
+ * Serialize properties and body back into a markdown file with YAML frontmatter.
+ * Uses block style for readability; preserves insertion order of keys.
  */
 export function serializeFrontmatter(properties: Record<string, unknown>, body: string): string {
-  const json = JSON.stringify(properties, null, 2);
-  // Ensure body has exactly one leading newline after the closing fence
+  const yamlStr = yaml.dump(properties, {
+    schema: yaml.JSON_SCHEMA,
+    lineWidth: 100,
+    noRefs: true,
+    sortKeys: false,
+  }).trimEnd();
   const normalizedBody = body.startsWith("\n") ? body : `\n${body}`;
-  return `---\n${json}\n---\n${normalizedBody}`;
+  return `---\n${yamlStr}\n---\n${normalizedBody}`;
 }

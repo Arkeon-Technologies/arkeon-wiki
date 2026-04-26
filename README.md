@@ -24,15 +24,13 @@ This registers the directory as a space. The daemon immediately starts watching 
 
 **3. Add wiki files**
 
-Create markdown files with JSON frontmatter under `wiki/`:
+Create markdown files with YAML frontmatter under `wiki/`:
 
 ```markdown
 ---
-{
-  "label": "Claude Shannon",
-  "subject_type": "person",
-  "birth_year": 1916
-}
+label: Claude Shannon
+subject_type: person
+birth_year: 1916
 ---
 
 Claude Shannon was the father of information theory.
@@ -62,7 +60,7 @@ curl http://localhost:8000/entities?type=wiki     # filter by type
 The filesystem is the source of truth. Postgres is an index.
 
 - **Spaces** are directories registered with the daemon
-- **Entities** are files on disk — wikis (under `wiki/`) have JSON frontmatter, everything else is a source file
+- **Entities** are files on disk — wikis (under `wiki/`) have YAML frontmatter, everything else is a source file
 - **Relationships** are standard markdown links (`[text](path.md)`) resolved into edges in Postgres
 - A file watcher detects changes in real-time; a reconciliation pass on startup catches anything missed
 
