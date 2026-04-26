@@ -83,9 +83,21 @@ No actors, no auth, no queues, no versioning. Schema in `src/schema/001-foundati
 - `GET /entities?space_id=...&type=...` — list entities (filterable, paginated)
 - `GET /entities/{id}` — entity properties + relationships (no content)
 - `DELETE /entities/{id}` — remove entity
+- `GET /search?q=...&space_id=...&limit=...&snippets=...&regex=...` — keyword search via ripgrep against the watched directory; returns ranked entity hits with line snippets
 - `GET /health` / `GET /ready`
 
 No auth required. Content lives on disk — the API returns metadata and relationships only.
+
+## Search
+
+Keyword search is filesystem-first: there is no keyword index in SQLite. The
+`/search` endpoint and `arkeon-wiki search` CLI spawn ripgrep (bundled via
+`@vscode/ripgrep`, cross-platform) against each space's `watch_dir`, parse
+`--json` output, and join the matched paths back to entities. Results are
+ranked by `matched_lines` count.
+
+Vector / semantic search is planned next (sqlite-vec + EmbeddingGemma-300M)
+and will be fused with ripgrep results via reciprocal rank fusion.
 
 ## Commands
 
@@ -96,6 +108,7 @@ arkeon-wiki status              # is it running?
 arkeon-wiki ls                  # list all running instances
 arkeon-wiki logs [-f]           # print/tail the daemon log
 arkeon-wiki init                # register cwd as a space
+arkeon-wiki search <query>      # keyword search (defaults to bound space)
 arkeon-wiki start               # foreground (for use under pm2/launchd/etc.)
 ```
 
@@ -139,8 +152,8 @@ Single file: `001-foundation.sql`. Must be idempotent (all `IF NOT EXISTS`). Run
 
 ## What's NOT here (yet)
 
-- No vector search (sqlite-vec planned)
-- No Meilisearch / full-text search
+- No vector search (sqlite-vec + EmbeddingGemma planned, hybrid RRF with ripgrep)
+- No FTS5 / BM25 ranking (ripgrep gives substring matching only)
 - No auth / API keys
 - No workers (extract, draft, enrich)
 - No explorer (needs updating for new API)

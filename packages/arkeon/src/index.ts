@@ -9,6 +9,7 @@ import { Command } from "commander";
 
 import { registerLocalCommands } from "./cli/commands/local/index.js";
 import { registerInitCommand } from "./cli/commands/repo/init.js";
+import { registerSearchCommand } from "./cli/commands/repo/search.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf-8")) as { version: string };
@@ -40,5 +41,6 @@ program.hook("preAction", (command) => {
 
 registerLocalCommands(program);
 registerInitCommand(program);
+registerSearchCommand(program);
 
 program.parse();
