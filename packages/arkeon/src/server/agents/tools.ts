@@ -20,6 +20,7 @@ import { contribute } from "../lib/contributions.js";
 import { safeResolve } from "../lib/file-edits.js";
 import { parseFrontmatter } from "../lib/frontmatter.js";
 import { search as ripgrepSearch } from "../lib/search.js";
+import { listWikis } from "../lib/wikis.js";
 
 import { defineTool, type ToolFactory } from "./define-tool.js";
 
@@ -78,6 +79,63 @@ const searchTool = defineTool("search", {
       regex,
       limit,
       maxSnippetsPerFile: max_snippets_per_file,
+    }),
+});
+
+// ── list_wikis ────────────────────────────────────────────────────
+
+const listWikisTool = defineTool("list_wikis", {
+  description:
+    "List wikis in the current space, with optional filters. Use this to " +
+    "enumerate existing wikis before contributing (so you can check if a " +
+    "subject already has a wiki) or to find wikis that need editing " +
+    "(filter by has_contributions or status='placeholder'). Returns " +
+    "{wikis, total, limit, offset}.",
+  inputSchema: z.object({
+    subject_type: z
+      .string()
+      .optional()
+      .describe("Filter on frontmatter `subject_type` (e.g. 'person', 'concept')."),
+    status: z
+      .string()
+      .optional()
+      .describe("Filter on frontmatter `status` (e.g. 'placeholder', 'published')."),
+    label_prefix: z
+      .string()
+      .optional()
+      .describe(
+        "Case-insensitive prefix match on the wiki's label. Useful for " +
+          "checking whether a subject already exists before creating one.",
+      ),
+    has_contributions: z
+      .boolean()
+      .optional()
+      .describe("If true, only wikis with at least one pending contribution."),
+    sort: z
+      .enum(["updated_at", "label"])
+      .optional()
+      .describe("Default 'updated_at' (newest first)."),
+    include_counts: z
+      .boolean()
+      .optional()
+      .describe(
+        "Attach contributions_pending + incoming/outgoing link counts " +
+          "per wiki. Useful for prioritisation.",
+      ),
+    limit: z.number().int().positive().optional().describe("Default 100, max 10000."),
+    offset: z.number().int().min(0).optional().describe("Pagination offset, default 0."),
+  }),
+  call: (input, ctx) =>
+    listWikis({
+      space_id: ctx.space.id,
+      subject_type: input.subject_type,
+      status: input.status,
+      label_prefix: input.label_prefix,
+      has_contributions: input.has_contributions,
+      sort: input.sort,
+      include_counts: input.include_counts,
+      limit: input.limit,
+      offset: input.offset,
     }),
 });
 
@@ -165,6 +223,7 @@ const contributeTool = defineTool("contribute", {
 export const ALL_TOOLS: Record<string, ToolFactory> = {
   read_file: readFileTool,
   search: searchTool,
+  list_wikis: listWikisTool,
   edit_file: editFileTool,
   write_file: writeFileTool,
   contribute: contributeTool,
