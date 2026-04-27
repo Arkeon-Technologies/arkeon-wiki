@@ -24,7 +24,7 @@ Consistent JSON error shape for all API endpoints.
 
 - Every non-2xx response returns this shape
 - Unexpected exceptions map to `internal_error`
-- Postgres constraint violations are mapped to meaningful codes (`conflict`, `invalid_reference`, `missing_field`, `validation_error`)
+- SQLite constraint violations are mapped to meaningful codes (`conflict`, `invalid_reference`, `missing_field`, `validation_error`) in `src/server/lib/db-errors.ts`
 
 ## Common codes
 
