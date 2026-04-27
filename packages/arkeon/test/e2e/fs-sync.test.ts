@@ -471,11 +471,61 @@ describe("API read endpoints", () => {
     }
   });
 
+  it("filters by status", async () => {
+    // Write a wiki with status:published; wait for the watcher to sync it.
+    writeWiki(
+      "wiki/concept/published-only.md",
+      { label: "Status Filter Probe", subject_type: "concept", status: "published" },
+      "Probe for the status filter.",
+    );
+
+    const spaces = await api("/spaces");
+    const spaceId = spaces.spaces[0].id;
+
+    const deadline = Date.now() + 5000;
+    let probe: any;
+    while (Date.now() < deadline) {
+      const data = await api(`/wikis?space_id=${spaceId}&status=published`);
+      probe = data.wikis.find((w: any) => w.label === "Status Filter Probe");
+      if (probe) {
+        // Every result must have status=published
+        for (const w of data.wikis) {
+          const props = typeof w.properties === "string" ? JSON.parse(w.properties) : w.properties;
+          expect(props.status).toBe("published");
+        }
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    expect(probe).toBeTruthy();
+  });
+
   it("supports sort=label", async () => {
     const sorted = await api("/wikis?sort=label");
     const labels = sorted.wikis.map((w: any) => w.label);
     const expected = [...labels].sort((a, b) => a.localeCompare(b));
     expect(labels).toEqual(expected);
+  });
+
+  it("rejects invalid sort with 400", async () => {
+    const data = await api("/wikis?sort=bogus");
+    expect(data.error?.code).toBe("validation_error");
+  });
+
+  it("combines filters (subject_type + label_prefix)", async () => {
+    const data = await api("/wikis?subject_type=person&label_prefix=Alan");
+    expect(data.wikis.length).toBeGreaterThan(0);
+    for (const w of data.wikis) {
+      const props = typeof w.properties === "string" ? JSON.parse(w.properties) : w.properties;
+      expect(props.subject_type).toBe("person");
+      expect(w.label.toLowerCase().startsWith("alan")).toBe(true);
+    }
+  });
+
+  it("returns total: 0 for filters that match nothing", async () => {
+    const data = await api("/wikis?subject_type=__no_such_type__");
+    expect(data.total).toBe(0);
+    expect(data.wikis).toHaveLength(0);
   });
 
   it("returns 404 for nonexistent wiki", async () => {
