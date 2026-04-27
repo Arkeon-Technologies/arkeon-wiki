@@ -154,6 +154,30 @@ async function syncWikiFile(
       }
     }
 
+    // Mirror frontmatter contributions[] into the contributions table.
+    // Frontmatter is canonical; we delete-then-insert per file.
+    await tx`DELETE FROM contributions WHERE wiki_id = ${entityId}`;
+    const fmContributions = Array.isArray(props.contributions)
+      ? (props.contributions as Array<Record<string, unknown>>)
+      : [];
+    for (const c of fmContributions) {
+      const cid = (c.id as string) ?? generateUlid();
+      await tx`
+        INSERT INTO contributions
+          (id, wiki_id, source_id, excerpt, claim, added_at, consumed_at, consumed_in_revision)
+        VALUES (
+          ${cid},
+          ${entityId},
+          ${(c.source_id as string) ?? null},
+          ${(c.excerpt as string) ?? null},
+          ${(c.claim as string) ?? null},
+          ${(c.added_at as string) ?? new Date().toISOString()},
+          ${(c.consumed_at as string) ?? null},
+          ${(c.consumed_in_revision as number) ?? null}
+        )
+      `;
+    }
+
     return { linksResolved, linksDangling };
   });
 
