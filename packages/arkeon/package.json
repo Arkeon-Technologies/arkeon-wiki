@@ -16,14 +16,10 @@
     "dist"
   ],
   "scripts": {
-    "fetch-spec": "tsx scripts/fetch-openapi.ts",
-    "generate": "tsx scripts/generate-commands.ts",
-    "bundle-assets": "tsx scripts/bundle-assets.ts",
     "bundle-explorer": "npm run build -w @arkeon-wiki/explorer && tsx scripts/copy-explorer.ts",
     "bundle-schema": "tsx scripts/copy-schema.ts",
-    "bundle-spec": "tsx scripts/copy-spec.ts",
     "prepack": "npm run build",
-    "build": "npm run fetch-spec && npm run generate && npm run bundle-assets && tsup && npm run bundle-explorer && npm run bundle-schema && npm run bundle-spec",
+    "build": "tsup && npm run bundle-explorer && npm run bundle-schema",
     "dev": "tsup --watch",
     "start": "node dist/index.js",
     "test": "vitest run",
@@ -35,7 +31,6 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.19.11",
-    "@hono/zod-openapi": "^1.2.3",
     "@vscode/ripgrep": "^1.17.1",
     "better-sqlite3": "^12.9.0",
     "commander": "^14.0.1",
