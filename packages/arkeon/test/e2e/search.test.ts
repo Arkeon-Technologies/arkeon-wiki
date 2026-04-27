@@ -14,6 +14,7 @@ import { mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
+import yaml from "js-yaml";
 
 const API_PORT = 18791;
 const BASE_URL = `http://localhost:${API_PORT}`;
@@ -31,8 +32,10 @@ function writeWiki(
   const absPath = join(testDir, relativePath);
   const dir = absPath.substring(0, absPath.lastIndexOf("/"));
   mkdirSync(dir, { recursive: true });
-  const json = JSON.stringify(properties, null, 2);
-  writeFileSync(absPath, `---\n${json}\n---\n\n${body}\n`);
+  const fm = yaml
+    .dump(properties, { schema: yaml.JSON_SCHEMA, sortKeys: false })
+    .trimEnd();
+  writeFileSync(absPath, `---\n${fm}\n---\n\n${body}\n`);
 }
 
 async function api(path: string): Promise<any> {
