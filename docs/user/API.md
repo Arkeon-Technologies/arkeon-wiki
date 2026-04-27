@@ -70,38 +70,46 @@ Single space. Returns `404` if not found.
 
 ---
 
-## Entities
+## Wikis
 
-An entity is one file on disk. Wikis (under `wiki/`) have YAML frontmatter and structured properties; other files are indexed as plain `file` entities.
+A wiki is a markdown file under `wiki/` with YAML frontmatter. Source files (everything else the watcher picks up) are indexed too but not exposed over HTTP — they are an internal substrate for the contribution flow. If a use case appears, a parallel `/sources` endpoint will be added then.
 
-### `GET /entities`
+### `GET /wikis`
 
-List entities with optional filtering.
+List wikis with frontmatter-aware filters and join-in counts.
 
 **Query parameters:**
 
 | Param | Default | Notes |
 |---|---|---|
 | `space_id` | — | Filter to one space. |
-| `type` | — | Filter by `wiki` or `file`. |
+| `subject_type` | — | Match `properties.subject_type` exactly (e.g. `person`, `organization`). |
+| `status` | — | Match `properties.status` exactly (e.g. `placeholder`, `published`). |
+| `label_prefix` | — | Case-insensitive prefix match on `label`. Useful for autocomplete. |
+| `has_contributions` | `false` | When `true`, restrict to wikis that have at least one pending (unconsumed) contribution. |
+| `sort` | `updated_at` | `updated_at` (DESC) or `label` (ASC, case-insensitive). |
+| `include` | — | Comma-separated. `relationships` adds a top-level `relationships` array (every edge touching a matched wiki). `counts` attaches `{ contributions_pending, incoming_links, outgoing_links }` to each wiki. |
 | `limit` | `100` | Max `10000`. |
 | `offset` | `0` | Pagination offset. |
-| `include` | — | Comma-separated. `relationships` adds a top-level `relationships` array containing every edge for any matched entity. |
 
 **Response:**
 
 ```json
 {
-  "entities": [
+  "wikis": [
     {
       "id": "01JSG...",
       "space_id": "01JSF...",
-      "type": "wiki",
       "label": "Claude Shannon",
       "source_path": "wiki/person/claude-shannon.md",
       "properties": { "subject_type": "person", "birth_year": 1916 },
       "created_at": "2026-04-26T18:00:00.000Z",
-      "updated_at": "2026-04-26T18:00:00.000Z"
+      "updated_at": "2026-04-26T18:00:00.000Z",
+      "counts": {
+        "contributions_pending": 2,
+        "incoming_links": 5,
+        "outgoing_links": 1
+      }
     }
   ],
   "total": 142,
@@ -110,11 +118,11 @@ List entities with optional filtering.
 }
 ```
 
-`properties` is stored as JSON text in SQLite but the API parses it before returning, so callers get an object (or array, or `null`) — not a string.
+`properties` is stored as JSON text in SQLite but the API parses it before returning, so callers get an object (or array, or `null`) — not a string. `counts` is only present when `include=counts`.
 
-### `GET /entities/:id`
+### `GET /wikis/:id`
 
-Properties plus incoming and outgoing relationships.
+Properties plus incoming and outgoing relationships. Returns `404` if `id` doesn't refer to a wiki.
 
 **Query parameters:**
 
@@ -128,7 +136,6 @@ Properties plus incoming and outgoing relationships.
 {
   "id": "01JSG...",
   "space_id": "01JSF...",
-  "type": "wiki",
   "label": "Claude Shannon",
   "source_path": "wiki/person/claude-shannon.md",
   "properties": { "subject_type": "person" },
@@ -139,7 +146,7 @@ Properties plus incoming and outgoing relationships.
       {
         "id": "01JSH...",
         "target_id": "01JSI...",
-        "predicate": "links_to",
+        "predicate": "references",
         "link_text": "Bell Labs",
         "link_path": "../organization/bell-labs.md",
         "target_label": "Bell Labs",
@@ -154,9 +161,9 @@ Properties plus incoming and outgoing relationships.
 
 With `?include=content`, a `content` field is added with the file's full UTF-8 text (or `null` if the file isn't readable).
 
-### `DELETE /entities/:id`
+### `DELETE /wikis/:id`
 
-Remove an entity from the index. The file on disk is **not** deleted — but if it still exists, the watcher will re-index it on the next change. Returns `404` if not found.
+Remove a wiki from the index. The file on disk is **not** deleted — but if it still exists, the watcher will re-index it on the next change. Returns `404` if `id` doesn't refer to a wiki.
 
 ```json
 { "deleted": true, "id": "01JSG...", "label": "Claude Shannon" }

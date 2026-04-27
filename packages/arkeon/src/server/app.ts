@@ -9,7 +9,7 @@ import { ApiError, errorBody } from "./lib/errors.js";
 import { mapDatabaseError } from "./lib/db-errors.js";
 import { createSql } from "./lib/sql.js";
 import { spacesRouter } from "./routes/spaces.js";
-import { entitiesRouter } from "./routes/entities.js";
+import { wikisRouter } from "./routes/wikis.js";
 import { searchRouter } from "./routes/search.js";
 
 export function createApp() {
@@ -37,7 +37,7 @@ export function createApp() {
   });
 
   app.route("/spaces", spacesRouter);
-  app.route("/entities", entitiesRouter);
+  app.route("/wikis", wikisRouter);
   app.route("/search", searchRouter);
 
   app.notFound((c) => {

@@ -26,6 +26,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import yaml from "js-yaml";
+import {
+  getEntityBySourcePath,
+  waitForEntityBySourcePath,
+} from "./helpers.js";
 
 // Port that won't collide with other services
 const API_PORT = 18787;
@@ -74,43 +78,42 @@ async function api(path: string, options?: RequestInit): Promise<any> {
   return res.text();
 }
 
-async function getEntities(spaceId?: string): Promise<any[]> {
+async function getWikis(spaceId?: string): Promise<any[]> {
   const qs = spaceId ? `?space_id=${spaceId}` : "";
-  const data = await api(`/entities${qs}`);
-  return data.entities ?? [];
+  const data = await api(`/wikis${qs}`);
+  return data.wikis ?? [];
 }
 
-async function getEntity(id: string): Promise<any> {
-  return api(`/entities/${id}`);
+async function getWiki(id: string): Promise<any> {
+  return api(`/wikis/${id}`);
 }
 
-/** Wait for the watcher to process. Polls until entity count matches or timeout. */
-async function waitForEntityCount(expected: number, spaceId: string, timeoutMs = 5000): Promise<any[]> {
+/** Wait for the wiki count for a space to reach `expected`. Returns the wiki list. */
+async function waitForWikiCount(expected: number, spaceId: string, timeoutMs = 5000): Promise<any[]> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const entities = await getEntities(spaceId);
-    if (entities.length === expected) return entities;
+    const wikis = await getWikis(spaceId);
+    if (wikis.length === expected) return wikis;
     await new Promise((r) => setTimeout(r, 300));
   }
-  // Return whatever we have — the assertion will fail with a useful message
-  return getEntities(spaceId);
+  return getWikis(spaceId);
 }
 
-/** Wait for an entity's properties to match a predicate. */
-async function waitForEntity(
+/** Wait for a wiki's response to match a predicate. */
+async function waitForWiki(
   id: string,
-  predicate: (entity: any) => boolean,
+  predicate: (wiki: any) => boolean,
   timeoutMs = 5000,
 ): Promise<any> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const entity = await getEntity(id);
-      if (entity && !entity.error && predicate(entity)) return entity;
+      const wiki = await getWiki(id);
+      if (wiki && !wiki.error && predicate(wiki)) return wiki;
     } catch { /* not ready yet */ }
     await new Promise((r) => setTimeout(r, 300));
   }
-  return getEntity(id);
+  return getWiki(id);
 }
 
 // ── Setup / Teardown ─────────────────────────────────────────────────
@@ -189,9 +192,9 @@ describe("space registration + auto-sync", () => {
     spaceId = data.id;
 
     // Wait for reconciliation to pick up the pre-existing file
-    const entities = await waitForEntityCount(1, spaceId);
-    expect(entities).toHaveLength(1);
-    expect(entities[0].label).toBe("Pre-Existing Entity");
+    const wikis = await waitForWikiCount(1, spaceId);
+    expect(wikis).toHaveLength(1);
+    expect(wikis[0].label).toBe("Pre-Existing Entity");
   });
 
   it("auto-detects new wiki files", async () => {
@@ -201,29 +204,25 @@ describe("space registration + auto-sync", () => {
       birth_year: 1912,
     }, "Alan Turing was a mathematician.");
 
-    const entities = await waitForEntityCount(2, spaceId);
-    const turing = entities.find((e: any) => e.label === "Alan Turing");
+    const wikis = await waitForWikiCount(2, spaceId);
+    const turing = wikis.find((e: any) => e.label === "Alan Turing");
     expect(turing).toBeTruthy();
-    expect(turing.type).toBe("wiki");
     expect(turing.source_path).toBe("wiki/person/alan-turing.md");
   });
 
   it("writes generated ID back to frontmatter", async () => {
-    // The entity should have gotten an ID written back
-    const entities = await getEntities(spaceId);
-    const turing = entities.find((e: any) => e.label === "Alan Turing");
+    const wikis = await getWikis(spaceId);
+    const turing = wikis.find((e: any) => e.label === "Alan Turing");
     expect(turing).toBeTruthy();
 
-    // Read the file and check frontmatter has the ID
     const content = readFile("wiki/person/alan-turing.md");
     expect(content).toContain(`id: ${turing.id}`);
   });
 
   it("auto-detects file modifications", async () => {
-    const entities = await getEntities(spaceId);
-    const turing = entities.find((e: any) => e.label === "Alan Turing");
+    const wikis = await getWikis(spaceId);
+    const turing = wikis.find((e: any) => e.label === "Alan Turing");
 
-    // Rewrite with updated properties
     writeWiki("wiki/person/alan-turing.md", {
       id: turing.id,
       label: "Alan Turing",
@@ -232,8 +231,7 @@ describe("space registration + auto-sync", () => {
       nationality: "British",
     }, "Alan Turing was a British mathematician.");
 
-    // Wait for the update
-    const updated = await waitForEntity(
+    const updated = await waitForWiki(
       turing.id,
       (e) => {
         const props = typeof e.properties === "string" ? JSON.parse(e.properties) : e.properties;
@@ -248,40 +246,38 @@ describe("space registration + auto-sync", () => {
   it("auto-detects file deletions", async () => {
     deleteFile("wiki/person/pre-existing.md");
 
-    const entities = await waitForEntityCount(1, spaceId);
-    expect(entities).toHaveLength(1);
-    expect(entities[0].label).toBe("Alan Turing");
+    const wikis = await waitForWikiCount(1, spaceId);
+    expect(wikis).toHaveLength(1);
+    expect(wikis[0].label).toBe("Alan Turing");
   });
 
   it("resolves markdown links between wiki files", async () => {
-    const entities = await getEntities(spaceId);
-    const turing = entities.find((e: any) => e.label === "Alan Turing");
+    const wikis = await getWikis(spaceId);
+    const turing = wikis.find((e: any) => e.label === "Alan Turing");
 
-    // Create a wiki that links to Turing
     writeWiki("wiki/concept/computability.md", {
       label: "Computability",
       subject_type: "concept",
     }, `Computability theory was advanced by [Alan Turing](../person/alan-turing.md).`);
 
-    const updated = await waitForEntityCount(2, spaceId);
+    const updated = await waitForWikiCount(2, spaceId);
     const computability = updated.find((e: any) => e.label === "Computability");
     expect(computability).toBeTruthy();
 
-    // Check the relationship
-    const entity = await getEntity(computability.id);
-    expect(entity.relationships.outgoing).toHaveLength(1);
-    expect(entity.relationships.outgoing[0].target_id).toBe(turing.id);
-    expect(entity.relationships.outgoing[0].link_text).toBe("Alan Turing");
-    expect(entity.relationships.outgoing[0].predicate).toBe("references");
+    const wiki = await getWiki(computability.id);
+    expect(wiki.relationships.outgoing).toHaveLength(1);
+    expect(wiki.relationships.outgoing[0].target_id).toBe(turing.id);
+    expect(wiki.relationships.outgoing[0].link_text).toBe("Alan Turing");
+    expect(wiki.relationships.outgoing[0].predicate).toBe("references");
   });
 
   it("resolves incoming relationships", async () => {
-    const entities = await getEntities(spaceId);
-    const turing = entities.find((e: any) => e.label === "Alan Turing");
+    const wikis = await getWikis(spaceId);
+    const turing = wikis.find((e: any) => e.label === "Alan Turing");
 
-    const entity = await getEntity(turing.id);
-    expect(entity.relationships.incoming).toHaveLength(1);
-    expect(entity.relationships.incoming[0].source_label).toBe("Computability");
+    const wiki = await getWiki(turing.id);
+    expect(wiki.relationships.incoming).toHaveLength(1);
+    expect(wiki.relationships.incoming[0].source_label).toBe("Computability");
   });
 
   it("handles dangling links gracefully", async () => {
@@ -290,25 +286,24 @@ describe("space registration + auto-sync", () => {
       subject_type: "person",
     }, "Shannon worked at [Bell Labs](../organization/bell-labs.md).");
 
-    const entities = await waitForEntityCount(3, spaceId);
-    const shannon = entities.find((e: any) => e.label === "Claude Shannon");
+    const wikis = await waitForWikiCount(3, spaceId);
+    const shannon = wikis.find((e: any) => e.label === "Claude Shannon");
 
-    const entity = await getEntity(shannon.id);
+    const wiki = await getWiki(shannon.id);
     // Link target doesn't exist — should have no outgoing relationships
-    expect(entity.relationships.outgoing).toHaveLength(0);
+    expect(wiki.relationships.outgoing).toHaveLength(0);
   });
 
   it("resolves previously dangling links when target is created", async () => {
-    const entitiesBefore = await getEntities(spaceId);
-    const shannon = entitiesBefore.find((e: any) => e.label === "Claude Shannon");
+    const wikisBefore = await getWikis(spaceId);
+    const shannon = wikisBefore.find((e: any) => e.label === "Claude Shannon");
 
-    // Create the target that was dangling
     writeWiki("wiki/organization/bell-labs.md", {
       label: "Bell Labs",
       subject_type: "organization",
     }, "Bell Labs was a research lab.");
 
-    await waitForEntityCount(4, spaceId);
+    await waitForWikiCount(4, spaceId);
 
     // Re-sync Shannon to resolve the previously dangling link
     // (modify the file slightly to trigger a re-sync)
@@ -319,7 +314,7 @@ describe("space registration + auto-sync", () => {
       birth_year: 1916,
     }, "Shannon worked at [Bell Labs](../organization/bell-labs.md).");
 
-    const updated = await waitForEntity(
+    const updated = await waitForWiki(
       shannon.id,
       (e) => e.relationships?.outgoing?.length > 0,
     );
@@ -331,11 +326,10 @@ describe("space registration + auto-sync", () => {
   it("indexes source (non-wiki) files", async () => {
     writeSourceFile("notes/meeting.txt", "Meeting notes from today.");
 
-    const entities = await waitForEntityCount(5, spaceId);
-    const meeting = entities.find((e: any) => e.label === "meeting");
-    expect(meeting).toBeTruthy();
+    // Source files aren't exposed via /wikis — verify via SQLite directly.
+    const meeting = await waitForEntityBySourcePath(spaceId, "notes/meeting.txt");
     expect(meeting.type).toBe("file");
-    expect(meeting.source_path).toBe("notes/meeting.txt");
+    expect(meeting.label).toBe("meeting");
   });
 
   it("handles deeply nested directory structures", async () => {
@@ -344,14 +338,14 @@ describe("space registration + auto-sync", () => {
       subject_type: "concept",
     }, "A phenomenon in quantum mechanics.");
 
-    const entities = await waitForEntityCount(6, spaceId);
-    const qe = entities.find((e: any) => e.label === "Quantum Entanglement");
+    const wikis = await waitForWikiCount(5, spaceId);
+    const qe = wikis.find((e: any) => e.label === "Quantum Entanglement");
     expect(qe).toBeTruthy();
     expect(qe.source_path).toBe("wiki/science/physics/quantum/entanglement.md");
   });
 
   it("ignores dotfiles and excluded directories", async () => {
-    // These should NOT be indexed
+    // These should NOT be indexed (any type)
     writeSourceFile(".hidden-file.md", "hidden");
     mkdirSync(join(testDir, ".git", "objects"), { recursive: true });
     writeSourceFile(".git/objects/test.md", "git internal");
@@ -361,18 +355,15 @@ describe("space registration + auto-sync", () => {
     // Give the watcher time to (not) pick these up
     await new Promise((r) => setTimeout(r, 1500));
 
-    const entities = await getEntities(spaceId);
-    const paths = entities.map((e: any) => e.source_path);
-    expect(paths).not.toContain(".hidden-file.md");
-    expect(paths).not.toContain(".git/objects/test.md");
-    expect(paths).not.toContain("node_modules/pkg/README.md");
+    expect(await getEntityBySourcePath(spaceId, ".hidden-file.md")).toBeNull();
+    expect(await getEntityBySourcePath(spaceId, ".git/objects/test.md")).toBeNull();
+    expect(await getEntityBySourcePath(spaceId, "node_modules/pkg/README.md")).toBeNull();
   });
 
   it("handles rapid successive edits (debounce)", async () => {
-    const entities = await getEntities(spaceId);
-    const turing = entities.find((e: any) => e.label === "Alan Turing");
+    const wikis = await getWikis(spaceId);
+    const turing = wikis.find((e: any) => e.label === "Alan Turing");
 
-    // Rapid-fire edits
     for (let i = 0; i < 5; i++) {
       writeWiki("wiki/person/alan-turing.md", {
         id: turing.id,
@@ -384,11 +375,9 @@ describe("space registration + auto-sync", () => {
       }, `Alan Turing was a British mathematician. Edit ${i + 1}.`);
     }
 
-    // Wait for debounce to settle
     await new Promise((r) => setTimeout(r, 2000));
 
-    // Should have the final version
-    const updated = await getEntity(turing.id);
+    const updated = await getWiki(turing.id);
     const props = typeof updated.properties === "string" ? JSON.parse(updated.properties) : updated.properties;
     expect(props.edit_count).toBe(5);
   });
@@ -409,8 +398,8 @@ describe("space registration + auto-sync", () => {
       },
     }, "Testing complex property storage.");
 
-    const entities = await waitForEntityCount(7, spaceId);
-    const complex = entities.find((e: any) => e.label === "Complex Properties Test");
+    const wikis = await waitForWikiCount(6, spaceId);
+    const complex = wikis.find((e: any) => e.label === "Complex Properties Test");
     const props = typeof complex.properties === "string" ? JSON.parse(complex.properties) : complex.properties;
 
     expect(props.tags).toEqual(["math", "science", "history"]);
@@ -420,57 +409,87 @@ describe("space registration + auto-sync", () => {
   });
 
   it("handles wiki with multiple outgoing links", async () => {
-    const entities = await getEntities(spaceId);
-    const turing = entities.find((e: any) => e.label === "Alan Turing");
-    const computability = entities.find((e: any) => e.label === "Computability");
+    const wikis = await getWikis(spaceId);
+    const turing = wikis.find((e: any) => e.label === "Alan Turing");
+    const computability = wikis.find((e: any) => e.label === "Computability");
 
     writeWiki("wiki/concept/cs-history.md", {
       label: "CS History",
       subject_type: "concept",
     }, `Computer science history involves [Alan Turing](../person/alan-turing.md) and [Computability](computability.md).`);
 
-    const updated = await waitForEntityCount(8, spaceId);
+    const updated = await waitForWikiCount(7, spaceId);
     const csHistory = updated.find((e: any) => e.label === "CS History");
-    const entity = await getEntity(csHistory.id);
+    const wiki = await getWiki(csHistory.id);
 
-    expect(entity.relationships.outgoing).toHaveLength(2);
-    const targetIds = entity.relationships.outgoing.map((r: any) => r.target_id).sort();
+    expect(wiki.relationships.outgoing).toHaveLength(2);
+    const targetIds = wiki.relationships.outgoing.map((r: any) => r.target_id).sort();
     expect(targetIds).toContain(turing.id);
     expect(targetIds).toContain(computability.id);
   });
 });
 
 describe("API read endpoints", () => {
-  it("lists entities with filtering", async () => {
-    const all = await api("/entities");
+  it("lists wikis", async () => {
+    const all = await api("/wikis");
     expect(all.total).toBeGreaterThan(0);
-
-    // Filter by type
-    const wikis = await api("/entities?type=wiki");
-    const files = await api("/entities?type=file");
-    expect(wikis.entities.every((e: any) => e.type === "wiki")).toBe(true);
-    expect(files.entities.every((e: any) => e.type === "file")).toBe(true);
-    expect(wikis.total + files.total).toBe(all.total);
+    expect(all.wikis.length).toBeGreaterThan(0);
+    // Source files are not in /wikis output
+    for (const w of all.wikis) {
+      expect(w.type).toBeUndefined();
+    }
   });
 
   it("supports pagination", async () => {
-    const page1 = await api("/entities?limit=2&offset=0");
-    const page2 = await api("/entities?limit=2&offset=2");
+    const page1 = await api("/wikis?limit=2&offset=0");
+    const page2 = await api("/wikis?limit=2&offset=2");
 
-    expect(page1.entities).toHaveLength(2);
+    expect(page1.wikis).toHaveLength(2);
     expect(page1.limit).toBe(2);
     expect(page1.offset).toBe(0);
 
-    // Different entities on each page
-    const ids1 = page1.entities.map((e: any) => e.id);
-    const ids2 = page2.entities.map((e: any) => e.id);
+    const ids1 = page1.wikis.map((e: any) => e.id);
+    const ids2 = page2.wikis.map((e: any) => e.id);
     for (const id of ids1) {
       expect(ids2).not.toContain(id);
     }
   });
 
-  it("returns 404 for nonexistent entity", async () => {
-    const data = await api("/entities/nonexistent");
+  it("filters by subject_type", async () => {
+    const persons = await api("/wikis?subject_type=person");
+    for (const w of persons.wikis) {
+      const props = typeof w.properties === "string" ? JSON.parse(w.properties) : w.properties;
+      expect(props.subject_type).toBe("person");
+    }
+  });
+
+  it("filters by label_prefix", async () => {
+    const matches = await api("/wikis?label_prefix=Alan");
+    expect(matches.wikis.length).toBeGreaterThan(0);
+    for (const w of matches.wikis) {
+      expect(w.label.toLowerCase().startsWith("alan")).toBe(true);
+    }
+  });
+
+  it("supports sort=label", async () => {
+    const sorted = await api("/wikis?sort=label");
+    const labels = sorted.wikis.map((w: any) => w.label);
+    const expected = [...labels].sort((a, b) => a.localeCompare(b));
+    expect(labels).toEqual(expected);
+  });
+
+  it("returns 404 for nonexistent wiki", async () => {
+    const data = await api("/wikis/nonexistent");
+    expect(data.error?.code).toBe("not_found");
+  });
+
+  it("returns 404 when fetching a source file via /wikis", async () => {
+    const meeting = await getEntityBySourcePath(
+      (await api("/spaces")).spaces[0].id,
+      "notes/meeting.txt",
+    );
+    expect(meeting).toBeTruthy();
+    const data = await api(`/wikis/${meeting!.id}`);
     expect(data.error?.code).toBe("not_found");
   });
 
@@ -491,16 +510,14 @@ describe("API read endpoints", () => {
 });
 
 describe("include=relationships on list endpoint", () => {
-  it("returns relationships alongside entities", async () => {
-    const data = await api("/entities?include=relationships");
-    expect(data.entities.length).toBeGreaterThan(0);
+  it("returns relationships alongside wikis", async () => {
+    const data = await api("/wikis?include=relationships");
+    expect(data.wikis.length).toBeGreaterThan(0);
     expect(data.relationships).toBeDefined();
     expect(Array.isArray(data.relationships)).toBe(true);
 
-    // Should have relationship edges (we created linked wikis earlier)
     expect(data.relationships.length).toBeGreaterThan(0);
 
-    // Each relationship should have the expected shape
     const rel = data.relationships[0];
     expect(rel.source_id).toBeTruthy();
     expect(rel.target_id).toBeTruthy();
@@ -508,73 +525,99 @@ describe("include=relationships on list endpoint", () => {
   });
 
   it("does not return relationships without the flag", async () => {
-    const data = await api("/entities");
+    const data = await api("/wikis");
     expect(data.relationships).toBeUndefined();
   });
 
   it("scopes relationships to the space filter", async () => {
     const spaces = await api("/spaces");
     const spaceId = spaces.spaces[0].id;
-    const data = await api(`/entities?space_id=${spaceId}&include=relationships`);
+    const data = await api(`/wikis?space_id=${spaceId}&include=relationships`);
 
-    expect(data.entities.length).toBeGreaterThan(0);
+    expect(data.wikis.length).toBeGreaterThan(0);
     expect(data.relationships).toBeDefined();
 
-    // All entities should be in the requested space
-    for (const e of data.entities) {
-      expect(e.space_id).toBe(spaceId);
+    for (const w of data.wikis) {
+      expect(w.space_id).toBe(spaceId);
     }
+  });
+});
+
+describe("include=counts on list endpoint", () => {
+  it("attaches per-wiki counts when requested", async () => {
+    const data = await api("/wikis?include=counts");
+    expect(data.wikis.length).toBeGreaterThan(0);
+
+    for (const w of data.wikis) {
+      expect(w.counts).toBeDefined();
+      expect(typeof w.counts.contributions_pending).toBe("number");
+      expect(typeof w.counts.incoming_links).toBe("number");
+      expect(typeof w.counts.outgoing_links).toBe("number");
+    }
+
+    // Computability has 1 incoming (CS History) and 1 outgoing (Turing)
+    const computability = data.wikis.find((w: any) => w.label === "Computability");
+    expect(computability.counts.incoming_links).toBe(1);
+    expect(computability.counts.outgoing_links).toBe(1);
   });
 });
 
 describe("include=content on detail endpoint", () => {
   it("returns file content when requested", async () => {
-    const entities = await getEntities();
-    const wiki = entities.find((e: any) => e.type === "wiki" && e.label === "Alan Turing");
+    const wikis = await getWikis();
+    const wiki = wikis.find((w: any) => w.label === "Alan Turing");
     expect(wiki).toBeTruthy();
 
-    const withContent = await api(`/entities/${wiki.id}?include=content`);
+    const withContent = await api(`/wikis/${wiki.id}?include=content`);
     expect(withContent.content).toBeTruthy();
     expect(typeof withContent.content).toBe("string");
-    // Content should contain the frontmatter and body
     expect(withContent.content).toContain("Alan Turing");
     expect(withContent.content).toContain("---");
   });
 
   it("does not return content without the flag", async () => {
-    const entities = await getEntities();
-    const wiki = entities.find((e: any) => e.type === "wiki");
+    const wikis = await getWikis();
+    const wiki = wikis[0];
 
-    const withoutContent = await api(`/entities/${wiki.id}`);
+    const withoutContent = await api(`/wikis/${wiki.id}`);
     expect(withoutContent.content).toBeUndefined();
   });
 
   it("returns null content for missing files", async () => {
-    // Create an entity, then delete its file but keep the entity
-    const entities = await getEntities();
-    const wiki = entities.find((e: any) => e.type === "wiki" && e.label === "Quantum Entanglement");
+    const wikis = await getWikis();
+    const wiki = wikis.find((w: any) => w.label === "Quantum Entanglement");
     expect(wiki).toBeTruthy();
 
     // Delete the file manually (without going through the watcher)
     const absPath = join(testDir, wiki.source_path);
     if (existsSync(absPath)) unlinkSync(absPath);
 
-    const result = await api(`/entities/${wiki.id}?include=content`);
+    const result = await api(`/wikis/${wiki.id}?include=content`);
     expect(result.content).toBeNull();
   });
 });
 
-describe("entity deletion via API", () => {
-  it("deletes an entity", async () => {
-    const entities = await getEntities();
-    const toDelete = entities.find((e: any) => e.label === "meeting");
+describe("wiki deletion via API", () => {
+  it("deletes a wiki", async () => {
+    const wikis = await getWikis();
+    const toDelete = wikis.find((w: any) => w.label === "Complex Properties Test");
     expect(toDelete).toBeTruthy();
 
-    const result = await api(`/entities/${toDelete.id}`, { method: "DELETE" });
+    const result = await api(`/wikis/${toDelete.id}`, { method: "DELETE" });
     expect(result.deleted).toBe(true);
 
-    const after = await api(`/entities/${toDelete.id}`);
+    const after = await api(`/wikis/${toDelete.id}`);
     expect(after.error?.code).toBe("not_found");
+  });
+
+  it("returns 404 when deleting a source file via /wikis", async () => {
+    const meeting = await getEntityBySourcePath(
+      (await api("/spaces")).spaces[0].id,
+      "notes/meeting.txt",
+    );
+    expect(meeting).toBeTruthy();
+    const result = await api(`/wikis/${meeting!.id}`, { method: "DELETE" });
+    expect(result.error?.code).toBe("not_found");
   });
 });
 

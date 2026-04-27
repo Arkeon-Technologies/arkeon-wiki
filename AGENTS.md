@@ -34,9 +34,9 @@ Default base URL: `http://localhost:8000`. No auth. JSON in, JSON out. All non-2
 | `POST` | `/spaces` | Register a directory. Body: `{ name, watch_dir }`. |
 | `GET` | `/spaces` | List spaces with entity counts. |
 | `GET` | `/spaces/:id` | Get a single space. |
-| `GET` | `/entities?space_id=&type=&limit=&offset=&include=` | List entities. `include=relationships` adds an edges array. |
-| `GET` | `/entities/:id?include=content` | Properties + incoming/outgoing relationships. `include=content` reads the file from disk. |
-| `DELETE` | `/entities/:id` | Remove an entity. |
+| `GET` | `/wikis?space_id=&subject_type=&status=&label_prefix=&has_contributions=&sort=&limit=&offset=&include=` | List wikis. Frontmatter-aware filters; `include=relationships` adds an edges array, `include=counts` attaches per-wiki link/contribution counts. |
+| `GET` | `/wikis/:id?include=content` | Properties + incoming/outgoing relationships. `include=content` reads the file from disk. |
+| `DELETE` | `/wikis/:id` | Remove a wiki from the index. |
 | `GET` | `/search?q=&space_id=&limit=&snippets=&regex=` | Ripgrep-backed keyword search. Returns ranked entity hits with line snippets. |
 | `GET` | `/health` | Liveness. Always `200` if the process is up. |
 | `GET` | `/ready` | Readiness. `200` if SQLite responds; `503` otherwise. |
@@ -73,11 +73,11 @@ In a directory bound to a running daemon (i.e. `arkeon-wiki init` has been run t
 # Find wikis that mention "shannon"
 curl "$(jq -r .api_url .arkeon/state.json)/search?q=shannon&space_id=$(jq -r .space_id .arkeon/state.json)"
 
-# Pull the full content of a specific entity
-curl "$(jq -r .api_url .arkeon/state.json)/entities/<id>?include=content"
+# Pull the full content of a specific wiki
+curl "$(jq -r .api_url .arkeon/state.json)/wikis/<id>?include=content"
 
 # Walk relationships
-curl "$(jq -r .api_url .arkeon/state.json)/entities/<id>" | jq '.relationships'
+curl "$(jq -r .api_url .arkeon/state.json)/wikis/<id>" | jq '.relationships'
 ```
 
 If the daemon isn't running, start it with `arkeon-wiki up` — it survives the terminal closing.

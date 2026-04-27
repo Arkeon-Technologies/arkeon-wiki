@@ -20,6 +20,7 @@ import yaml from "js-yaml";
 
 import { contribute } from "../../src/server/lib/contributions.js";
 import { ApiError } from "../../src/server/lib/errors.js";
+import { waitForEntityBySourcePath } from "./helpers.js";
 
 const API_PORT = 18795;
 
@@ -79,10 +80,10 @@ afterAll(async () => {
   }
 }, 30_000);
 
-async function getEntities(): Promise<any[]> {
-  const res = await fetch(`http://localhost:${API_PORT}/entities?space_id=${spaceId}`);
+async function getWikis(): Promise<any[]> {
+  const res = await fetch(`http://localhost:${API_PORT}/wikis?space_id=${spaceId}`);
   const data = await res.json();
-  return data.entities ?? [];
+  return data.wikis ?? [];
 }
 
 describe("contribute() — placeholder creation", () => {
@@ -115,10 +116,9 @@ describe("contribute() — placeholder creation", () => {
   });
 
   it("indexes the contribution in SQLite", async () => {
-    const entities = await getEntities();
-    const shannon = entities.find((e: any) => e.label === "Claude Shannon");
+    const wikis = await getWikis();
+    const shannon = wikis.find((e: any) => e.label === "Claude Shannon");
     expect(shannon).toBeTruthy();
-    expect(shannon.type).toBe("wiki");
 
     const props = shannon.properties;
     expect(props.status).toBe("placeholder");
@@ -139,7 +139,7 @@ describe("contribute() — placeholder creation", () => {
 
 describe("contribute() — exact-match routing", () => {
   it("appends to an existing wiki when label matches exactly", async () => {
-    const before = await getEntities();
+    const before = await getWikis();
     const shannon = before.find((e: any) => e.label === "Claude Shannon");
     const initialCount = (shannon.properties.contributions as unknown[]).length;
 
@@ -192,8 +192,8 @@ describe("contribute() — exact-match routing", () => {
 
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
-      const entities = await getEntities();
-      if (entities.find((e: any) => e.label === "James Clerk Maxwell")) break;
+      const wikis = await getWikis();
+      if (wikis.find((e: any) => e.label === "James Clerk Maxwell")) break;
       await new Promise((r) => setTimeout(r, 200));
     }
 
@@ -216,17 +216,12 @@ describe("contribute() — source provenance", () => {
       "An article about scientists.",
     );
 
-    let sourceEntity: any;
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline) {
-      const entities = await getEntities();
-      sourceEntity = entities.find(
-        (e: any) => e.source_path === "sources/article.txt",
-      );
-      if (sourceEntity) break;
-      await new Promise((r) => setTimeout(r, 200));
-    }
-    expect(sourceEntity).toBeTruthy();
+    // Source files aren't exposed via /wikis; look up via SQLite directly.
+    const sourceEntity = await waitForEntityBySourcePath(
+      spaceId,
+      "sources/article.txt",
+    );
+    expect(sourceEntity.type).toBe("file");
 
     const result = await contribute({
       space_id: spaceId,
@@ -356,8 +351,8 @@ describe("file-based contribution (no function call)", () => {
     let ada: any;
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
-      const entities = await getEntities();
-      ada = entities.find((e: any) => e.label === "Ada Lovelace");
+      const wikis = await getWikis();
+      ada = wikis.find((e: any) => e.label === "Ada Lovelace");
       if (ada) break;
       await new Promise((r) => setTimeout(r, 200));
     }

@@ -41,13 +41,13 @@ export function useMapData(client: ArkeClient): UseMapDataResult {
     async function load() {
       try {
         const [data, fetchedSpaces] = await Promise.all([
-          client.fetchEntities(),
+          client.fetchWikis(),
           client.fetchSpaces(),
         ])
         if (ac.signal.aborted) return
 
         const entityMap = new Map<string, Entity>()
-        for (const e of data.entities) {
+        for (const e of data.wikis) {
           entityMap.set(e.id, e)
         }
 
@@ -69,7 +69,7 @@ export function useMapData(client: ArkeClient): UseMapDataResult {
   const fetchEntity = useCallback(
     async (id: string): Promise<LoadedEntity | null> => {
       try {
-        const data = await client.fetchEntity(id)
+        const data = await client.fetchWiki(id)
         const entity: Entity = {
           id: data.id,
           space_id: data.space_id,
@@ -95,7 +95,7 @@ export function useMapData(client: ArkeClient): UseMapDataResult {
     async (id: string) => {
       if (entities.has(id)) return
       try {
-        const data = await client.fetchEntity(id)
+        const data = await client.fetchWiki(id)
         setEntities((prev) => {
           if (prev.has(id)) return prev
           const next = new Map(prev)
