@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * End-to-end tests for POST /contribute.
+ * End-to-end tests for the contribute() routing function.
  *
- * Verifies the full round trip: the endpoint mutates frontmatter on disk,
- * syncFile() repopulates the contributions table, and subsequent calls
- * append rather than duplicate.
+ * Spins up the full daemon stack (DB + watcher) so that file-based
+ * fixtures (e.g. a hand-authored wiki used to verify alias matching)
+ * sync naturally, but exercises contribute() directly rather than via
+ * HTTP — there is no /contribute route. Verifies the round trip:
+ * function call → frontmatter mutation → syncFile → SQLite mirror.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -16,26 +18,15 @@ import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import yaml from "js-yaml";
 
+import { contribute } from "../../src/server/lib/contributions.js";
+import { ApiError } from "../../src/server/lib/errors.js";
+
 const API_PORT = 18795;
-const BASE_URL = `http://localhost:${API_PORT}`;
 
 let testDir: string;
 let stateDir: string;
 let serverHandle: { stop: () => Promise<void> } | null = null;
 let spaceId: string;
-
-async function api(path: string, options?: RequestInit): Promise<any> {
-  const res = await fetch(`${BASE_URL}${path}`, options);
-  return res.json();
-}
-
-async function postJson(path: string, body: unknown): Promise<any> {
-  return api(path, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-}
 
 function readFile(relativePath: string): string {
   return readFileSync(join(testDir, relativePath), "utf-8");
@@ -68,7 +59,13 @@ beforeAll(async () => {
 
   serverHandle = { stop: async () => apiHandle.stop() };
 
-  const space = await postJson("/spaces", { name: "contrib-space", watch_dir: testDir });
+  // Register a space via HTTP (still public — that endpoint is fine to keep).
+  const spaceRes = await fetch(`http://localhost:${API_PORT}/spaces`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "contrib-space", watch_dir: testDir }),
+  });
+  const space = await spaceRes.json();
   spaceId = space.id;
 }, 30_000);
 
@@ -82,9 +79,15 @@ afterAll(async () => {
   }
 }, 30_000);
 
-describe("POST /contribute — placeholder creation", () => {
+async function getEntities(): Promise<any[]> {
+  const res = await fetch(`http://localhost:${API_PORT}/entities?space_id=${spaceId}`);
+  const data = await res.json();
+  return data.entities ?? [];
+}
+
+describe("contribute() — placeholder creation", () => {
   it("creates a placeholder file when no matching wiki exists", async () => {
-    const result = await postJson("/contribute", {
+    const result = await contribute({
       space_id: spaceId,
       subject: { label: "Claude Shannon", subject_type: "person" },
       excerpt: "Shannon founded information theory.",
@@ -112,19 +115,18 @@ describe("POST /contribute — placeholder creation", () => {
   });
 
   it("indexes the contribution in SQLite", async () => {
-    const entities = await api(`/entities?space_id=${spaceId}`);
-    const shannon = entities.entities.find((e: any) => e.label === "Claude Shannon");
+    const entities = await getEntities();
+    const shannon = entities.find((e: any) => e.label === "Claude Shannon");
     expect(shannon).toBeTruthy();
     expect(shannon.type).toBe("wiki");
 
-    // Properties round-trip with status + contributions metadata
     const props = shannon.properties;
     expect(props.status).toBe("placeholder");
     expect(props.contributions).toHaveLength(1);
   });
 
   it("falls back to wiki/wiki/... when subject_type is missing", async () => {
-    const result = await postJson("/contribute", {
+    const result = await contribute({
       space_id: spaceId,
       subject: { label: "Some Vague Concept" },
       excerpt: "It's vague.",
@@ -135,13 +137,13 @@ describe("POST /contribute — placeholder creation", () => {
   });
 });
 
-describe("POST /contribute — exact-match routing", () => {
+describe("contribute() — exact-match routing", () => {
   it("appends to an existing wiki when label matches exactly", async () => {
-    const first = await api(`/entities?space_id=${spaceId}`);
-    const shannon = first.entities.find((e: any) => e.label === "Claude Shannon");
+    const before = await getEntities();
+    const shannon = before.find((e: any) => e.label === "Claude Shannon");
     const initialCount = (shannon.properties.contributions as unknown[]).length;
 
-    const result = await postJson("/contribute", {
+    const result = await contribute({
       space_id: spaceId,
       subject: { label: "Claude Shannon", subject_type: "person" },
       excerpt: "He worked at Bell Labs from 1941.",
@@ -161,7 +163,7 @@ describe("POST /contribute — exact-match routing", () => {
   });
 
   it("matches case-insensitively and tolerates whitespace differences", async () => {
-    const result = await postJson("/contribute", {
+    const result = await contribute({
       space_id: spaceId,
       subject: { label: "  CLAUDE   SHANNON  ", subject_type: "person" },
       excerpt: "Yet another fact.",
@@ -170,7 +172,7 @@ describe("POST /contribute — exact-match routing", () => {
   });
 
   it("matches against an existing wiki's aliases", async () => {
-    // Manually author a wiki with aliases (simulating a hand-written entry).
+    // Author a wiki on disk; the watcher syncs it. Then contribute by alias.
     const aliasWikiPath = "wiki/person/jcm.md";
     mkdirSync(join(testDir, "wiki/person"), { recursive: true });
     const fm = yaml
@@ -188,15 +190,14 @@ describe("POST /contribute — exact-match routing", () => {
       `---\n${fm}\n---\n\nMaxwell was a physicist.\n`,
     );
 
-    // Wait for the watcher to index it.
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
-      const entities = await api(`/entities?space_id=${spaceId}`);
-      if (entities.entities.find((e: any) => e.label === "James Clerk Maxwell")) break;
+      const entities = await getEntities();
+      if (entities.find((e: any) => e.label === "James Clerk Maxwell")) break;
       await new Promise((r) => setTimeout(r, 200));
     }
 
-    const result = await postJson("/contribute", {
+    const result = await contribute({
       space_id: spaceId,
       subject: { label: "JCM", subject_type: "person" },
       excerpt: "Maxwell unified electricity and magnetism.",
@@ -207,21 +208,19 @@ describe("POST /contribute — exact-match routing", () => {
   });
 });
 
-describe("POST /contribute — source provenance", () => {
+describe("contribute() — source provenance", () => {
   it("links a contribution to a source entity when source_id is provided", async () => {
-    // Create a source file via the watcher path.
     mkdirSync(join(testDir, "sources"), { recursive: true });
     writeFileSync(
       join(testDir, "sources/article.txt"),
       "An article about scientists.",
     );
 
-    // Wait for the watcher to index it.
     let sourceEntity: any;
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
-      const entities = await api(`/entities?space_id=${spaceId}`);
-      sourceEntity = entities.entities.find(
+      const entities = await getEntities();
+      sourceEntity = entities.find(
         (e: any) => e.source_path === "sources/article.txt",
       );
       if (sourceEntity) break;
@@ -229,7 +228,7 @@ describe("POST /contribute — source provenance", () => {
     }
     expect(sourceEntity).toBeTruthy();
 
-    const result = await postJson("/contribute", {
+    const result = await contribute({
       space_id: spaceId,
       source_id: sourceEntity.id,
       subject: { label: "Some New Person", subject_type: "person" },
@@ -242,78 +241,64 @@ describe("POST /contribute — source provenance", () => {
     expect(contributions[0].source_id).toBe(sourceEntity.id);
   });
 
-  it("returns 404 when source_id does not exist in the space", async () => {
-    const res = await fetch(`${BASE_URL}/contribute`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
+  it("throws 404 when source_id does not exist in the space", async () => {
+    await expect(
+      contribute({
         space_id: spaceId,
         source_id: "01NONEXISTENT",
         subject: { label: "Whoever" },
         excerpt: "Some excerpt.",
       }),
-    });
-    expect(res.status).toBe(404);
+    ).rejects.toMatchObject({ status: 404, code: "not_found" });
   });
 });
 
-describe("POST /contribute — validation", () => {
+describe("contribute() — validation", () => {
   it("rejects missing space_id", async () => {
-    const res = await fetch(`${BASE_URL}/contribute`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
+    await expect(
+      contribute({
+        space_id: "",
         subject: { label: "X" },
         excerpt: "y",
       }),
-    });
-    expect(res.status).toBe(400);
+    ).rejects.toMatchObject({ status: 400, code: "validation_error" });
   });
 
   it("rejects missing subject.label", async () => {
-    const res = await fetch(`${BASE_URL}/contribute`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
+    await expect(
+      contribute({
         space_id: spaceId,
-        subject: {},
+        subject: { label: "" },
         excerpt: "y",
       }),
-    });
-    expect(res.status).toBe(400);
+    ).rejects.toMatchObject({ status: 400, code: "validation_error" });
   });
 
   it("rejects missing excerpt", async () => {
-    const res = await fetch(`${BASE_URL}/contribute`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
+    await expect(
+      contribute({
         space_id: spaceId,
         subject: { label: "X" },
+        excerpt: "",
       }),
-    });
-    expect(res.status).toBe(400);
+    ).rejects.toMatchObject({ status: 400, code: "validation_error" });
   });
 
-  it("returns 404 for unknown space_id", async () => {
-    const res = await fetch(`${BASE_URL}/contribute`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
+  it("throws 404 for unknown space_id", async () => {
+    await expect(
+      contribute({
         space_id: "01NONEXISTENT",
         subject: { label: "X" },
         excerpt: "y",
       }),
-    });
-    expect(res.status).toBe(404);
+    ).rejects.toBeInstanceOf(ApiError);
   });
 });
 
-describe("POST /contribute — concurrency", () => {
+describe("contribute() — concurrency", () => {
   it("does not lose entries when the same wiki is targeted concurrently", async () => {
-    // Build up 10 parallel contributions to the same wiki.
     const calls = Array.from({ length: 10 }, (_, i) =>
-      postJson("/contribute", {
+      contribute({
         space_id: spaceId,
         subject: { label: "Race Condition Test", subject_type: "person" },
         excerpt: `excerpt-${i}`,
@@ -322,7 +307,6 @@ describe("POST /contribute — concurrency", () => {
 
     const results = await Promise.all(calls);
     const wikiIds = new Set(results.map((r) => r.wiki_id));
-    // All 10 calls land on the SAME wiki (one was_created=true, the rest false).
     expect(wikiIds.size).toBe(1);
     expect(results.filter((r) => r.was_created)).toHaveLength(1);
 
@@ -335,5 +319,50 @@ describe("POST /contribute — concurrency", () => {
     for (let i = 0; i < 10; i++) {
       expect(excerpts.has(`excerpt-${i}`)).toBe(true);
     }
+  });
+});
+
+describe("file-based contribution (no function call)", () => {
+  it("auto-syncs contributions appended directly to a wiki's frontmatter", async () => {
+    // The "external contributor" path: any agent with file access can
+    // append a contribution by hand-editing the frontmatter array. The
+    // watcher syncs it like any other change.
+    mkdirSync(join(testDir, "wiki/person"), { recursive: true });
+    const wikiPath = "wiki/person/ada-lovelace.md";
+    const fm = yaml
+      .dump(
+        {
+          label: "Ada Lovelace",
+          subject_type: "person",
+          contributions: [
+            {
+              id: "01HANDWRITTEN0000000000000",
+              source_id: null,
+              excerpt: "She wrote the first algorithm.",
+              claim: null,
+              added_at: "2026-04-27T00:00:00Z",
+            },
+          ],
+        },
+        { schema: yaml.JSON_SCHEMA, sortKeys: false },
+      )
+      .trimEnd();
+    writeFileSync(
+      join(testDir, wikiPath),
+      `---\n${fm}\n---\n\nA mathematician.\n`,
+    );
+
+    // Wait for the watcher to sync.
+    let ada: any;
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const entities = await getEntities();
+      ada = entities.find((e: any) => e.label === "Ada Lovelace");
+      if (ada) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    expect(ada).toBeTruthy();
+    expect(ada.properties.contributions).toHaveLength(1);
+    expect(ada.properties.contributions[0].id).toBe("01HANDWRITTEN0000000000000");
   });
 });

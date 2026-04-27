@@ -66,7 +66,7 @@ Four tables in SQLite:
 - `spaces` — registered directories (id, name, watch_dir)
 - `entities` — wikis and source files (id, space_id, type, label, source_path, source_hash, properties JSON text)
 - `relationships` — edges between entities (source_id, target_id, predicate, link_text, link_path)
-- `contributions` — pending/consumed inputs to a wiki (wiki_id, source_id, excerpt, claim, added_at, consumed_at). Mirrors `contributions[]` in the target wiki's frontmatter; written by the `/contribute` endpoint, consumed by the (forthcoming) editor worker.
+- `contributions` — pending/consumed inputs to a wiki (wiki_id, source_id, excerpt, claim, added_at, consumed_at). Mirrors `contributions[]` in the target wiki's frontmatter; written by the `contribute()` routing function and consumed by the (forthcoming) editor worker. Frontmatter is canonical; the table is rebuilt from it on every `syncFile()`.
 
 No actors, no auth, no queues, no versioning. Schema in `src/schema/001-foundation.sql`.
 
@@ -77,6 +77,7 @@ No actors, no auth, no queues, no versioning. Schema in `src/schema/001-foundati
 - `src/server/lib/frontmatter.ts` — parse/serialize YAML frontmatter.
 - `src/server/lib/markdown-links.ts` — extract and resolve markdown links.
 - `src/server/lib/search.ts` — ripgrep adapter: spawns `rg --json` per space, parses match events, joins paths back to entities, ranks by `match_count`.
+- `src/server/lib/contributions.ts` — `contribute()`: routes a `(source, subject, excerpt)` triple to a target wiki by exact label/alias match, or creates a placeholder. Internal-only — there is no HTTP route. External contributors edit wiki files directly; the watcher does the rest.
 
 ## API endpoints
 
@@ -85,7 +86,6 @@ No actors, no auth, no queues, no versioning. Schema in `src/schema/001-foundati
 - `GET /entities?space_id=...&type=...` — list entities (filterable, paginated)
 - `GET /entities/{id}` — entity properties + relationships (no content)
 - `DELETE /entities/{id}` — remove entity
-- `POST /contribute` — append a contribution to a wiki; routes to an existing wiki by exact label/alias match, otherwise creates a placeholder. See `src/server/routes/contribute.ts`.
 - `GET /search?q=...&space_id=...&limit=...&snippets=...&regex=...` — keyword search via ripgrep against the watched directory; returns ranked entity hits with line snippets
 - `GET /health` / `GET /ready`
 
