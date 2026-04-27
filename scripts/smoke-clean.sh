@@ -208,12 +208,12 @@ fi
 if [ -n "$ADMIN_KEY" ]; then
   npx arkeon seed || warn "arkeon seed failed (non-fatal)"
 
-  echo "Testing GET /entities..."
-  ENTITY_COUNT=$(curl -sf -H "X-API-Key: $ADMIN_KEY" "http://localhost:$PORT/entities" | grep -o '"total":[0-9]*' | cut -d: -f2)
-  if [ -n "$ENTITY_COUNT" ] && [ "$ENTITY_COUNT" -gt 0 ]; then
-    pass "Entities exist after seed (count: $ENTITY_COUNT)"
+  echo "Testing GET /wikis..."
+  WIKI_COUNT=$(curl -sf -H "X-API-Key: $ADMIN_KEY" "http://localhost:$PORT/wikis" | grep -o '"total":[0-9]*' | cut -d: -f2)
+  if [ -n "$WIKI_COUNT" ] && [ "$WIKI_COUNT" -gt 0 ]; then
+    pass "Wikis exist after seed (count: $WIKI_COUNT)"
   else
-    warn "No entities found after seed (may be expected if seed is empty)"
+    warn "No wikis found after seed (may be expected if seed is empty)"
   fi
 else
   warn "Could not extract admin key — skipping seed and entity check"

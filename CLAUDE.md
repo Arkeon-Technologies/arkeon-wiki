@@ -121,9 +121,9 @@ No actors, no auth, no queues, no versioning. Schema in `src/schema/001-foundati
 
 - `POST /spaces` — register a directory
 - `GET /spaces` — list spaces
-- `GET /entities?space_id=...&type=...` — list entities (filterable, paginated)
-- `GET /entities/{id}` — entity properties + relationships (no content)
-- `DELETE /entities/{id}` — remove entity
+- `GET /wikis?space_id=...&subject_type=...&status=...&label_prefix=...&has_contributions=true&sort=...&include=...` — list wikis with frontmatter filters; `include=relationships` adds edges, `include=counts` attaches per-wiki contribution/link counts
+- `GET /wikis/{id}?include=content` — wiki properties + relationships (and body if requested)
+- `DELETE /wikis/{id}` — remove wiki from the index
 - `GET /search?q=...&space_id=...&limit=...&snippets=...&regex=...` — keyword search via ripgrep against the watched directory; returns ranked entity hits with line snippets
 - `GET /health` / `GET /ready`
 

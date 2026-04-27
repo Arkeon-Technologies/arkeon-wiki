@@ -50,10 +50,10 @@ No manual sync commands. Just save files.
 **4. Query the graph**
 
 ```bash
-curl http://localhost:8000/entities              # list all entities
-curl http://localhost:8000/entities/{id}          # get properties + relationships
-curl http://localhost:8000/entities?type=wiki     # filter by type
-curl "http://localhost:8000/search?q=shannon"    # keyword search (ripgrep)
+curl http://localhost:8000/wikis                  # list wikis
+curl http://localhost:8000/wikis/{id}             # get properties + relationships
+curl "http://localhost:8000/wikis?subject_type=person&include=counts"
+curl "http://localhost:8000/search?q=shannon"     # keyword search (ripgrep)
 ```
 
 Or from the CLI: `arkeon-wiki search shannon`.

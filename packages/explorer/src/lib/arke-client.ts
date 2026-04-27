@@ -4,14 +4,14 @@
 import type { Entity, Relationship, OutgoingRel, IncomingRel, Space } from './arke-types'
 
 export interface ArkeClient {
-  /** Fetch all entities + relationships for a space (or all spaces). */
-  fetchEntities(spaceId?: string): Promise<{
-    entities: Entity[]
+  /** Fetch all wikis + relationships for a space (or all spaces). */
+  fetchWikis(spaceId?: string): Promise<{
+    wikis: Entity[]
     relationships: Relationship[]
     total: number
   }>
-  /** Fetch a single entity with relationships and file content. */
-  fetchEntity(id: string): Promise<
+  /** Fetch a single wiki with relationships and file content. */
+  fetchWiki(id: string): Promise<
     Entity & {
       relationships: { outgoing: OutgoingRel[]; incoming: IncomingRel[] }
     }
@@ -31,17 +31,17 @@ export function createArkeClient(baseUrl = ''): ArkeClient {
   }
 
   return {
-    async fetchEntities(spaceId?: string) {
+    async fetchWikis(spaceId?: string) {
       const params = new URLSearchParams({
         include: 'relationships',
         limit: '10000',
       })
       if (spaceId) params.set('space_id', spaceId)
-      return apiFetch(`/entities?${params.toString()}`)
+      return apiFetch(`/wikis?${params.toString()}`)
     },
 
-    async fetchEntity(id: string) {
-      return apiFetch(`/entities/${id}?include=content`)
+    async fetchWiki(id: string) {
+      return apiFetch(`/wikis/${id}?include=content`)
     },
 
     async fetchSpaces() {

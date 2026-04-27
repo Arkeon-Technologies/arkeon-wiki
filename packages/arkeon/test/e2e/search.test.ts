@@ -46,19 +46,19 @@ async function api(path: string): Promise<any> {
   return res.text();
 }
 
-async function waitForEntityCount(
+async function waitForWikiCount(
   expected: number,
   spaceId: string,
   timeoutMs = 5000,
 ): Promise<any[]> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const data = await api(`/entities?space_id=${spaceId}`);
-    if ((data.entities ?? []).length === expected) return data.entities;
+    const data = await api(`/wikis?space_id=${spaceId}`);
+    if ((data.wikis ?? []).length === expected) return data.wikis;
     await new Promise((r) => setTimeout(r, 200));
   }
-  const data = await api(`/entities?space_id=${spaceId}`);
-  return data.entities ?? [];
+  const data = await api(`/wikis?space_id=${spaceId}`);
+  return data.wikis ?? [];
 }
 
 beforeAll(async () => {
@@ -104,7 +104,7 @@ beforeAll(async () => {
   const space = (await created.json()) as { id: string };
   spaceId = space.id;
 
-  await waitForEntityCount(3, spaceId);
+  await waitForWikiCount(3, spaceId);
 }, 30_000);
 
 afterAll(async () => {
