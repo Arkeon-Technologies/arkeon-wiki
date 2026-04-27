@@ -115,7 +115,7 @@ describe("agent_runs idempotency table", () => {
 
 describe("hashInput integration", () => {
   it("matches the same logical input regardless of object key order", () => {
-    expect(hashInput({ a: 1, b: 2 })).toBe(hashInput({ a: 1, b: 2 }));
+    expect(hashInput({ a: 1, b: 2 })).toBe(hashInput({ b: 2, a: 1 }));
   });
 });
 

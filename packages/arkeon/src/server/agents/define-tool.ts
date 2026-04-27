@@ -23,9 +23,6 @@ import type { AgentContext } from "./runtime.js";
 export interface DefineToolOptions<TInput, TOutput> {
   description: string;
   inputSchema: z.ZodType<TInput>;
-  /** Mutating tools must be opted into — useful when (later) gating
-   *  read-only review modes. Defaults to false (mutating). */
-  readOnly?: boolean;
   /** What actually runs. Receives the validated input and the agent
    *  context (space, applyEdit, log, ...). */
   call: (input: TInput, ctx: AgentContext) => Promise<TOutput> | TOutput;
@@ -53,6 +50,12 @@ export function defineTool<TInput, TOutput>(
         }
       },
     };
+    // The AI SDK's Tool type carries a tangle of provider-specific
+    // generics (FlexibleSchema, ToolOutputProperties, ...) that don't
+    // infer cleanly from our user-facing DefineToolOptions shape. The
+    // double cast skips that inference dance — the runtime contract
+    // (description + inputSchema + execute) is what the SDK actually
+    // calls, and that's what `definition` provides.
     return definition as unknown as Tool;
   };
 }

@@ -114,4 +114,18 @@ describe("hashInput", () => {
   it("treats null and undefined as equivalent", () => {
     expect(hashInput(null)).toBe(hashInput(undefined));
   });
+
+  it("matches the same logical input regardless of object key order", () => {
+    expect(hashInput({ a: 1, b: 2 })).toBe(hashInput({ b: 2, a: 1 }));
+  });
+
+  it("is order-independent for nested objects", () => {
+    expect(hashInput({ x: { p: 1, q: 2 }, y: 3 })).toBe(
+      hashInput({ y: 3, x: { q: 2, p: 1 } }),
+    );
+  });
+
+  it("preserves array order (arrays are ordered, objects are not)", () => {
+    expect(hashInput([1, 2, 3])).not.toBe(hashInput([3, 2, 1]));
+  });
 });

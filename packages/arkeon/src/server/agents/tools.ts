@@ -29,7 +29,6 @@ const readFileTool = defineTool("read_file", {
   description:
     "Read a file from the current space. Path is relative to the space's watch_dir. " +
     "For markdown files, parsed YAML frontmatter is returned alongside the body.",
-  readOnly: true,
   inputSchema: z.object({
     path: z.string().describe("Relative path inside the space's watch_dir."),
   }),
@@ -61,7 +60,6 @@ const searchTool = defineTool("search", {
     "Keyword-search markdown content in the current space using ripgrep. " +
     "Returns ranked entity hits with line snippets. Use this to find related " +
     "wikis or source files before deciding what to contribute or edit.",
-  readOnly: true,
   inputSchema: z.object({
     query: z.string().describe("The substring or regex to search for."),
     regex: z.boolean().optional().describe("Treat query as a regex (default false)."),

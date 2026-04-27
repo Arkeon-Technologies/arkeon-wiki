@@ -72,3 +72,9 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   error TEXT,
   PRIMARY KEY (role, idempotency_key)
 );
+
+-- Supports recency queries: "recent failed runs" for diagnostics,
+-- "runs in the last hour" for monitoring. Cheap insurance while the
+-- schema is fresh.
+CREATE INDEX IF NOT EXISTS idx_agent_runs_finished
+  ON agent_runs(role, finished_at);

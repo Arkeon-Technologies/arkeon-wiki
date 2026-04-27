@@ -129,7 +129,7 @@ export async function runAgent(
         skipped: false,
         edits: ctx.edits,
         text: result.text,
-        steps: result.steps?.length ?? 1,
+        steps: result.steps.length,
         usage: {
           inputTokens: result.totalUsage?.inputTokens,
           outputTokens: result.totalUsage?.outputTokens,
@@ -167,11 +167,32 @@ export function makeContext(space: Space, role: string): AgentContext {
 /**
  * Deterministic hash of an arbitrary JSON-serializable value. Used to
  * decide whether a re-trigger represents new work.
+ *
+ * Object keys are sorted recursively before hashing so two objects that
+ * are logically equal but built in different key orders produce the
+ * same digest — without this, role-defined idempotencyKey functions
+ * could spuriously re-trigger when callers happen to assemble the input
+ * in a different order.
  */
 export function hashInput(input: unknown): string {
-  return createHash("sha256")
-    .update(JSON.stringify(input ?? null))
-    .digest("hex");
+  return createHash("sha256").update(stableStringify(input)).digest("hex");
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || value === undefined) return "null";
+  if (typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return "[" + value.map(stableStringify).join(",") + "]";
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return (
+    "{" +
+    keys
+      .map((k) => JSON.stringify(k) + ":" + stableStringify(obj[k]))
+      .join(",") +
+    "}"
+  );
 }
 
 // ── Idempotency table ─────────────────────────────────────────────
