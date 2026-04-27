@@ -13,14 +13,16 @@
  * contributors edit wiki files on disk; the watcher does the rest.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { createSql } from "./sql.js";
 import { generateUlid } from "./ids.js";
 import { ApiError } from "./errors.js";
+import { applyEdit, type ApplyEditResult, type FileEdit } from "./file-edits.js";
 import { parseFrontmatter, serializeFrontmatter } from "./frontmatter.js";
-import { syncFile, type Space } from "./sync.js";
+import { withPathLock } from "./path-lock.js";
+import { type Space } from "./sync.js";
 
 export interface MatchedWiki {
   id: string;
@@ -122,28 +124,6 @@ export async function findMatchingWiki(
   return null;
 }
 
-// ── Keyed write serialization ───────────────────────────────────────
-//
-// Two contribute() calls that race on the same key would interleave
-// findMatchingWiki / findFreePath / writeFile — both could decide to
-// create the same wiki, then one would overwrite the other's entity
-// row. We serialize the full lookup-and-act sequence on a key (the
-// space id, in practice) so each operation observes the previous one's
-// committed state. In-process only; cross-process locking is out of
-// scope.
-
-const _keyQueues = new Map<string, Promise<unknown>>();
-
-export function withPathLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const previous = _keyQueues.get(key) ?? Promise.resolve();
-  const next = previous.then(fn, fn);
-  _keyQueues.set(
-    key,
-    next.catch(() => {}),
-  );
-  return next;
-}
-
 // ── Orchestration ───────────────────────────────────────────────────
 
 export interface ContributeInput {
@@ -156,6 +136,13 @@ export interface ContributeInput {
   };
   excerpt: string;
   claim?: string;
+  /**
+   * Override the function used to apply the resulting FileEdit. The agent
+   * runtime passes its context-bound applyEdit so the new wiki/contribution
+   * shows up in `ctx.edits`. External callers can omit this and get the
+   * default lib `applyEdit(space, edit)` behavior.
+   */
+  applyEdit?: (edit: FileEdit) => Promise<ApplyEditResult>;
 }
 
 export interface ContributeResult {
@@ -221,6 +208,8 @@ export async function contribute(input: ContributeInput): Promise<ContributeResu
     added_at: new Date().toISOString(),
   };
 
+  const apply = input.applyEdit ?? ((edit: FileEdit) => applyEdit(space, edit));
+
   // Serialize on the space so the lookup-and-act sequence is atomic with
   // respect to other contributions in the same space. Different spaces
   // proceed in parallel.
@@ -243,8 +232,11 @@ export async function contribute(input: ContributeInput): Promise<ContributeResu
         ...parsed.properties,
         contributions: [...existing, contribution],
       };
-      writeFileSync(absPath, serializeFrontmatter(updated, parsed.body), "utf-8");
-      await syncFile(space, wikiPath);
+      await apply({
+        kind: "write",
+        path: wikiPath,
+        content: serializeFrontmatter(updated, parsed.body),
+      });
 
       return {
         wiki_id: match.id,
@@ -257,8 +249,6 @@ export async function contribute(input: ContributeInput): Promise<ContributeResu
     const wikiId = generateUlid();
     const desiredPath = placeholderPath(input.subject.subject_type, input.subject.label);
     const wikiPath = findFreePath(space.watch_dir, desiredPath);
-    const absPath = join(space.watch_dir, wikiPath);
-    mkdirSync(dirname(absPath), { recursive: true });
 
     const props: Record<string, unknown> = {
       id: wikiId,
@@ -269,8 +259,11 @@ export async function contribute(input: ContributeInput): Promise<ContributeResu
     props.status = "placeholder";
     props.contributions = [contribution];
 
-    writeFileSync(absPath, serializeFrontmatter(props, ""), "utf-8");
-    await syncFile(space, wikiPath);
+    await apply({
+      kind: "write",
+      path: wikiPath,
+      content: serializeFrontmatter(props, ""),
+    });
 
     return {
       wiki_id: wikiId,

@@ -11,8 +11,8 @@ import {
   slugify,
   placeholderPath,
   findFreePath,
-  withPathLock,
 } from "../../src/server/lib/contributions.js";
+import { withPathLock } from "../../src/server/lib/path-lock.js";
 
 describe("normalizeLabel", () => {
   it("lowercases and trims", () => {
