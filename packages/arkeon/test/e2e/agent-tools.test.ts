@@ -452,6 +452,165 @@ describe("search edge cases", () => {
   });
 });
 
+// ── list_wikis ────────────────────────────────────────────────────
+
+describe("list_wikis edge cases", () => {
+  // Seed a small corpus the tool can filter against.
+  beforeAll(async () => {
+    mkdirSync(join(testDir, "wiki/person"), { recursive: true });
+    mkdirSync(join(testDir, "wiki/organization"), { recursive: true });
+
+    writeFileSync(
+      join(testDir, "wiki/person/babbage.md"),
+      `---\nlabel: Charles Babbage\nsubject_type: person\nstatus: published\n---\n\nMechanical engine pioneer.\n`,
+    );
+    writeFileSync(
+      join(testDir, "wiki/person/babb-noted.md"),
+      `---\nlabel: Babb Noted\nsubject_type: person\nstatus: placeholder\n---\n\n`,
+    );
+    writeFileSync(
+      join(testDir, "wiki/organization/bell-labs.md"),
+      `---\nlabel: Bell Labs\nsubject_type: organization\nstatus: published\n---\n\nResearch lab.\n`,
+    );
+
+    // Wait for watcher to index all three.
+    const sql = createSql();
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const rows = await sql`
+        SELECT id FROM entities
+        WHERE space_id = ${space.id}
+          AND source_path IN (
+            ${"wiki/person/babbage.md"},
+            ${"wiki/person/babb-noted.md"},
+            ${"wiki/organization/bell-labs.md"}
+          )
+      `;
+      if (rows.length === 3) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }, 15_000);
+
+  it("filters by subject_type", async () => {
+    const result = (await tool("list_wikis").execute({
+      subject_type: "organization",
+    })) as { wikis: Array<{ label: string }>; total: number };
+
+    const labels = result.wikis.map((w) => w.label);
+    expect(labels).toContain("Bell Labs");
+    expect(labels).not.toContain("Charles Babbage");
+  });
+
+  it("filters by status (placeholder vs published)", async () => {
+    const result = (await tool("list_wikis").execute({
+      status: "placeholder",
+    })) as { wikis: Array<{ label: string }> };
+
+    expect(result.wikis.map((w) => w.label)).toContain("Babb Noted");
+    expect(result.wikis.map((w) => w.label)).not.toContain("Charles Babbage");
+  });
+
+  it("matches label_prefix case-insensitively, prefix-anchored only", async () => {
+    // Prefix 'BABB' (all caps) should match 'Babb Noted' (case-insensitive,
+    // starts with Babb) but NOT 'Charles Babbage' (starts with Charles).
+    const result = (await tool("list_wikis").execute({
+      label_prefix: "BABB",
+    })) as { wikis: Array<{ label: string }> };
+
+    const labels = result.wikis.map((w) => w.label);
+    expect(labels).toContain("Babb Noted");
+    expect(labels).not.toContain("Charles Babbage");
+  });
+
+  it("escapes LIKE wildcards in label_prefix so '%' matches literally", async () => {
+    // No wikis whose label literally starts with '%', so the result must
+    // be empty — proves '%' is not interpreted as a wildcard.
+    const result = (await tool("list_wikis").execute({
+      label_prefix: "%",
+    })) as { wikis: unknown[] };
+    expect(result.wikis).toEqual([]);
+  });
+
+  it("returns has_contributions=true wikis when contributions are pending", async () => {
+    // Add a placeholder via contribute(), which leaves a pending contribution
+    // attached to a fresh wiki.
+    await tool("contribute").execute({
+      subject: { label: "List Wikis Pending", subject_type: "concept" },
+      excerpt: "demo excerpt",
+    });
+
+    const result = (await tool("list_wikis").execute({
+      has_contributions: true,
+    })) as { wikis: Array<{ label: string }> };
+
+    expect(result.wikis.map((w) => w.label)).toContain("List Wikis Pending");
+  });
+
+  it("attaches counts when include_counts is true", async () => {
+    const result = (await tool("list_wikis").execute({
+      label_prefix: "List Wikis Pending",
+      include_counts: true,
+    })) as {
+      wikis: Array<{
+        label: string;
+        counts?: { contributions_pending: number; incoming_links: number; outgoing_links: number };
+      }>;
+    };
+
+    const w = result.wikis.find((x) => x.label === "List Wikis Pending");
+    expect(w).toBeTruthy();
+    expect(w!.counts).toBeDefined();
+    expect(w!.counts!.contributions_pending).toBeGreaterThanOrEqual(1);
+  });
+
+  it("respects limit", async () => {
+    const result = (await tool("list_wikis").execute({
+      limit: 1,
+    })) as { wikis: unknown[]; total: number };
+
+    expect(result.wikis.length).toBeLessThanOrEqual(1);
+    expect(result.total).toBeGreaterThan(1);
+  });
+
+  it("respects offset for pagination", async () => {
+    const page1 = (await tool("list_wikis").execute({
+      limit: 1,
+      offset: 0,
+      sort: "label",
+    })) as { wikis: Array<{ id: string }> };
+
+    const page2 = (await tool("list_wikis").execute({
+      limit: 1,
+      offset: 1,
+      sort: "label",
+    })) as { wikis: Array<{ id: string }> };
+
+    expect(page1.wikis[0].id).not.toBe(page2.wikis[0].id);
+  });
+
+  it("does not return source files (only wikis)", async () => {
+    mkdirSync(join(testDir, "sources"), { recursive: true });
+    writeFileSync(
+      join(testDir, "sources/listwikis-source.txt"),
+      "should never appear in list_wikis",
+    );
+
+    const sql = createSql();
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const rows = await sql`SELECT id FROM entities WHERE source_path = ${"sources/listwikis-source.txt"}`;
+      if (rows.length > 0) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    const result = (await tool("list_wikis").execute({
+      label_prefix: "listwikis",
+    })) as { wikis: Array<{ source_path: string }> };
+
+    expect(result.wikis.find((w) => w.source_path?.startsWith("sources/"))).toBeUndefined();
+  });
+});
+
 // ── cross-tool composition ────────────────────────────────────────
 
 describe("cross-tool composition", () => {

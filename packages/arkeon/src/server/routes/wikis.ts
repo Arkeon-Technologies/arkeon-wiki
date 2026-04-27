@@ -7,141 +7,26 @@ import { join } from "node:path";
 import type { AppBindings } from "../types.js";
 import { createSql } from "../lib/sql.js";
 import { ApiError } from "../lib/errors.js";
+import { listWikis, type WikiSort } from "../lib/wikis.js";
 
 export const wikisRouter = new Hono<AppBindings>();
 
-const SORT_COLUMNS: Record<string, string> = {
-  updated_at: "e.updated_at DESC",
-  label: "e.label COLLATE NOCASE ASC",
-};
-
-// GET /wikis — list wiki entities with frontmatter-aware filters
-//
-// Query params:
-//   space_id          — filter by space
-//   subject_type      — filter on properties.subject_type
-//   status            — filter on properties.status (placeholder|published|...)
-//   label_prefix      — case-insensitive prefix match on label
-//   has_contributions — "true" → only wikis with pending contributions
-//   sort              — updated_at (default) | label
-//   include           — comma-separated: relationships, counts
-//   limit             — default 100, max 10000
-//   offset            — pagination offset
+// GET /wikis — list wiki entities with frontmatter-aware filters.
+// All filters and includes are documented on listWikis() in lib/wikis.ts.
 wikisRouter.get("/", async (c) => {
-  const spaceId = c.req.query("space_id");
-  const subjectType = c.req.query("subject_type");
-  const status = c.req.query("status");
-  const labelPrefix = c.req.query("label_prefix");
-  const hasContributions = c.req.query("has_contributions") === "true";
-  const sortKey = c.req.query("sort") ?? "updated_at";
   const include = (c.req.query("include") ?? "").split(",").map((s) => s.trim());
-  const includeRelationships = include.includes("relationships");
-  const includeCounts = include.includes("counts");
-  const limit = Math.min(Number(c.req.query("limit") ?? 100), 10_000);
-  const offset = Number(c.req.query("offset") ?? 0);
-
-  const sortClause = SORT_COLUMNS[sortKey];
-  if (!sortClause) {
-    throw new ApiError(
-      400,
-      "validation_error",
-      `Invalid sort: must be one of ${Object.keys(SORT_COLUMNS).join(", ")}`,
-    );
-  }
-
-  const sql = createSql();
-  const conditions: string[] = [`e.type = 'wiki'`];
-  const params: unknown[] = [];
-
-  if (spaceId) {
-    params.push(spaceId);
-    conditions.push(`e.space_id = ?`);
-  }
-  if (subjectType) {
-    params.push(subjectType);
-    conditions.push(`json_extract(e.properties, '$.subject_type') = ?`);
-  }
-  if (status) {
-    params.push(status);
-    conditions.push(`json_extract(e.properties, '$.status') = ?`);
-  }
-  if (labelPrefix) {
-    // Escape LIKE wildcards so the caller's prefix is matched literally.
-    const escaped = labelPrefix.replace(/[\\%_]/g, "\\$&");
-    params.push(`${escaped}%`);
-    conditions.push(`e.label LIKE ? ESCAPE '\\' COLLATE NOCASE`);
-  }
-  if (hasContributions) {
-    conditions.push(
-      `EXISTS (SELECT 1 FROM contributions c
-               WHERE c.wiki_id = e.id AND c.consumed_at IS NULL)`,
-    );
-  }
-
-  const where = `WHERE ${conditions.join(" AND ")}`;
-
-  const wikis = await sql.query(
-    `SELECT e.id, e.space_id, e.label, e.source_path, e.properties,
-            e.created_at, e.updated_at
-     FROM entities e
-     ${where}
-     ORDER BY ${sortClause}
-     LIMIT ? OFFSET ?`,
-    [...params, limit, offset],
-  );
-
-  const countResult = await sql.query(
-    `SELECT COUNT(*) AS total FROM entities e ${where}`,
-    params,
-  );
-
-  const result: Record<string, unknown> = {
-    wikis,
-    total: countResult[0]?.total ?? 0,
-    limit,
-    offset,
-  };
-
-  const ids = wikis.map((w) => w.id as string);
-
-  if (includeCounts && ids.length > 0) {
-    const placeholders = ids.map(() => "?").join(",");
-    const counts = await sql.query(
-      `SELECT
-         e.id,
-         (SELECT COUNT(*) FROM contributions c
-          WHERE c.wiki_id = e.id AND c.consumed_at IS NULL) AS contributions_pending,
-         (SELECT COUNT(*) FROM relationships r WHERE r.target_id = e.id) AS incoming_links,
-         (SELECT COUNT(*) FROM relationships r WHERE r.source_id = e.id) AS outgoing_links
-       FROM entities e
-       WHERE e.id IN (${placeholders})`,
-      ids,
-    );
-    const byId = new Map(counts.map((row) => [row.id as string, row]));
-    for (const wiki of wikis) {
-      const c = byId.get(wiki.id as string);
-      wiki.counts = {
-        contributions_pending: c?.contributions_pending ?? 0,
-        incoming_links: c?.incoming_links ?? 0,
-        outgoing_links: c?.outgoing_links ?? 0,
-      };
-    }
-  }
-
-  if (includeRelationships) {
-    if (ids.length > 0) {
-      const placeholders = ids.map(() => "?").join(",");
-      result.relationships = await sql.query(
-        `SELECT id, source_id, target_id, predicate, link_text, link_path
-         FROM relationships
-         WHERE source_id IN (${placeholders}) OR target_id IN (${placeholders})`,
-        [...ids, ...ids],
-      );
-    } else {
-      result.relationships = [];
-    }
-  }
-
+  const result = await listWikis({
+    space_id: c.req.query("space_id"),
+    subject_type: c.req.query("subject_type"),
+    status: c.req.query("status"),
+    label_prefix: c.req.query("label_prefix"),
+    has_contributions: c.req.query("has_contributions") === "true",
+    sort: (c.req.query("sort") ?? undefined) as WikiSort | undefined,
+    include_relationships: include.includes("relationships"),
+    include_counts: include.includes("counts"),
+    limit: c.req.query("limit") ? Number(c.req.query("limit")) : undefined,
+    offset: c.req.query("offset") ? Number(c.req.query("offset")) : undefined,
+  });
   return c.json(result);
 });
 
