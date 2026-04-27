@@ -59,6 +59,44 @@ He worked at [Bell Labs](../organization/bell-labs.md).
 
 YAML is a superset of JSON, so wikis written with the old JSON-style frontmatter (`---\n{ ... }\n---`) still parse correctly. The first sync that writes back a generated `id` will rewrite the file in YAML form — heads-up if you have uncommitted changes to a wiki that was authored with JSON frontmatter.
 
+## Contributions
+
+A *contribution* is a structured note attached to a wiki: "this source has something relevant about this subject." Contributions are the inbox for the (forthcoming) editor worker, which will read them and update the wiki body to incorporate the new material. Each one carries the source it came from, an excerpt, and an optional one-line claim summary.
+
+> **Status (2026-04):** the storage and routing for contributions exist; the editor worker that turns them into wiki body edits does not yet (#50). Adding a contribution today **accumulates the input on the target wiki** but does not automatically rewrite the wiki body. Once the editor lands, pending contributions will be drafted into / edited into the wiki body and marked `consumed_at`.
+
+### Shape on disk
+
+Contributions live in the target wiki's frontmatter as an append-only array. They look like this:
+
+```markdown
+---
+id: 01J...
+label: Claude Shannon
+subject_type: person
+status: placeholder
+contributions:
+  - id: 01JC...
+    source_id: 01J_source_a
+    excerpt: "Shannon's 1948 paper founded information theory."
+    claim: founded information theory
+    added_at: "2026-04-26T17:00:00.000Z"
+---
+
+(body, possibly empty if this is a placeholder)
+```
+
+`status: placeholder` is set when a wiki was created from a contribution and has no body yet. It flips to `published` once the editor writes the first draft.
+
+### How to add a contribution
+
+There are two paths, and both are equivalent — they both end up as appended frontmatter on the target wiki, mirrored into the `contributions` SQLite table by `syncFile()`.
+
+1. **Edit the file directly.** Open the target wiki, append an entry to the `contributions:` array. The watcher syncs it. This is the path for humans, AI assistants with file access (Claude Code, Cursor, etc.), or any external tool — no API call needed.
+2. **Call `contribute()` from in-process code.** `src/server/lib/contributions.ts` exports `contribute({ space_id, source_id, subject, excerpt, claim })`. It does the routing work — find an existing wiki by exact label/alias match, otherwise create a placeholder under `wiki/{subject_type}/{slug}.md`. There's no HTTP route; this is an internal API used by the contributor worker (#49).
+
+When you don't already know which wiki the contribution belongs to, calling `contribute()` is much easier — it handles label/alias matching, slug generation, and concurrent-create races. When you do know (or you're a human and you can just open the file), file-edit is fine.
+
 ## Schema
 
 Four tables in SQLite:
@@ -158,7 +196,8 @@ Single file: `001-foundation.sql`. Must be idempotent (all `IF NOT EXISTS`). Run
 - No vector search (sqlite-vec + EmbeddingGemma planned, hybrid RRF with ripgrep)
 - No FTS5 / BM25 ranking (ripgrep gives substring matching only)
 - No auth / API keys
-- No workers (extract, draft, enrich)
+- No contributor worker (#49) — nothing watches source files and emits contributions yet. `contribute()` exists; nobody calls it.
+- No editor worker (#50) — contributions accumulate on wikis but don't yet flow into the wiki body. Adding a contribution today is "noted, will be drafted later."
 - No explorer (needs updating for new API)
 
 The old architecture with all of these features is preserved on the `archive/pre-fs-first` branch and in a local worktree at `../arkeon-wiki-archive/` for reference.
