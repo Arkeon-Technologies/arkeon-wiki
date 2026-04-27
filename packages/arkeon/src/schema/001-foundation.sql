@@ -59,3 +59,16 @@ CREATE TABLE IF NOT EXISTS contributions (
 CREATE INDEX IF NOT EXISTS idx_contributions_wiki ON contributions(wiki_id);
 CREATE INDEX IF NOT EXISTS idx_contributions_pending
   ON contributions(wiki_id) WHERE consumed_at IS NULL;
+
+-- Agent runs: idempotency tracking for the agent runtime. Keyed by
+-- (role, idempotency_key); the input_hash lets the runtime decide
+-- whether a re-trigger of the same key represents new work or a replay.
+CREATE TABLE IF NOT EXISTS agent_runs (
+  role TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
+  finished_at TEXT NOT NULL DEFAULT (datetime('now')),
+  error TEXT,
+  PRIMARY KEY (role, idempotency_key)
+);

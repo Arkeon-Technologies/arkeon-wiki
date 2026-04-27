@@ -21,6 +21,7 @@ import { generateUlid } from "./ids.js";
 import { ApiError } from "./errors.js";
 import { applyEdit } from "./file-edits.js";
 import { parseFrontmatter, serializeFrontmatter } from "./frontmatter.js";
+import { withPathLock } from "./path-lock.js";
 import { type Space } from "./sync.js";
 
 export interface MatchedWiki {
@@ -121,28 +122,6 @@ export async function findMatchingWiki(
   }
 
   return null;
-}
-
-// ── Keyed write serialization ───────────────────────────────────────
-//
-// Two contribute() calls that race on the same key would interleave
-// findMatchingWiki / findFreePath / writeFile — both could decide to
-// create the same wiki, then one would overwrite the other's entity
-// row. We serialize the full lookup-and-act sequence on a key (the
-// space id, in practice) so each operation observes the previous one's
-// committed state. In-process only; cross-process locking is out of
-// scope.
-
-const _keyQueues = new Map<string, Promise<unknown>>();
-
-export function withPathLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const previous = _keyQueues.get(key) ?? Promise.resolve();
-  const next = previous.then(fn, fn);
-  _keyQueues.set(
-    key,
-    next.catch(() => {}),
-  );
-  return next;
 }
 
 // ── Orchestration ───────────────────────────────────────────────────
