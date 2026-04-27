@@ -8,10 +8,10 @@ A knowledge graph that lives in your filesystem. Point it at a directory, and it
 
 ```bash
 npm install -g arkeon-wiki
-arkeon-wiki start
+arkeon-wiki up
 ```
 
-The daemon runs in the foreground — `Ctrl+C` to stop. State (SQLite database, pidfile, log) lives in `~/.arkeon-wiki/`.
+This starts the daemon as a detached background process — it survives your terminal closing. Stop it with `arkeon-wiki down`. State (SQLite database, pidfile, log) lives in `~/.arkeon-wiki/`.
 
 **2. Register a directory**
 
@@ -53,7 +53,10 @@ No manual sync commands. Just save files.
 curl http://localhost:8000/entities              # list all entities
 curl http://localhost:8000/entities/{id}          # get properties + relationships
 curl http://localhost:8000/entities?type=wiki     # filter by type
+curl "http://localhost:8000/search?q=shannon"    # keyword search (ripgrep)
 ```
+
+Or from the CLI: `arkeon-wiki search shannon`.
 
 ## How it works
 
@@ -73,6 +76,7 @@ arkeon-wiki status             # check if running
 arkeon-wiki ls                 # list running instances
 arkeon-wiki logs [-f]          # print/tail the daemon log
 arkeon-wiki init [name]        # register current directory as a space
+arkeon-wiki search <query>     # keyword search (ripgrep, defaults to bound space)
 arkeon-wiki start              # foreground (for use under pm2/launchd/etc.)
 ```
 
