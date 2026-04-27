@@ -11,6 +11,7 @@ import { createSql } from "./lib/sql.js";
 import { spacesRouter } from "./routes/spaces.js";
 import { entitiesRouter } from "./routes/entities.js";
 import { searchRouter } from "./routes/search.js";
+import { contributeRouter } from "./routes/contribute.js";
 
 export function createApp() {
   const app = new Hono<AppBindings>();
@@ -39,6 +40,7 @@ export function createApp() {
   app.route("/spaces", spacesRouter);
   app.route("/entities", entitiesRouter);
   app.route("/search", searchRouter);
+  app.route("/contribute", contributeRouter);
 
   app.notFound((c) => {
     const requestId = c.get("requestId");
