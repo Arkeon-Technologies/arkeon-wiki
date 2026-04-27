@@ -99,7 +99,7 @@ List entities with optional filtering.
       "type": "wiki",
       "label": "Claude Shannon",
       "source_path": "wiki/person/claude-shannon.md",
-      "properties": "{\"subject_type\":\"person\",\"birth_year\":1916}",
+      "properties": { "subject_type": "person", "birth_year": 1916 },
       "created_at": "2026-04-26T18:00:00.000Z",
       "updated_at": "2026-04-26T18:00:00.000Z"
     }
@@ -110,7 +110,7 @@ List entities with optional filtering.
 }
 ```
 
-`properties` is a JSON string. Parse it on the client if you need structured access.
+`properties` is stored as JSON text in SQLite but the API parses it before returning, so callers get an object (or array, or `null`) — not a string.
 
 ### `GET /entities/:id`
 
@@ -131,7 +131,7 @@ Properties plus incoming and outgoing relationships.
   "type": "wiki",
   "label": "Claude Shannon",
   "source_path": "wiki/person/claude-shannon.md",
-  "properties": "{\"subject_type\":\"person\"}",
+  "properties": { "subject_type": "person" },
   "created_at": "2026-04-26T18:00:00.000Z",
   "updated_at": "2026-04-26T18:00:00.000Z",
   "relationships": {
