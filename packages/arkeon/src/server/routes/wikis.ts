@@ -7,7 +7,7 @@ import { join } from "node:path";
 import type { AppBindings } from "../types.js";
 import { createSql } from "../lib/sql.js";
 import { ApiError } from "../lib/errors.js";
-import { listWikis, type WikiSort } from "../lib/wikis.js";
+import { listWikis } from "../lib/wikis.js";
 
 export const wikisRouter = new Hono<AppBindings>();
 
@@ -21,7 +21,7 @@ wikisRouter.get("/", async (c) => {
     status: c.req.query("status"),
     label_prefix: c.req.query("label_prefix"),
     has_contributions: c.req.query("has_contributions") === "true",
-    sort: (c.req.query("sort") ?? undefined) as WikiSort | undefined,
+    sort: c.req.query("sort"),
     include_relationships: include.includes("relationships"),
     include_counts: include.includes("counts"),
     limit: c.req.query("limit") ? Number(c.req.query("limit")) : undefined,

@@ -27,8 +27,12 @@ export interface ListWikisOptions {
   label_prefix?: string;
   /** Only wikis that have ≥1 contribution with `consumed_at IS NULL`. */
   has_contributions?: boolean;
-  /** `updated_at` (default, newest first) or `label` (case-insensitive A→Z). */
-  sort?: WikiSort;
+  /** `updated_at` (default, newest first) or `label` (case-insensitive A→Z).
+   *  Typed loosely as `string` so HTTP callers can pass an unvalidated query
+   *  string directly; listWikis validates against SORT_COLUMNS and throws
+   *  ApiError(400) on unknown values. Typed callers can pass a `WikiSort`
+   *  literal — the union narrowing is enforced at the call site. */
+  sort?: string;
   /** Attach a `counts` object per wiki (pending contributions + link counts). */
   include_counts?: boolean;
   /** Attach a top-level `relationships` array of all edges touching the
@@ -83,8 +87,8 @@ const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 10_000;
 
 export async function listWikis(opts: ListWikisOptions = {}): Promise<ListWikisResult> {
-  const sortKey: WikiSort = opts.sort ?? "updated_at";
-  const sortClause = SORT_COLUMNS[sortKey];
+  const sortKey = opts.sort ?? "updated_at";
+  const sortClause = SORT_COLUMNS[sortKey as WikiSort];
   if (!sortClause) {
     throw new ApiError(
       400,
