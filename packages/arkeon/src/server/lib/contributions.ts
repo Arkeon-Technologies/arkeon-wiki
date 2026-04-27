@@ -13,14 +13,15 @@
  * contributors edit wiki files on disk; the watcher does the rest.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 import { createSql } from "./sql.js";
 import { generateUlid } from "./ids.js";
 import { ApiError } from "./errors.js";
+import { applyEdit } from "./file-edits.js";
 import { parseFrontmatter, serializeFrontmatter } from "./frontmatter.js";
-import { syncFile, type Space } from "./sync.js";
+import { type Space } from "./sync.js";
 
 export interface MatchedWiki {
   id: string;
@@ -243,8 +244,11 @@ export async function contribute(input: ContributeInput): Promise<ContributeResu
         ...parsed.properties,
         contributions: [...existing, contribution],
       };
-      writeFileSync(absPath, serializeFrontmatter(updated, parsed.body), "utf-8");
-      await syncFile(space, wikiPath);
+      await applyEdit(space, {
+        kind: "write",
+        path: wikiPath,
+        content: serializeFrontmatter(updated, parsed.body),
+      });
 
       return {
         wiki_id: match.id,
@@ -257,8 +261,6 @@ export async function contribute(input: ContributeInput): Promise<ContributeResu
     const wikiId = generateUlid();
     const desiredPath = placeholderPath(input.subject.subject_type, input.subject.label);
     const wikiPath = findFreePath(space.watch_dir, desiredPath);
-    const absPath = join(space.watch_dir, wikiPath);
-    mkdirSync(dirname(absPath), { recursive: true });
 
     const props: Record<string, unknown> = {
       id: wikiId,
@@ -269,8 +271,11 @@ export async function contribute(input: ContributeInput): Promise<ContributeResu
     props.status = "placeholder";
     props.contributions = [contribution];
 
-    writeFileSync(absPath, serializeFrontmatter(props, ""), "utf-8");
-    await syncFile(space, wikiPath);
+    await applyEdit(space, {
+      kind: "write",
+      path: wikiPath,
+      content: serializeFrontmatter(props, ""),
+    });
 
     return {
       wiki_id: wikiId,
