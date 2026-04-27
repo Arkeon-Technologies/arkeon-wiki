@@ -471,6 +471,15 @@ describe("API read endpoints", () => {
     }
   });
 
+  it("escapes LIKE wildcards in label_prefix", async () => {
+    // Without escaping, `%` would match everything. With escaping, it
+    // matches only labels that literally start with `%` — none of ours.
+    const data = await api("/wikis?label_prefix=%25"); // URL-encoded `%`
+    expect(data.total).toBe(0);
+    const data2 = await api("/wikis?label_prefix=_");
+    expect(data2.total).toBe(0);
+  });
+
   it("filters by status", async () => {
     // Write a wiki with status:published; wait for the watcher to sync it.
     writeWiki(

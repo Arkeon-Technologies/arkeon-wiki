@@ -66,8 +66,10 @@ wikisRouter.get("/", async (c) => {
     conditions.push(`json_extract(e.properties, '$.status') = ?`);
   }
   if (labelPrefix) {
-    params.push(`${labelPrefix}%`);
-    conditions.push(`e.label LIKE ? COLLATE NOCASE`);
+    // Escape LIKE wildcards so the caller's prefix is matched literally.
+    const escaped = labelPrefix.replace(/[\\%_]/g, "\\$&");
+    params.push(`${escaped}%`);
+    conditions.push(`e.label LIKE ? ESCAPE '\\' COLLATE NOCASE`);
   }
   if (hasContributions) {
     conditions.push(
@@ -165,8 +167,8 @@ wikisRouter.get("/:id", async (c) => {
     throw new ApiError(404, "not_found", "Wiki not found");
   }
 
-  const wiki = rows[0] as Record<string, unknown>;
-  delete wiki.type;
+  const { type: _type, ...wiki } = rows[0] as Record<string, unknown>;
+  void _type;
 
   const outgoing = await sql`
     SELECT r.id, r.target_id, r.predicate, r.link_text, r.link_path,
