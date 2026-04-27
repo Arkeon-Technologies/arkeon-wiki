@@ -36,6 +36,7 @@
   "dependencies": {
     "@hono/node-server": "^1.19.11",
     "@hono/zod-openapi": "^1.2.3",
+    "@vscode/ripgrep": "^1.17.1",
     "better-sqlite3": "^12.9.0",
     "commander": "^14.0.1",
     "conf": "^13.0.1",
