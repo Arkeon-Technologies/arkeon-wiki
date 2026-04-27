@@ -4,6 +4,6 @@ Filesystem-first knowledge graph. See the [root README](../../README.md) for det
 
 ```bash
 npm install -g arkeon-wiki
-arkeon-wiki start
+arkeon-wiki up
 arkeon-wiki init
 ```

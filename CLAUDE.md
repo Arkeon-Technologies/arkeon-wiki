@@ -25,7 +25,7 @@ Two npm workspaces. Only one is published.
 - `packages/arkeon/` — the main package, published as `arkeon-wiki` on npm. CLI binary, Hono API server, schema migrations, sync engine.
   - `src/index.ts` — CLI entry (commander)
   - `src/cli/commands/local/` — daemon lifecycle (up, down, start, stop, status, ls, logs)
-  - `src/cli/commands/repo/` — directory-scoped commands (init)
+  - `src/cli/commands/repo/` — directory-scoped commands (init, search)
   - `src/cli/lib/local-runtime.ts` — paths, pidfile, named-instance helpers
   - `src/cli/lib/instances.ts` — running-instance registry
   - `src/server/` — Hono API server, routes, sync engine, file watcher
@@ -75,6 +75,7 @@ No actors, no auth, no queues, no versioning. Schema in `src/schema/001-foundati
 - `src/server/lib/fs-watcher.ts` — watches registered directories, debounces changes, calls `syncFile()` / `removeByPath()`.
 - `src/server/lib/frontmatter.ts` — parse/serialize YAML frontmatter.
 - `src/server/lib/markdown-links.ts` — extract and resolve markdown links.
+- `src/server/lib/search.ts` — ripgrep adapter: spawns `rg --json` per space, parses match events, joins paths back to entities, ranks by `match_count`.
 
 ## API endpoints
 
