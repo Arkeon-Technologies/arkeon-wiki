@@ -12,12 +12,12 @@
  * the Zod input schema, not the registration line.
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
 
 import { z } from "zod";
 
 import { contribute } from "../lib/contributions.js";
+import { safeResolve } from "../lib/file-edits.js";
 import { parseFrontmatter } from "../lib/frontmatter.js";
 import { search as ripgrepSearch } from "../lib/search.js";
 
@@ -34,9 +34,12 @@ const readFileTool = defineTool("read_file", {
     path: z.string().describe("Relative path inside the space's watch_dir."),
   }),
   call: ({ path }, ctx) => {
-    const absPath = join(ctx.space.watch_dir, path);
+    const absPath = safeResolve(ctx.space.watch_dir, path);
     if (!existsSync(absPath)) {
       throw new Error(`read_file: ${path} does not exist`);
+    }
+    if (statSync(absPath).isDirectory()) {
+      throw new Error(`read_file: ${path} is a directory`);
     }
     const content = readFileSync(absPath, "utf-8");
     if (path.endsWith(".md")) {
@@ -153,6 +156,9 @@ const contributeTool = defineTool("contribute", {
       subject,
       excerpt,
       claim,
+      // Route the resulting write through the context's applyEdit so the
+      // new/updated wiki shows up in ctx.edits alongside other tool edits.
+      applyEdit: ctx.applyEdit,
     }),
 });
 

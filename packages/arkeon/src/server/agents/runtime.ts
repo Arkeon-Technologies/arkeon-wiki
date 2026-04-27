@@ -77,12 +77,22 @@ export interface AgentRunResult {
   usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
 }
 
+export interface RunAgentOptions {
+  /**
+   * Pre-resolved language model to use instead of resolveModel(role.model).
+   * Useful for tests (mock models) and for per-call routing where the
+   * caller has already chosen a model based on input shape.
+   */
+  modelOverride?: LanguageModel;
+}
+
 // ── Public entry point ────────────────────────────────────────────
 
 export async function runAgent(
   role: AgentRole,
   input: AgentInput,
   registry: ToolRegistry,
+  options: RunAgentOptions = {},
 ): Promise<AgentRunResult> {
   return withPathLock(role.concurrencyKey(input), async () => {
     const idem = role.idempotencyKey(input);
@@ -102,9 +112,11 @@ export async function runAgent(
       tools[name] = factory(ctx);
     }
 
+    const model = options.modelOverride ?? (resolveModel(role.model) as LanguageModel);
+
     try {
       const result = await generateText({
-        model: resolveModel(role.model) as LanguageModel,
+        model,
         system,
         prompt,
         tools,

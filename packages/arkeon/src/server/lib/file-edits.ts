@@ -22,7 +22,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, resolve, sep } from "node:path";
 
 import { removeByPath, syncFile, type Space, type SyncResult } from "./sync.js";
 
@@ -30,6 +30,28 @@ export type FileEdit =
   | { kind: "write"; path: string; content: string }
   | { kind: "edit"; path: string; search: string; replace: string }
   | { kind: "delete"; path: string };
+
+/**
+ * Resolve a relative path against a watch dir, rejecting absolute paths
+ * and `..` escapes. The returned path is guaranteed to be inside the
+ * watch dir. Used wherever path strings cross a trust boundary (LLM
+ * tool input, HTTP body, etc.).
+ */
+export function safeResolve(watchDir: string, relativePath: string): string {
+  if (isAbsolute(relativePath)) {
+    throw new Error(
+      `path '${relativePath}' is absolute; must be relative to the watch dir`,
+    );
+  }
+  const baseAbs = resolve(watchDir);
+  const candidate = resolve(baseAbs, relativePath);
+  if (candidate !== baseAbs && !candidate.startsWith(baseAbs + sep)) {
+    throw new Error(
+      `path '${relativePath}' escapes the space's watch directory`,
+    );
+  }
+  return candidate;
+}
 
 export type ApplyEditResult =
   | { path: string; kind: "write" | "edit"; sync: SyncResult }
@@ -42,7 +64,7 @@ export type ApplyEditResult =
  * and SEARCH that doesn't match exactly once for `edit`.
  */
 export async function applyEdit(space: Space, edit: FileEdit): Promise<ApplyEditResult> {
-  const absPath = join(space.watch_dir, edit.path);
+  const absPath = safeResolve(space.watch_dir, edit.path);
 
   if (edit.kind === "write") {
     mkdirSync(dirname(absPath), { recursive: true });

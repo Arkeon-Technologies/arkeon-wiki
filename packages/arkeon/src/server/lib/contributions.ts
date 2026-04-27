@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { createSql } from "./sql.js";
 import { generateUlid } from "./ids.js";
 import { ApiError } from "./errors.js";
-import { applyEdit } from "./file-edits.js";
+import { applyEdit, type ApplyEditResult, type FileEdit } from "./file-edits.js";
 import { parseFrontmatter, serializeFrontmatter } from "./frontmatter.js";
 import { withPathLock } from "./path-lock.js";
 import { type Space } from "./sync.js";
@@ -136,6 +136,13 @@ export interface ContributeInput {
   };
   excerpt: string;
   claim?: string;
+  /**
+   * Override the function used to apply the resulting FileEdit. The agent
+   * runtime passes its context-bound applyEdit so the new wiki/contribution
+   * shows up in `ctx.edits`. External callers can omit this and get the
+   * default lib `applyEdit(space, edit)` behavior.
+   */
+  applyEdit?: (edit: FileEdit) => Promise<ApplyEditResult>;
 }
 
 export interface ContributeResult {
@@ -201,6 +208,8 @@ export async function contribute(input: ContributeInput): Promise<ContributeResu
     added_at: new Date().toISOString(),
   };
 
+  const apply = input.applyEdit ?? ((edit: FileEdit) => applyEdit(space, edit));
+
   // Serialize on the space so the lookup-and-act sequence is atomic with
   // respect to other contributions in the same space. Different spaces
   // proceed in parallel.
@@ -223,7 +232,7 @@ export async function contribute(input: ContributeInput): Promise<ContributeResu
         ...parsed.properties,
         contributions: [...existing, contribution],
       };
-      await applyEdit(space, {
+      await apply({
         kind: "write",
         path: wikiPath,
         content: serializeFrontmatter(updated, parsed.body),
@@ -250,7 +259,7 @@ export async function contribute(input: ContributeInput): Promise<ContributeResu
     props.status = "placeholder";
     props.contributions = [contribution];
 
-    await applyEdit(space, {
+    await apply({
       kind: "write",
       path: wikiPath,
       content: serializeFrontmatter(props, ""),
