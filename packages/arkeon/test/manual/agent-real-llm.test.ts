@@ -30,15 +30,22 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
+
+import { config as loadDotenv } from "dotenv";
 
 import { runAgent, type AgentRole } from "../../src/server/agents/runtime.js";
 import { ALL_TOOLS } from "../../src/server/agents/tools.js";
 import type { ModelConfig } from "../../src/server/agents/model.js";
 import { createSql } from "../../src/server/lib/sql.js";
 import type { Space } from "../../src/server/lib/sync.js";
+
+// Auto-load .env from the repo root (../../../../.env from this file)
+// so users only need to put their key in one place. Existing process
+// env vars take precedence over the file.
+loadDotenv({ path: resolve(__dirname, "../../../../.env"), quiet: true });
 
 const API_PORT = 18799;
 
