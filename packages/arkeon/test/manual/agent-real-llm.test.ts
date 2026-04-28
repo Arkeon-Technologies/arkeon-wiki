@@ -238,4 +238,112 @@ describe.skipIf(!HAS_KEY)("real-LLM ingestor agent", () => {
     },
     180_000,
   );
+
+  it(
+    "amends an existing wiki when a new source mentions the same subject",
+    async () => {
+      // Plant a SECOND source that mentions Claude Shannon (already
+      // ingested by the previous test) plus a new subject the
+      // existing space hasn't seen. The ingestor should edit_file
+      // Shannon's wiki to weave in the new material — preserving the
+      // wiki's id and the original Bell-Labs paragraph — and
+      // write_file a fresh wiki for the new subject.
+      const shannonPath = join(testDir, "wiki/person/claude-shannon.md");
+      expect(existsSync(shannonPath)).toBe(true);
+
+      const before = readFileSync(shannonPath, "utf-8");
+      const beforeId = before.match(/^id:\s*(\S+)/m)?.[1];
+      expect(beforeId).toBeTruthy();
+      const beforeBodyLen = before.split(/^---$/m)[2]?.length ?? 0;
+      expect(beforeBodyLen).toBeGreaterThan(50);
+
+      const newSourcePath = "sources/shannon-circuits.md";
+      writeFileSync(
+        join(testDir, newSourcePath),
+        [
+          "# Boolean Circuits",
+          "",
+          "Claude Shannon's 1937 master's thesis at MIT showed that boolean",
+          "algebra could be applied to the design of electrical relay",
+          "circuits. The thesis is widely regarded as one of the most",
+          "important master's theses ever written and laid the groundwork",
+          "for digital circuit design.",
+          "",
+        ].join("\n"),
+      );
+
+      // Wait for the new source to be indexed.
+      const sql = createSql();
+      const deadline = Date.now() + 5000;
+      let newSourceId: string | null = null;
+      while (Date.now() < deadline) {
+        const rows = await sql`
+          SELECT id FROM entities WHERE space_id = ${space.id} AND source_path = ${newSourcePath}
+        `;
+        if (rows.length > 0) {
+          newSourceId = rows[0].id as string;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      expect(newSourceId).toBeTruthy();
+
+      const role = buildAgentRole("ingestor", demoConfig());
+      const result = await runAgent(
+        role,
+        {
+          space,
+          triggerPath: newSourcePath,
+          triggerEntityId: newSourceId!,
+        },
+        ALL_TOOLS,
+      );
+
+      // ── Report ──────────────────────────────────────────────────
+      console.log("\n──────── EDIT-EXISTING REAL-LLM RESULT ────────");
+      console.log(`provider:  ${PROVIDER}`);
+      console.log(`model:     ${MODEL}`);
+      console.log(`steps:     ${result.steps}`);
+      console.log(`edits:     ${result.edits.length}`);
+      for (const e of result.edits) {
+        console.log(`           ${e.kind}  ${e.path}`);
+      }
+      console.log(
+        `tokens:    in=${result.usage?.inputTokens ?? "?"}  out=${result.usage?.outputTokens ?? "?"}`,
+      );
+      console.log("───────────────────────────────────────────────\n");
+
+      // ── Lenient assertions ──────────────────────────────────────
+      expect(result.skipped).toBe(false);
+      expect(result.edits.length).toBeGreaterThan(0);
+
+      // Shannon's wiki should still exist and have the SAME id.
+      const after = readFileSync(shannonPath, "utf-8");
+      const afterId = after.match(/^id:\s*(\S+)/m)?.[1];
+      expect(afterId).toBe(beforeId);
+
+      // The body should have grown — new source's material is woven in.
+      const afterBodyLen = after.split(/^---$/m)[2]?.length ?? 0;
+      expect(afterBodyLen).toBeGreaterThan(beforeBodyLen);
+
+      // The new source path should appear somewhere in the wiki body
+      // (the ingestor's instructions tell it to include a backlink).
+      // We accept either bare path or a markdown-link form referencing it.
+      const sawNewSourceInShannon =
+        after.includes(newSourcePath) ||
+        after.includes("shannon-circuits");
+      expect(sawNewSourceInShannon).toBe(true);
+
+      // Original Bell-Labs material should still be present (the edit
+      // should weave in, not replace).
+      expect(after.toLowerCase()).toContain("bell labs");
+
+      // At least one applied edit targets the existing wiki path.
+      const editedShannon = result.edits.find(
+        (e) => e.path === "wiki/person/claude-shannon.md",
+      );
+      expect(editedShannon).toBeTruthy();
+    },
+    180_000,
+  );
 });
