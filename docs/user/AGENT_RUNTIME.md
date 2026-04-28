@@ -116,6 +116,17 @@ arkeon-wiki config validate           # schema-check the YAML
 
 `config show` is the source of truth for "what is actually going to run" — it reflects the merged result of `~/.arkeon-wiki/agents.yaml`, `.arkeon/agents.yaml`, and the built-in templates.
 
+### How merging works
+
+| Section | Behavior when set in both global and repo |
+|---|---|
+| `defaults` | **Field-level merge.** `defaults.provider` from global + `defaults.model` from repo combine. Repo wins on shared fields. |
+| `roles.<name>` | **Per-role replacement.** If `roles.contributor` exists in both files, the repo entry replaces the global entry **wholesale** — fields you don't repeat are *not* inherited from the global. |
+
+This asymmetry keeps role overrides predictable: when you write `roles.contributor:` in your repo's YAML, you're declaring exactly what that role looks like for this repo, not partially patching whatever your `~/` happens to have.
+
+To carry over a field from a global role override, copy it. The most common case is global YAML setting universal `defaults` and the per-repo file overriding individual roles — that works without copying anything because `defaults` *do* merge.
+
 ## Built-in roles
 
 | Role | Tools | Job |
