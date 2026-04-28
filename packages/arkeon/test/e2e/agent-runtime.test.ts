@@ -88,16 +88,16 @@ describe("agent_runs idempotency table", () => {
   });
 
   it("markProcessed + alreadyProcessed roundtrip", async () => {
-    await markProcessed("contributor", { key: "src/a.md", hash: "abc" }, "completed", null);
+    await markProcessed("ingestor", { key: "src/a.md", hash: "abc" }, "completed", null);
     expect(
-      await alreadyProcessed("contributor", { key: "src/a.md", hash: "abc" }),
+      await alreadyProcessed("ingestor", { key: "src/a.md", hash: "abc" }),
     ).toBe(true);
   });
 
   it("returns false when the hash differs (same key, new content)", async () => {
-    await markProcessed("contributor", { key: "src/a.md", hash: "abc" }, "completed", null);
+    await markProcessed("ingestor", { key: "src/a.md", hash: "abc" }, "completed", null);
     expect(
-      await alreadyProcessed("contributor", { key: "src/a.md", hash: "DIFFERENT" }),
+      await alreadyProcessed("ingestor", { key: "src/a.md", hash: "DIFFERENT" }),
     ).toBe(false);
   });
 
@@ -210,22 +210,6 @@ describe("edit_file tool", () => {
     await expect(
       tool.execute({ path: "wiki/concept/miss.md", search: "absent", replace: "x" }),
     ).rejects.toThrow(/did not match/);
-  });
-});
-
-describe("contribute tool", () => {
-  it("routes a contribution to a fresh placeholder", async () => {
-    const ctx = makeContext(space, "test");
-    const tool = ALL_TOOLS.contribute(ctx) as ExecutableTool;
-    const result = (await tool.execute({
-      subject: { label: "Grace Hopper", subject_type: "person" },
-      excerpt: "Hopper popularised the term 'debugging'.",
-      claim: "popularised the term debugging",
-    })) as { wiki_path: string; was_created: boolean };
-
-    expect(result.was_created).toBe(true);
-    expect(result.wiki_path).toBe("wiki/person/grace-hopper.md");
-    expect(existsSync(join(testDir, result.wiki_path))).toBe(true);
   });
 });
 

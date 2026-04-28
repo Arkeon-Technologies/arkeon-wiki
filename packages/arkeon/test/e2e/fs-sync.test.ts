@@ -609,7 +609,6 @@ describe("include=counts on list endpoint", () => {
 
     for (const w of data.wikis) {
       expect(w.counts).toBeDefined();
-      expect(typeof w.counts.contributions_pending).toBe("number");
       expect(typeof w.counts.incoming_links).toBe("number");
       expect(typeof w.counts.outgoing_links).toBe("number");
     }

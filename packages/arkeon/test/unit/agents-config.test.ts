@@ -38,14 +38,14 @@ describe("AGENT_CONFIG_SCHEMA", () => {
     const parsed = AGENT_CONFIG_SCHEMA.parse({
       defaults: { provider: "openai", model: "gpt-5-mini" },
       roles: {
-        contributor: {
-          tools: ["list_wikis", "contribute"],
+        ingestor: {
+          tools: ["list_wikis", "search"],
           max_steps: 5,
           instructions: "be terse",
         },
       },
     });
-    expect(parsed.roles?.contributor?.max_steps).toBe(5);
+    expect(parsed.roles?.ingestor?.max_steps).toBe(5);
   });
 
   it("rejects an unknown provider", () => {
@@ -73,19 +73,19 @@ describe("mergeConfigs", () => {
 
   it("replaces roles wholesale (not field-merged)", () => {
     const a: AgentConfig = {
-      roles: { contributor: { instructions: "from-a", max_steps: 5 } },
+      roles: { ingestor: { instructions: "from-a", max_steps: 5 } },
     };
-    const b: AgentConfig = { roles: { contributor: { max_steps: 10 } } };
+    const b: AgentConfig = { roles: { ingestor: { max_steps: 10 } } };
     const merged = mergeConfigs(a, b);
-    // b's contributor entry wins entirely; instructions from a is dropped
-    expect(merged.roles?.contributor).toEqual({ max_steps: 10 });
+    // b's ingestor entry wins entirely; instructions from a is dropped
+    expect(merged.roles?.ingestor).toEqual({ max_steps: 10 });
   });
 
   it("preserves roles only present in one side", () => {
-    const a: AgentConfig = { roles: { contributor: { max_steps: 5 } } };
+    const a: AgentConfig = { roles: { ingestor: { max_steps: 5 } } };
     const b: AgentConfig = { roles: { editor: { max_steps: 20 } } };
     const merged = mergeConfigs(a, b);
-    expect(merged.roles?.contributor?.max_steps).toBe(5);
+    expect(merged.roles?.ingestor?.max_steps).toBe(5);
     expect(merged.roles?.editor?.max_steps).toBe(20);
   });
 });
@@ -156,7 +156,7 @@ describe("loadAgentConfig", () => {
 
 // ── buildAgentRole ───────────────────────────────────────────────
 
-describe("buildAgentRole — built-in contributor", () => {
+describe("buildAgentRole — built-in ingestor", () => {
   beforeEach(() => {
     process.env.OPENAI_API_KEY = "sk-test";
   });
@@ -165,13 +165,13 @@ describe("buildAgentRole — built-in contributor", () => {
   });
 
   it("builds a working AgentRole from just defaults", () => {
-    const role = buildAgentRole("contributor", {
+    const role = buildAgentRole("ingestor", {
       defaults: { provider: "openai", model: "gpt-5-mini" },
     });
 
-    expect(role.name).toBe("contributor");
-    expect(role.maxSteps).toBe(BUILTIN_ROLES.contributor.max_steps);
-    expect(role.tools).toEqual(BUILTIN_ROLES.contributor.tools);
+    expect(role.name).toBe("ingestor");
+    expect(role.maxSteps).toBe(BUILTIN_ROLES.ingestor.max_steps);
+    expect(role.tools).toEqual(BUILTIN_ROLES.ingestor.tools);
     expect(role.model).toEqual({
       provider: "openai",
       id: "gpt-5-mini",
@@ -182,10 +182,10 @@ describe("buildAgentRole — built-in contributor", () => {
   it("lets a role override the model and provider", () => {
     process.env.ANTHROPIC_API_KEY = "sk-ant-test";
     try {
-      const role = buildAgentRole("contributor", {
+      const role = buildAgentRole("ingestor", {
         defaults: { provider: "openai", model: "gpt-5-mini" },
         roles: {
-          contributor: { provider: "anthropic", model: "claude-sonnet-4-6" },
+          ingestor: { provider: "anthropic", model: "claude-sonnet-4-6" },
         },
       });
       expect(role.model.provider).toBe("anthropic");
@@ -196,14 +196,14 @@ describe("buildAgentRole — built-in contributor", () => {
   });
 
   it("layers space-level + role-level instructions onto built-in system", async () => {
-    const role = buildAgentRole("contributor", {
+    const role = buildAgentRole("ingestor", {
       defaults: {
         provider: "openai",
         model: "gpt-5-mini",
         instructions: "Space-wide focus: climate science.",
       },
       roles: {
-        contributor: { instructions: "Skip generic terms." },
+        ingestor: { instructions: "Skip generic terms." },
       },
     });
 
@@ -213,14 +213,14 @@ describe("buildAgentRole — built-in contributor", () => {
       triggerEntityId: "ent1",
     });
 
-    expect(system).toContain("contributor agent");           // built-in stays
+    expect(system).toContain("ingest source files");       // built-in stays
     expect(system).toContain("Space-wide focus: climate");   // defaults layer
     expect(system).toContain("Skip generic terms.");         // role layer
     expect(system).toContain("--- Operator instructions ---");
   });
 
   it("fills {{trigger_path}} / {{trigger_entity_id}} into the user template", async () => {
-    const role = buildAgentRole("contributor", {
+    const role = buildAgentRole("ingestor", {
       defaults: { provider: "openai", model: "gpt-5-mini" },
     });
     const { prompt } = await role.buildPrompt({
@@ -235,7 +235,7 @@ describe("buildAgentRole — built-in contributor", () => {
   it("throws when the required env var for an api key is missing", () => {
     delete process.env.OPENAI_API_KEY;
     expect(() =>
-      buildAgentRole("contributor", {
+      buildAgentRole("ingestor", {
         defaults: { provider: "openai", model: "gpt-5-mini" },
       }),
     ).toThrow(/OPENAI_API_KEY/);
@@ -244,7 +244,7 @@ describe("buildAgentRole — built-in contributor", () => {
   it("respects a custom api_key_env name", () => {
     process.env.MY_CUSTOM_KEY = "sk-custom";
     try {
-      const role = buildAgentRole("contributor", {
+      const role = buildAgentRole("ingestor", {
         defaults: {
           provider: "openai",
           model: "gpt-5-mini",
@@ -259,7 +259,7 @@ describe("buildAgentRole — built-in contributor", () => {
 
   it("openai-compatible can run without an api key (local servers)", () => {
     delete process.env.OPENAI_API_KEY;
-    const role = buildAgentRole("contributor", {
+    const role = buildAgentRole("ingestor", {
       defaults: {
         provider: "openai-compatible",
         model: "llama3.1:70b",
@@ -271,7 +271,7 @@ describe("buildAgentRole — built-in contributor", () => {
 
   it("openai-compatible requires base_url", () => {
     expect(() =>
-      buildAgentRole("contributor", {
+      buildAgentRole("ingestor", {
         defaults: { provider: "openai-compatible", model: "x" },
       }),
     ).toThrow(/base_url/);
@@ -353,16 +353,15 @@ describe("listAvailableRoles", () => {
     const roles = listAvailableRoles({
       roles: { "my-thing": { system: "x", tools: ["read_file"] } },
     });
-    expect(roles).toContain("contributor");
-    expect(roles).toContain("editor");
+    expect(roles).toContain("ingestor");
     expect(roles).toContain("my-thing");
   });
 
   it("does not duplicate when a YAML override targets a built-in", () => {
     const roles = listAvailableRoles({
-      roles: { contributor: { max_steps: 99 } },
+      roles: { ingestor: { max_steps: 99 } },
     });
-    const contribCount = roles.filter((r) => r === "contributor").length;
+    const contribCount = roles.filter((r) => r === "ingestor").length;
     expect(contribCount).toBe(1);
   });
 });
@@ -378,7 +377,7 @@ describe("default idempotency / concurrency keys", () => {
   });
 
   it("uses triggerPath as the idempotency key when present", () => {
-    const role = buildAgentRole("contributor", {
+    const role = buildAgentRole("ingestor", {
       defaults: { provider: "openai", model: "gpt-5-mini" },
     });
     const input: AgentInput = {
@@ -389,7 +388,7 @@ describe("default idempotency / concurrency keys", () => {
   });
 
   it("falls back to triggerEntityId", () => {
-    const role = buildAgentRole("contributor", {
+    const role = buildAgentRole("ingestor", {
       defaults: { provider: "openai", model: "gpt-5-mini" },
     });
     const input: AgentInput = {
@@ -400,7 +399,7 @@ describe("default idempotency / concurrency keys", () => {
   });
 
   it("hashes meta + trigger info into the idempotency hash", () => {
-    const role = buildAgentRole("contributor", {
+    const role = buildAgentRole("ingestor", {
       defaults: { provider: "openai", model: "gpt-5-mini" },
     });
     const a = role.idempotencyKey({
@@ -417,7 +416,7 @@ describe("default idempotency / concurrency keys", () => {
   });
 
   it("scopes concurrency to (role, space, triggerEntityId)", () => {
-    const role = buildAgentRole("contributor", {
+    const role = buildAgentRole("ingestor", {
       defaults: { provider: "openai", model: "gpt-5-mini" },
     });
     expect(
@@ -425,6 +424,6 @@ describe("default idempotency / concurrency keys", () => {
         space: { id: "s1", name: "n", watch_dir: "/tmp" },
         triggerEntityId: "01ENT",
       }),
-    ).toBe("contributor::s1::01ENT");
+    ).toBe("ingestor::s1::01ENT");
   });
 });

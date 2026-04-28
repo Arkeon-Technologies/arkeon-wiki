@@ -72,7 +72,7 @@ Single space. Returns `404` if not found.
 
 ## Wikis
 
-A wiki is a markdown file under `wiki/` with YAML frontmatter. Source files (everything else the watcher picks up) are indexed too but not exposed over HTTP — they are an internal substrate for the contribution flow. If a use case appears, a parallel `/sources` endpoint will be added then.
+A wiki is a markdown file under `wiki/` with YAML frontmatter. Source files (everything else the watcher picks up) are indexed too but not exposed over HTTP — they are an internal substrate for the agent runtime to read from. If a use case appears, a parallel `/sources` endpoint will be added then.
 
 ### `GET /wikis`
 
@@ -84,11 +84,10 @@ List wikis with frontmatter-aware filters and join-in counts.
 |---|---|---|
 | `space_id` | — | Filter to one space. |
 | `subject_type` | — | Match `properties.subject_type` exactly (e.g. `person`, `organization`). |
-| `status` | — | Match `properties.status` exactly (e.g. `placeholder`, `published`). |
+| `status` | — | Match `properties.status` exactly. Free-form — whatever values you put in your wikis (e.g. `draft`, `review`, `published`). |
 | `label_prefix` | — | Case-insensitive prefix match on `label`. Useful for autocomplete. |
-| `has_contributions` | `false` | When `true`, restrict to wikis that have at least one pending (unconsumed) contribution. |
 | `sort` | `updated_at` | `updated_at` (DESC) or `label` (ASC, case-insensitive). |
-| `include` | — | Comma-separated. `relationships` adds a top-level `relationships` array (every edge touching a matched wiki). `counts` attaches `{ contributions_pending, incoming_links, outgoing_links }` to each wiki. |
+| `include` | — | Comma-separated. `relationships` adds a top-level `relationships` array (every edge touching a matched wiki). `counts` attaches `{ incoming_links, outgoing_links }` to each wiki. |
 | `limit` | `100` | Max `10000`. |
 | `offset` | `0` | Pagination offset. |
 
@@ -106,7 +105,6 @@ List wikis with frontmatter-aware filters and join-in counts.
       "created_at": "2026-04-26T18:00:00.000Z",
       "updated_at": "2026-04-26T18:00:00.000Z",
       "counts": {
-        "contributions_pending": 2,
         "incoming_links": 5,
         "outgoing_links": 1
       }

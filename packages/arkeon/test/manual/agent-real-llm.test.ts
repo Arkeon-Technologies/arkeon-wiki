@@ -5,9 +5,9 @@
  * Layer 3: real-LLM end-to-end demo.
  *
  * Drives runAgent against an actual provider (OpenAI by default) using
- * the declarative built-in `contributor` role from agents/builtins.ts.
+ * the declarative built-in `ingestor` role from agents/builtins.ts.
  * This exercises the whole config → role-builder → runtime → tools
- * stack, exactly the way #49's contributor worker will.
+ * stack, exactly the way the daemon-driven ingestor worker will.
  *
  * Skipped automatically when no API key is set. Invoke explicitly:
  *
@@ -74,8 +74,8 @@ function demoConfig(): AgentConfig {
       model: MODEL,
       base_url: process.env.AGENT_DEMO_BASE_URL,
     },
-    // No `roles` override → uses the built-in `contributor` template
-    // verbatim. Add an entry like { roles: { contributor: { instructions: ... } } }
+    // No `roles` override → uses the built-in `ingestor` template
+    // verbatim. Add an entry like { roles: { ingestor: { instructions: ... } } }
     // here to demo operator-supplied focus tweaks.
   };
 }
@@ -125,9 +125,9 @@ afterAll(async () => {
   }
 }, 30_000);
 
-describe.skipIf(!HAS_KEY)("real-LLM contributor agent", () => {
+describe.skipIf(!HAS_KEY)("real-LLM ingestor agent", () => {
   it(
-    "uses the built-in contributor role to extract subjects from a source",
+    "uses the built-in ingestor role to extract subjects from a source",
     async () => {
       const sourcePath = "sources/shannon-bio.md";
       writeFileSync(
@@ -143,7 +143,7 @@ describe.skipIf(!HAS_KEY)("real-LLM contributor agent", () => {
         ].join("\n"),
       );
 
-      // Wait for the watcher to index the source so contribute() can
+      // Wait for the watcher to index the source so the agent can
       // pass source_id through.
       const sql = createSql();
       const deadline = Date.now() + 5000;
@@ -162,7 +162,7 @@ describe.skipIf(!HAS_KEY)("real-LLM contributor agent", () => {
 
       // The whole point: build the role declaratively from config +
       // built-in template. No inline role construction.
-      const role = buildAgentRole("contributor", demoConfig());
+      const role = buildAgentRole("ingestor", demoConfig());
 
       const result = await runAgent(
         role,
@@ -174,7 +174,7 @@ describe.skipIf(!HAS_KEY)("real-LLM contributor agent", () => {
       console.log("\n──────── REAL-LLM AGENT RESULT ────────");
       console.log(`provider:  ${PROVIDER}`);
       console.log(`model:     ${MODEL}`);
-      console.log(`role:      contributor (built-in)`);
+      console.log(`role:      ingestor (built-in)`);
       console.log(`steps:     ${result.steps}`);
       console.log(`edits:     ${result.edits.length}`);
       for (const e of result.edits) {
@@ -220,10 +220,21 @@ describe.skipIf(!HAS_KEY)("real-LLM contributor agent", () => {
       }
       findMd(wikiDir);
       expect(wikiFiles.length).toBeGreaterThan(0);
-      expect(
-        wikiFiles.filter((p) => readFileSync(p, "utf-8").includes("contributions:"))
-          .length,
-      ).toBeGreaterThan(0);
+
+      // Ingestor writes wiki bodies, not placeholders. Each generated
+      // wiki should have a non-trivial body and at least one wiki has
+      // a markdown link back to the source path (provenance).
+      const bodyContents = wikiFiles.map((p) => readFileSync(p, "utf-8"));
+      const withBody = bodyContents.filter((s) => {
+        const parts = s.split(/^---$/m);
+        return parts.length >= 3 && parts[2].trim().length > 50;
+      });
+      expect(withBody.length).toBeGreaterThan(0);
+
+      const withSourceBacklink = bodyContents.filter((s) =>
+        s.includes(sourcePath),
+      );
+      expect(withSourceBacklink.length).toBeGreaterThan(0);
     },
     180_000,
   );

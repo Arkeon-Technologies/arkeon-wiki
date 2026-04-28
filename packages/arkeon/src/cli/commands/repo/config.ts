@@ -38,10 +38,10 @@ const TEMPLATE = `# .arkeon/agents.yaml
 # Secrets never live here — set OPENAI_API_KEY / ANTHROPIC_API_KEY
 # in .env (gitignored) or your shell.
 #
-# Built-in roles (contributor, editor) are defined in the package and
-# inherited automatically. Override their fields here, or define your
-# own custom roles. Run \`arkeon-wiki config show\` to see the merged
-# effective config.
+# The built-in 'ingestor' role is defined in the package and
+# inherited automatically. Override its fields here, or define
+# your own custom roles. Run \`arkeon-wiki config show\` to see
+# the merged effective config.
 
 defaults:
   provider: openai             # openai | anthropic | openai-compatible
@@ -52,21 +52,16 @@ defaults:
   #   This wiki tracks researchers in climate science. Skip subjects
   #   not directly relevant. Cross-link to existing wikis.
 
-# Per-role overrides (built-in roles inherit by name). Add custom
-# roles here too — they need at least 'system' and 'tools'.
+# Per-role overrides (the built-in role inherits by name). Add
+# custom roles here too — they need at least 'system' and 'tools'.
 #
 # roles:
-#   contributor:
+#   ingestor:
 #     model: gpt-5-mini
-#     max_steps: 12
-#     instructions: |
-#       Be aggressive about creating placeholders for named subjects.
-#
-#   editor:
-#     provider: anthropic
-#     model: claude-opus-4-7
-#     api_key_env: ANTHROPIC_API_KEY    # optional, default per provider
 #     max_steps: 20
+#     instructions: |
+#       Use British English. Each new wiki body should be 2-4
+#       paragraphs. Skip generic terms.
 #
 #   link-checker:                       # custom user-defined role
 #     model: gpt-5-mini

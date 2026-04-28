@@ -59,43 +59,13 @@ He worked at [Bell Labs](../organization/bell-labs.md).
 
 YAML is a superset of JSON, so wikis written with the old JSON-style frontmatter (`---\n{ ... }\n---`) still parse correctly. The first sync that writes back a generated `id` will rewrite the file in YAML form — heads-up if you have uncommitted changes to a wiki that was authored with JSON frontmatter.
 
-## Contributions
+## Ingestion
 
-A *contribution* is a structured note attached to a wiki: "this source has something relevant about this subject." Contributions are the inbox for the (forthcoming) editor worker, which will read them and update the wiki body to incorporate the new material. Each one carries the source it came from, an excerpt, and an optional one-line claim summary.
+A single agent role — `ingestor` — turns sources into wikis. When a source file is added or updated, the ingestor reads it, looks for related wikis (existing ones via `list_wikis` / `search`, new ones it decides to create), and either edits the relevant wiki body in place (SEARCH/REPLACE) or writes a new wiki file. Provenance is captured as plain markdown links from the wiki body back to the source path — those become relationship edges in SQLite via the same link-resolution path that handles wiki↔wiki links.
 
-> **Status (2026-04):** the storage and routing for contributions exist; the editor worker that turns them into wiki body edits does not yet (#50). Adding a contribution today **accumulates the input on the target wiki** but does not automatically rewrite the wiki body. Once the editor lands, pending contributions will be drafted into / edited into the wiki body and marked `consumed_at`.
+> **Status (2026-04):** the runtime and the `ingestor` built-in role are shipped; the daemon trigger that fires the role on source events is the next piece. For now, run the agent manually via the runtime API or the manual real-LLM test (`npm run test:manual -w packages/arkeon`).
 
-### Shape on disk
-
-Contributions live in the target wiki's frontmatter as an append-only array. They look like this:
-
-```markdown
----
-id: 01J...
-label: Claude Shannon
-subject_type: person
-status: placeholder
-contributions:
-  - id: 01JC...
-    source_id: 01J_source_a
-    excerpt: "Shannon's 1948 paper founded information theory."
-    claim: founded information theory
-    added_at: "2026-04-26T17:00:00.000Z"
----
-
-(body, possibly empty if this is a placeholder)
-```
-
-`status: placeholder` is set when a wiki was created from a contribution and has no body yet. It flips to `published` once the editor writes the first draft.
-
-### How to add a contribution
-
-There are two paths, and both are equivalent — they both end up as appended frontmatter on the target wiki, mirrored into the `contributions` SQLite table by `syncFile()`.
-
-1. **Edit the file directly.** Open the target wiki, append an entry to the `contributions:` array. The watcher syncs it. This is the path for humans, AI assistants with file access (Claude Code, Cursor, etc.), or any external tool — no API call needed.
-2. **Call `contribute()` from in-process code.** `src/server/lib/contributions.ts` exports `contribute({ space_id, source_id, subject, excerpt, claim })`. It does the routing work — find an existing wiki by exact label/alias match, otherwise create a placeholder under `wiki/{subject_type}/{slug}.md`. There's no HTTP route; this is an internal API used by the contributor worker (#49).
-
-When you don't already know which wiki the contribution belongs to, calling `contribute()` is much easier — it handles label/alias matching, slug generation, and concurrent-create races. When you do know (or you're a human and you can just open the file), file-edit is fine.
+The pre-2026-04 `contributions[]` frontmatter inbox and matching SQLite table have been removed — the editor pattern they were designed for collapsed into a single ingest step. If you have wiki files left over with `contributions:` arrays in their frontmatter from older versions, they parse fine (just become unused properties); the wikis themselves are unaffected.
 
 ## Schema
 
@@ -104,7 +74,7 @@ Four tables in SQLite:
 - `spaces` — registered directories (id, name, watch_dir)
 - `entities` — wikis and source files (id, space_id, type, label, source_path, source_hash, properties JSON text)
 - `relationships` — edges between entities (source_id, target_id, predicate, link_text, link_path)
-- `contributions` — pending/consumed inputs to a wiki (wiki_id, source_id, excerpt, claim, added_at, consumed_at). Mirrors `contributions[]` in the target wiki's frontmatter; written by the `contribute()` routing function and consumed by the (forthcoming) editor worker. Frontmatter is canonical; the table is rebuilt from it on every `syncFile()`.
+- `agent_runs` — idempotency tracking for the agent runtime, keyed by `(role, idempotency_key)` with an `input_hash` so re-triggers on the same input skip cleanly.
 
 No actors, no auth, no queues, no versioning. Schema in `src/schema/001-foundation.sql`.
 
@@ -115,13 +85,15 @@ No actors, no auth, no queues, no versioning. Schema in `src/schema/001-foundati
 - `src/server/lib/frontmatter.ts` — parse/serialize YAML frontmatter.
 - `src/server/lib/markdown-links.ts` — extract and resolve markdown links.
 - `src/server/lib/search.ts` — ripgrep adapter: spawns `rg --json` per space, parses match events, joins paths back to entities, ranks by `match_count`.
-- `src/server/lib/contributions.ts` — `contribute()`: routes a `(source, subject, excerpt)` triple to a target wiki by exact label/alias match, or creates a placeholder. Internal-only — there is no HTTP route. External contributors edit wiki files directly; the watcher does the rest.
+- `src/server/lib/wiki-paths.ts` — pure helpers for routing labels to wiki file paths: `slugify`, `normalizeLabel`, `wikiPathFor(subject_type, label)`, `findFreePath`.
+- `src/server/lib/file-edits.ts` — the universal mutation primitive. `applyEdit(space, edit)` is the chokepoint every agent and routing helper uses; runs `syncFile`/`removeByPath` after each change.
+- `src/server/agents/` — the agent runtime: declarative `.arkeon/agents.yaml` config (Zod-validated), built-in `ingestor` role template, role-builder that merges YAML + builtins + env, tool registry (`read_file`, `list_wikis`, `search`, `write_file`, `edit_file`), and the runAgent loop (Vercel AI SDK).
 
 ## API endpoints
 
 - `POST /spaces` — register a directory
 - `GET /spaces` — list spaces
-- `GET /wikis?space_id=...&subject_type=...&status=...&label_prefix=...&has_contributions=true&sort=...&include=...` — list wikis with frontmatter filters; `include=relationships` adds edges, `include=counts` attaches per-wiki contribution/link counts
+- `GET /wikis?space_id=...&subject_type=...&status=...&label_prefix=...&sort=...&include=...` — list wikis with frontmatter filters; `include=relationships` adds edges, `include=counts` attaches per-wiki incoming/outgoing link counts
 - `GET /wikis/{id}?include=content` — wiki properties + relationships (and body if requested)
 - `DELETE /wikis/{id}` — remove wiki from the index
 - `GET /search?q=...&space_id=...&limit=...&snippets=...&regex=...` — keyword search via ripgrep against the watched directory; returns ranked entity hits with line snippets
@@ -196,8 +168,7 @@ Single file: `001-foundation.sql`. Must be idempotent (all `IF NOT EXISTS`). Run
 - No vector search (sqlite-vec + EmbeddingGemma planned, hybrid RRF with ripgrep)
 - No FTS5 / BM25 ranking (ripgrep gives substring matching only)
 - No auth / API keys
-- No contributor worker (#49) — nothing watches source files and emits contributions yet. `contribute()` exists; nobody calls it.
-- No editor worker (#50) — contributions accumulate on wikis but don't yet flow into the wiki body. Adding a contribution today is "noted, will be drafted later."
+- No daemon-driven trigger for the `ingestor` role yet — the runtime works (driveable via the runtime API or `npm run test:manual`), but the file-watcher event → `runAgent` wiring inside the daemon is the next step.
 - No explorer (needs updating for new API)
 
 The old architecture with all of these features is preserved on the `archive/pre-fs-first` branch and in a local worktree at `../arkeon-wiki-archive/` for reference.

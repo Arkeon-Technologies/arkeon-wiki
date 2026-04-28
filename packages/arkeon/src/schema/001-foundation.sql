@@ -41,25 +41,6 @@ CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(space_id, type);
 CREATE INDEX IF NOT EXISTS idx_relationships_source ON relationships(source_id);
 CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships(target_id);
 
--- Contributions: pending or consumed inputs to a wiki from a source.
--- Frontmatter is canonical; this table mirrors `contributions[]` in the
--- target wiki's frontmatter and exists only as a query index (e.g. "wikis
--- with N pending contributions").
-CREATE TABLE IF NOT EXISTS contributions (
-  id TEXT PRIMARY KEY,
-  wiki_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-  source_id TEXT REFERENCES entities(id) ON DELETE SET NULL,
-  excerpt TEXT,
-  claim TEXT,
-  added_at TEXT NOT NULL DEFAULT (datetime('now')),
-  consumed_at TEXT,
-  consumed_in_revision INTEGER
-);
-
-CREATE INDEX IF NOT EXISTS idx_contributions_wiki ON contributions(wiki_id);
-CREATE INDEX IF NOT EXISTS idx_contributions_pending
-  ON contributions(wiki_id) WHERE consumed_at IS NULL;
-
 -- Agent runs: idempotency tracking for the agent runtime. Keyed by
 -- (role, idempotency_key); the input_hash lets the runtime decide
 -- whether a re-trigger of the same key represents new work or a replay.
