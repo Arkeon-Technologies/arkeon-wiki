@@ -77,12 +77,31 @@ async function runInit(name: string | undefined, options: InitOptions): Promise<
   };
   writeFileSync(join(arkeonDir, "state.json"), JSON.stringify(state, null, 2));
 
-  // Add .arkeon/ to .gitignore
+  // Gitignore only the per-clone state file. `.arkeon/agents.yaml` and
+  // any other configuration that lives in the .arkeon dir are intended
+  // to be committed so the team shares them.
   const gitignorePath = join(cwd, ".gitignore");
   if (existsSync(gitignorePath)) {
     const gitignoreContent = readFileSync(gitignorePath, "utf-8");
-    if (!gitignoreContent.includes(".arkeon/")) {
-      writeFileSync(gitignorePath, `${gitignoreContent.trimEnd()}\n.arkeon/\n`);
+    const stale = ".arkeon/";
+    const target = ".arkeon/state.json";
+    let updated = gitignoreContent;
+    // Migrate any pre-existing `.arkeon/` (which would also hide
+    // committed config) to the narrower `.arkeon/state.json`.
+    if (
+      updated.split("\n").some((line) => line.trim() === stale) &&
+      !updated.includes(target)
+    ) {
+      updated = updated
+        .split("\n")
+        .map((line) => (line.trim() === stale ? target : line))
+        .join("\n");
+    }
+    if (!updated.includes(target)) {
+      updated = `${updated.trimEnd()}\n${target}\n`;
+    }
+    if (updated !== gitignoreContent) {
+      writeFileSync(gitignorePath, updated);
     }
   }
 

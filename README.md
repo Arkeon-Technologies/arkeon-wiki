@@ -77,8 +77,26 @@ arkeon-wiki ls                 # list running instances
 arkeon-wiki logs [-f]          # print/tail the daemon log
 arkeon-wiki init [name]        # register current directory as a space
 arkeon-wiki search <query>     # keyword search (ripgrep, defaults to bound space)
+arkeon-wiki config init        # write .arkeon/agents.yaml from a template
+arkeon-wiki config show        # print merged effective agent config
+arkeon-wiki config validate    # schema-check the YAML
 arkeon-wiki start              # foreground (for use under pm2/launchd/etc.)
 ```
+
+## Agents (LLM-powered)
+
+arkeon-wiki ships a small AI agent runtime with built-in roles for extracting subjects from sources (`contributor`) and drafting wiki bodies (`editor`). Configure them in `.arkeon/agents.yaml` (committed) and put your API key in `~/.arkeon-wiki/.env` (per-user, machine-local).
+
+```bash
+arkeon-wiki config init                                       # template config
+echo "OPENAI_API_KEY=sk-..." > ~/.arkeon-wiki/.env             # one key for all spaces
+$EDITOR .arkeon/agents.yaml                                    # set provider/model/instructions
+arkeon-wiki config show                                        # confirm what'll run
+```
+
+Roles run on OpenAI, Anthropic, or any OpenAI-compatible backend (Ollama, LM Studio, OpenRouter, Groq, vLLM, …). Each role can use a different provider; secrets stay in `.env`, never YAML. Custom user-defined roles are first-class.
+
+Full setup guide: [docs/user/AGENT_RUNTIME.md](./docs/user/AGENT_RUNTIME.md).
 
 ## Configuration
 
@@ -90,6 +108,9 @@ All state lives in `~/.arkeon-wiki/` (override with `ARKEON_WIKI_HOME` or `--dat
 | `--data-dir <path>` flag | Per-invocation override |
 | `--port <port>` flag | API port (default: 8000) |
 | `--name <name>` flag | Run a named instance side-by-side with others |
+| `~/.arkeon-wiki/.env` | Universal API keys (OpenAI, Anthropic, etc.) — auto-loaded |
+| `<repo>/.env` | Per-repo API key override (gitignored by `init`) |
+| `.arkeon/agents.yaml` | Per-repo agent config: providers, models, operator instructions, custom roles. Committed. See [AGENT_RUNTIME.md](./docs/user/AGENT_RUNTIME.md). |
 
 ## Development
 

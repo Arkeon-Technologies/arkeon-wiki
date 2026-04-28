@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 
 import { registerLocalCommands } from "./cli/commands/local/index.js";
+import { registerConfigCommand } from "./cli/commands/repo/config.js";
 import { registerInitCommand } from "./cli/commands/repo/init.js";
 import { registerSearchCommand } from "./cli/commands/repo/search.js";
 
@@ -42,5 +43,6 @@ program.hook("preAction", (command) => {
 registerLocalCommands(program);
 registerInitCommand(program);
 registerSearchCommand(program);
+registerConfigCommand(program);
 
 program.parse();
