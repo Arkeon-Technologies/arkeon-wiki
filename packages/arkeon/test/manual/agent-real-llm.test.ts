@@ -32,17 +32,17 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 
-import { config as loadDotenv } from "dotenv";
-
 import type { AgentConfig } from "../../src/server/agents/config.js";
+import { loadAgentEnv } from "../../src/server/agents/env-loader.js";
 import { buildAgentRole } from "../../src/server/agents/role-builder.js";
 import { runAgent } from "../../src/server/agents/runtime.js";
 import { ALL_TOOLS } from "../../src/server/agents/tools.js";
 import { createSql } from "../../src/server/lib/sql.js";
 import type { Space } from "../../src/server/lib/sync.js";
 
-// Auto-load .env from the repo root (../../../../.env from this file).
-loadDotenv({ path: resolve(__dirname, "../../../../.env"), quiet: true });
+// Load .env files in precedence order: shell > repo .env > ~/.arkeon-wiki/.env.
+// The repo's .env is at ../../../../ from this file (worktree root).
+loadAgentEnv({ spaceDir: resolve(__dirname, "../../../..") });
 
 const API_PORT = 18799;
 
