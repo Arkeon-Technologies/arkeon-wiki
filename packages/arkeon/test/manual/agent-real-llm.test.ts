@@ -4,21 +4,19 @@
 /**
  * Layer 3: real-LLM end-to-end demo.
  *
- * Drives runAgent against an actual OpenAI/Anthropic model, with the
- * full ALL_TOOLS registry, against a tempdir space seeded with a
- * source file. Verifies the LLM can use the tool descriptions to:
- *   1. discover what already exists (list_wikis)
- *   2. read the source file (read_file)
- *   3. identify subjects and contribute them (contribute)
+ * Drives runAgent against an actual provider (OpenAI by default) using
+ * the declarative built-in `contributor` role from agents/builtins.ts.
+ * This exercises the whole config → role-builder → runtime → tools
+ * stack, exactly the way #49's contributor worker will.
  *
- * Skipped automatically when no API key is set, so it doesn't break
- * the default suite. Invoke explicitly:
+ * Skipped automatically when no API key is set. Invoke explicitly:
  *
- *   OPENAI_API_KEY=sk-... npm run test:manual -w packages/arkeon
+ *   npm run test:manual -w packages/arkeon
  *
- * Override the model with AGENT_DEMO_MODEL (default: gpt-5-mini).
- * Override the provider with AGENT_DEMO_PROVIDER (openai|anthropic|
- * openai-compatible) and AGENT_DEMO_BASE_URL for openai-compatible.
+ * Drop your key into a .env file at the repo root (auto-loaded), or
+ * set OPENAI_API_KEY / ANTHROPIC_API_KEY in the shell. Override the
+ * provider/model/baseURL with AGENT_DEMO_PROVIDER, AGENT_DEMO_MODEL,
+ * AGENT_DEMO_BASE_URL.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -36,15 +34,14 @@ import { randomBytes } from "node:crypto";
 
 import { config as loadDotenv } from "dotenv";
 
-import { runAgent, type AgentRole } from "../../src/server/agents/runtime.js";
+import type { AgentConfig } from "../../src/server/agents/config.js";
+import { buildAgentRole } from "../../src/server/agents/role-builder.js";
+import { runAgent } from "../../src/server/agents/runtime.js";
 import { ALL_TOOLS } from "../../src/server/agents/tools.js";
-import type { ModelConfig } from "../../src/server/agents/model.js";
 import { createSql } from "../../src/server/lib/sql.js";
 import type { Space } from "../../src/server/lib/sync.js";
 
-// Auto-load .env from the repo root (../../../../.env from this file)
-// so users only need to put their key in one place. Existing process
-// env vars take precedence over the file.
+// Auto-load .env from the repo root (../../../../.env from this file).
 loadDotenv({ path: resolve(__dirname, "../../../../.env"), quiet: true });
 
 const API_PORT = 18799;
@@ -64,19 +61,23 @@ const MODEL =
   process.env.AGENT_DEMO_MODEL ??
   (PROVIDER === "anthropic" ? "claude-sonnet-4-6" : "gpt-5-mini");
 
-function modelConfig(): ModelConfig {
-  if (PROVIDER === "anthropic") {
-    return { provider: "anthropic", id: MODEL, apiKey: process.env.ANTHROPIC_API_KEY };
-  }
-  if (PROVIDER === "openai-compatible") {
-    return {
-      provider: "openai-compatible",
-      id: MODEL,
-      baseURL: process.env.AGENT_DEMO_BASE_URL ?? "http://localhost:11434/v1",
-      apiKey: process.env.OPENAI_API_KEY,
-    };
-  }
-  return { provider: "openai", id: MODEL, apiKey: process.env.OPENAI_API_KEY };
+/**
+ * Synthesize the same shape that loadAgentConfig() would produce —
+ * but here we drive it from env vars instead of a YAML file, since
+ * the demo's job is to prove the runtime works, not to test the
+ * loader. (The loader has its own unit tests.)
+ */
+function demoConfig(): AgentConfig {
+  return {
+    defaults: {
+      provider: PROVIDER,
+      model: MODEL,
+      base_url: process.env.AGENT_DEMO_BASE_URL,
+    },
+    // No `roles` override → uses the built-in `contributor` template
+    // verbatim. Add an entry like { roles: { contributor: { instructions: ... } } }
+    // here to demo operator-supplied focus tweaks.
+  };
 }
 
 let testDir: string;
@@ -126,10 +127,8 @@ afterAll(async () => {
 
 describe.skipIf(!HAS_KEY)("real-LLM contributor agent", () => {
   it(
-    "extracts subjects from a source file and contributes to the right wikis",
+    "uses the built-in contributor role to extract subjects from a source",
     async () => {
-      // Seed a short source paragraph that mentions multiple distinct
-      // subjects. Keep it small so token cost stays trivial.
       const sourcePath = "sources/shannon-bio.md";
       writeFileSync(
         join(testDir, sourcePath),
@@ -145,7 +144,7 @@ describe.skipIf(!HAS_KEY)("real-LLM contributor agent", () => {
       );
 
       // Wait for the watcher to index the source so contribute() can
-      // resolve source_id if the LLM passes one.
+      // pass source_id through.
       const sql = createSql();
       const deadline = Date.now() + 5000;
       let sourceId: string | null = null;
@@ -161,58 +160,32 @@ describe.skipIf(!HAS_KEY)("real-LLM contributor agent", () => {
       }
       expect(sourceId).toBeTruthy();
 
-      const role: AgentRole = {
-        name: "demo-contributor",
-        model: modelConfig(),
-        tools: ["list_wikis", "read_file", "contribute"],
-        maxSteps: 12,
-        buildPrompt: async () => ({
-          system: [
-            "You are a contributor agent for a wiki knowledge graph.",
-            "",
-            "Workflow:",
-            "  1. Use list_wikis to see what already exists in this space.",
-            "  2. Use read_file to read the source document at the given path.",
-            "  3. Identify each distinct subject it discusses (people,",
-            "     organizations, concepts, etc.).",
-            "  4. For each subject, call contribute() with:",
-            "       - subject.label: the canonical name",
-            "       - subject.subject_type: 'person' | 'organization' |",
-            "         'concept' | 'event' | etc.",
-            "       - excerpt: a short verbatim or paraphrased sentence from",
-            "         the source",
-            "       - claim: a one-line summary of what the source establishes",
-            "         about that subject",
-            "       - source_id: the source entity id you were given",
-            "  5. Stop when every distinct subject has been contributed.",
-            "",
-            "Do not write any wiki bodies — that is a separate agent's job.",
-            "Be concise. Aim for at most 4 contribute calls.",
-          ].join("\n"),
-          prompt: [
-            `Source path: ${sourcePath}`,
-            `Source entity id: ${sourceId}`,
-            "",
-            "Identify subjects and contribute them.",
-          ].join("\n"),
-        }),
-        idempotencyKey: () => ({ key: sourcePath, hash: "v1" }),
-        concurrencyKey: ({ space: s }) => `demo::${s.id}`,
-      };
+      // The whole point: build the role declaratively from config +
+      // built-in template. No inline role construction.
+      const role = buildAgentRole("contributor", demoConfig());
 
-      const result = await runAgent(role, { space }, ALL_TOOLS);
+      const result = await runAgent(
+        role,
+        { space, triggerPath: sourcePath, triggerEntityId: sourceId! },
+        ALL_TOOLS,
+      );
 
       // ── Report ──────────────────────────────────────────────────
       console.log("\n──────── REAL-LLM AGENT RESULT ────────");
       console.log(`provider:  ${PROVIDER}`);
       console.log(`model:     ${MODEL}`);
+      console.log(`role:      contributor (built-in)`);
       console.log(`steps:     ${result.steps}`);
       console.log(`edits:     ${result.edits.length}`);
       for (const e of result.edits) {
         console.log(`           ${e.path}`);
       }
-      console.log(`tokens:    in=${result.usage?.inputTokens ?? "?"}  out=${result.usage?.outputTokens ?? "?"}`);
-      console.log(`final text: ${result.text.slice(0, 200)}${result.text.length > 200 ? "..." : ""}`);
+      console.log(
+        `tokens:    in=${result.usage?.inputTokens ?? "?"}  out=${result.usage?.outputTokens ?? "?"}`,
+      );
+      console.log(
+        `final text: ${result.text.slice(0, 200)}${result.text.length > 200 ? "..." : ""}`,
+      );
       console.log("\nWikis on disk:");
       const wikiDir = join(testDir, "wiki");
       function walk(dir: string, prefix = "  ") {
@@ -223,12 +196,9 @@ describe.skipIf(!HAS_KEY)("real-LLM contributor agent", () => {
           } else if (entry.name.endsWith(".md")) {
             const fm = readFileSync(path, "utf-8");
             const labelMatch = fm.match(/label:\s*(.+)/);
-            const contribsMatch = fm.match(/contributions:\s*\n([\s\S]*?)(\n[a-z]|---|$)/);
-            console.log(`${prefix}${path.replace(testDir + "/", "")}  →  ${labelMatch?.[1] ?? "(no label)"}`);
-            if (contribsMatch) {
-              const lines = contribsMatch[1].split("\n").filter((l) => l.trim().startsWith("- "));
-              console.log(`${prefix}  contributions: ${lines.length}`);
-            }
+            console.log(
+              `${prefix}${path.replace(testDir + "/", "")}  →  ${labelMatch?.[1] ?? "(no label)"}`,
+            );
           }
         }
       }
@@ -236,15 +206,10 @@ describe.skipIf(!HAS_KEY)("real-LLM contributor agent", () => {
       console.log("───────────────────────────────────────\n");
 
       // ── Lenient assertions ──────────────────────────────────────
-      // We don't pin which subjects the LLM identifies — different
-      // models will make different judgements. Just verify the loop
-      // ran end-to-end and produced *some* mutations.
       expect(result.skipped).toBe(false);
       expect(result.steps).toBeGreaterThan(1);
       expect(result.edits.length).toBeGreaterThan(0);
 
-      // At least one wiki file should exist with a populated
-      // contributions array.
       const wikiFiles: string[] = [];
       function findMd(dir: string) {
         for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -255,11 +220,10 @@ describe.skipIf(!HAS_KEY)("real-LLM contributor agent", () => {
       }
       findMd(wikiDir);
       expect(wikiFiles.length).toBeGreaterThan(0);
-
-      const withContribs = wikiFiles.filter((p) =>
-        readFileSync(p, "utf-8").includes("contributions:"),
-      );
-      expect(withContribs.length).toBeGreaterThan(0);
+      expect(
+        wikiFiles.filter((p) => readFileSync(p, "utf-8").includes("contributions:"))
+          .length,
+      ).toBeGreaterThan(0);
     },
     180_000,
   );
