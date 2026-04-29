@@ -19,7 +19,7 @@ wikisRouter.get("/", async (c) => {
     space_id: c.req.query("space_id"),
     subject_type: c.req.query("subject_type"),
     status: c.req.query("status"),
-    label_prefix: c.req.query("label_prefix"),
+    label_contains: c.req.query("label_contains"),
     sort: c.req.query("sort"),
     include_relationships: include.includes("relationships"),
     include_counts: include.includes("counts"),

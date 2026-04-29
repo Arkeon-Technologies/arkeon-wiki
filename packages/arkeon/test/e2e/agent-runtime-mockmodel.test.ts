@@ -142,7 +142,7 @@ function makeTestRole(overrides: Partial<AgentRole> = {}): AgentRole {
   return {
     name: "mock-test-role",
     model: { provider: "anthropic", id: "claude-test" }, // ignored: modelOverride wins
-    tools: ["read_file", "write_file", "edit_file", "search", "list_wikis"],
+    tools: ["read_file", "edit_file", "search", "list_wikis"],
     buildPrompt: async () => ({ system: "you are a test", prompt: "do the thing" }),
     idempotencyKey: ({ triggerPath, meta }) => ({
       key: triggerPath ?? "default-key",
@@ -191,9 +191,10 @@ describe("runAgent — single-step text response", () => {
 describe("runAgent — tool-call loop", () => {
   it("dispatches one tool call, accumulates the edit, and finishes on text", async () => {
     const model = scriptModel([
-      toolCallStep("write_file", {
+      toolCallStep("edit_file", {
         path: "wiki/concept/from-mock.md",
-        content: "---\nlabel: From Mock\n---\n\nbody\n",
+        search: "",
+        replace: "---\nlabel: From Mock\n---\n\nbody\n",
       }),
       textStep("file written"),
     ]);
@@ -369,14 +370,15 @@ describe("runAgent — provider error handling", () => {
 
 describe("runAgent — step cap", () => {
   it("stops after maxSteps when the model never emits a stop", async () => {
-    // Model that never stops calling write_file with unique paths.
+    // Model that never stops calling edit_file CREATE with unique paths.
     let i = 0;
     const model = new MockLanguageModelV3({
       doGenerate: async () => {
         i++;
-        return toolCallStep("write_file", {
+        return toolCallStep("edit_file", {
           path: `wiki/concept/loop-${i}.md`,
-          content: `---\nlabel: Loop ${i}\n---\n\nbody\n`,
+          search: "",
+          replace: `---\nlabel: Loop ${i}\n---\n\nbody\n`,
         });
       },
     });

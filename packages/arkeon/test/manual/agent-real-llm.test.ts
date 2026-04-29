@@ -218,8 +218,8 @@ describe.skipIf(!HAS_KEY)("real-LLM ingestor agent", () => {
       // ingested by the previous test) plus a new subject the
       // existing space hasn't seen. The ingestor should edit_file
       // Shannon's wiki to weave in the new material — preserving the
-      // wiki's id and the original Bell-Labs paragraph — and
-      // write_file a fresh wiki for the new subject.
+      // wiki's id and the original Bell-Labs paragraph — and use
+      // edit_file CREATE mode to write a fresh wiki for the new subject.
       const shannonPath = join(testDir, "wiki/person/claude-shannon.md");
       expect(existsSync(shannonPath)).toBe(true);
 
