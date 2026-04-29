@@ -148,16 +148,17 @@ describe("read_file tool", () => {
   });
 });
 
-describe("write_file tool", () => {
+describe("edit_file tool — CREATE mode (empty search, file does not exist)", () => {
   it("creates a new file and accumulates the edit on the context", async () => {
     const ctx = makeContext(space, "test");
-    const tool = ALL_TOOLS.write_file(ctx) as ExecutableTool;
+    const tool = ALL_TOOLS.edit_file(ctx) as ExecutableTool;
     const result = (await tool.execute({
       path: "wiki/concept/note.md",
-      content: "---\nlabel: Note\nsubject_type: concept\n---\n\nbody\n",
-    })) as { path: string; applied: boolean };
+      search: "",
+      replace: "---\nlabel: Note\nsubject_type: concept\n---\n\nbody\n",
+    })) as { path: string; mode: string };
 
-    expect(result.applied).toBe(true);
+    expect(result.mode).toBe("create");
     expect(existsSync(join(testDir, "wiki/concept/note.md"))).toBe(true);
     expect(ctx.edits).toHaveLength(1);
     expect(ctx.edits[0].path).toBe("wiki/concept/note.md");

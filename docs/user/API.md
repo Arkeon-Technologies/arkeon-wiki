@@ -85,7 +85,7 @@ List wikis with frontmatter-aware filters and join-in counts.
 | `space_id` | — | Filter to one space. |
 | `subject_type` | — | Match `properties.subject_type` exactly (e.g. `person`, `organization`). |
 | `status` | — | Match `properties.status` exactly. Free-form — whatever values you put in your wikis (e.g. `draft`, `review`, `published`). |
-| `label_prefix` | — | Case-insensitive prefix match on `label`. Useful for autocomplete. |
+| `label_contains` | — | Case-insensitive substring match on `label`. "Baker Street" matches "221B Baker Street". |
 | `sort` | `updated_at` | `updated_at` (DESC) or `label` (ASC, case-insensitive). |
 | `include` | — | Comma-separated. `relationships` adds a top-level `relationships` array (every edge touching a matched wiki). `counts` attaches `{ incoming_links, outgoing_links }` to each wiki. |
 | `limit` | `100` | Max `10000`. |
