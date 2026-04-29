@@ -41,25 +41,6 @@ CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(space_id, type);
 CREATE INDEX IF NOT EXISTS idx_relationships_source ON relationships(source_id);
 CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships(target_id);
 
--- Contributions: pending or consumed inputs to a wiki from a source.
--- Frontmatter is canonical; this table mirrors `contributions[]` in the
--- target wiki's frontmatter and exists only as a query index (e.g. "wikis
--- with N pending contributions").
-CREATE TABLE IF NOT EXISTS contributions (
-  id TEXT PRIMARY KEY,
-  wiki_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-  source_id TEXT REFERENCES entities(id) ON DELETE SET NULL,
-  excerpt TEXT,
-  claim TEXT,
-  added_at TEXT NOT NULL DEFAULT (datetime('now')),
-  consumed_at TEXT,
-  consumed_in_revision INTEGER
-);
-
-CREATE INDEX IF NOT EXISTS idx_contributions_wiki ON contributions(wiki_id);
-CREATE INDEX IF NOT EXISTS idx_contributions_pending
-  ON contributions(wiki_id) WHERE consumed_at IS NULL;
-
 -- Agent runs: idempotency tracking for the agent runtime. Keyed by
 -- (role, idempotency_key); the input_hash lets the runtime decide
 -- whether a re-trigger of the same key represents new work or a replay.
@@ -78,3 +59,33 @@ CREATE TABLE IF NOT EXISTS agent_runs (
 -- schema is fresh.
 CREATE INDEX IF NOT EXISTS idx_agent_runs_finished
   ON agent_runs(role, finished_at);
+
+-- Agent queue: persistent FIFO of (space, role, source) work items.
+-- A row is INSERTed when a watcher event triggers an agent role, and
+-- DELETEd on successful completion. On failure, started_at is cleared
+-- and last_error recorded; the next claim will retry. The lease
+-- pattern (started_at + 5min orphan reclaim on daemon startup) makes
+-- it crash-safe without distributed-locking infrastructure.
+--
+-- The UNIQUE(space_id, role, trigger_path) coalesces rapid file saves:
+-- if a source is saved 5 times before its first run drains, the row
+-- is upserted (latest entity_id, started_at reset) so we run once
+-- against the latest content rather than queueing 5 redundant runs.
+CREATE TABLE IF NOT EXISTS agent_queue (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  space_id TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+  role TEXT NOT NULL,
+  trigger_path TEXT NOT NULL,
+  trigger_entity_id TEXT,
+  enqueued_at TEXT NOT NULL DEFAULT (datetime('now')),
+  started_at TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  UNIQUE(space_id, role, trigger_path)
+);
+
+-- Hot path for the worker: "next pending work item for a role,
+-- ordered by enqueue time."
+CREATE INDEX IF NOT EXISTS idx_agent_queue_pending
+  ON agent_queue(role, enqueued_at)
+  WHERE started_at IS NULL;

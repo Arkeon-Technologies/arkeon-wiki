@@ -10,7 +10,7 @@
  * and write, retry-on-failure, and the step-count cap.
  *
  * Together with agent-tools.test.ts (Layer 1, per-tool edge cases),
- * this gives the contributor (#49) and editor (#50) workers a runtime
+ * this gives the ingestor worker a runtime
  * they can build on without retesting the plumbing.
  */
 
@@ -142,7 +142,7 @@ function makeTestRole(overrides: Partial<AgentRole> = {}): AgentRole {
   return {
     name: "mock-test-role",
     model: { provider: "anthropic", id: "claude-test" }, // ignored: modelOverride wins
-    tools: ["read_file", "write_file", "edit_file", "search", "contribute"],
+    tools: ["read_file", "write_file", "edit_file", "search", "list_wikis"],
     buildPrompt: async () => ({ system: "you are a test", prompt: "do the thing" }),
     idempotencyKey: ({ triggerPath, meta }) => ({
       key: triggerPath ?? "default-key",
@@ -208,7 +208,7 @@ describe("runAgent — tool-call loop", () => {
     expect(existsSync(join(testDir, "wiki/concept/from-mock.md"))).toBe(true);
   });
 
-  it("composes multiple tools across steps (search → read → contribute → text)", async () => {
+  it("composes multiple tools across steps (search → read → edit → text)", async () => {
     mkdirSync(join(testDir, "wiki/person"), { recursive: true });
     writeFileSync(
       join(testDir, "wiki/person/galois.md"),
@@ -227,12 +227,12 @@ describe("runAgent — tool-call loop", () => {
     const model = scriptModel([
       toolCallStep("search", { query: "Group theory" }),
       toolCallStep("read_file", { path: "wiki/person/galois.md" }),
-      toolCallStep("contribute", {
-        subject: { label: "Évariste Galois", subject_type: "person" },
-        excerpt: "Founded group theory before age 20.",
-        claim: "founded group theory",
+      toolCallStep("edit_file", {
+        path: "wiki/person/galois.md",
+        search: "Group theory.",
+        replace: "Group theory. Founded the field before age 20.",
       }),
-      textStep("contributed"),
+      textStep("edited"),
     ]);
 
     const result = await runAgent(makeTestRole(), { space }, ALL_TOOLS, {
@@ -240,13 +240,13 @@ describe("runAgent — tool-call loop", () => {
     });
 
     expect(result.steps).toBe(4);
-    // contribute writes the wiki via applyEdit; search and read don't mutate
+    // edit_file mutates; search and read don't.
     expect(result.edits).toHaveLength(1);
     expect(result.edits[0].path).toBe("wiki/person/galois.md");
 
-    // Verify the contribution actually landed
+    // Verify the edit actually landed.
     const fm = readFileSync(join(testDir, "wiki/person/galois.md"), "utf-8");
-    expect(fm).toContain("Founded group theory before age 20.");
+    expect(fm).toContain("Founded the field before age 20.");
   });
 
   it("continues the loop even when a tool errors — error becomes a tool result", async () => {

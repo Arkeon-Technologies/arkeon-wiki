@@ -5,9 +5,9 @@
  * Layer 3: real-LLM end-to-end demo.
  *
  * Drives runAgent against an actual provider (OpenAI by default) using
- * the declarative built-in `contributor` role from agents/builtins.ts.
+ * the declarative built-in `ingestor` role from agents/builtins.ts.
  * This exercises the whole config → role-builder → runtime → tools
- * stack, exactly the way #49's contributor worker will.
+ * stack, exactly the way the daemon-driven ingestor worker will.
  *
  * Skipped automatically when no API key is set. Invoke explicitly:
  *
@@ -32,11 +32,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 
-import type { AgentConfig } from "../../src/server/agents/config.js";
 import { loadAgentEnv } from "../../src/server/agents/env-loader.js";
-import { buildAgentRole } from "../../src/server/agents/role-builder.js";
-import { runAgent } from "../../src/server/agents/runtime.js";
-import { ALL_TOOLS } from "../../src/server/agents/tools.js";
 import { createSql } from "../../src/server/lib/sql.js";
 import type { Space } from "../../src/server/lib/sync.js";
 
@@ -61,25 +57,6 @@ const MODEL =
   process.env.AGENT_DEMO_MODEL ??
   (PROVIDER === "anthropic" ? "claude-sonnet-4-6" : "gpt-5-mini");
 
-/**
- * Synthesize the same shape that loadAgentConfig() would produce —
- * but here we drive it from env vars instead of a YAML file, since
- * the demo's job is to prove the runtime works, not to test the
- * loader. (The loader has its own unit tests.)
- */
-function demoConfig(): AgentConfig {
-  return {
-    defaults: {
-      provider: PROVIDER,
-      model: MODEL,
-      base_url: process.env.AGENT_DEMO_BASE_URL,
-    },
-    // No `roles` override → uses the built-in `contributor` template
-    // verbatim. Add an entry like { roles: { contributor: { instructions: ... } } }
-    // here to demo operator-supplied focus tweaks.
-  };
-}
-
 let testDir: string;
 let stateDir: string;
 let serverHandle: { stop: () => Promise<void> } | null = null;
@@ -95,6 +72,23 @@ beforeAll(async () => {
   mkdirSync(join(stateDir, "data"), { recursive: true });
   mkdirSync(join(testDir, "wiki"), { recursive: true });
   mkdirSync(join(testDir, "sources"), { recursive: true });
+  mkdirSync(join(testDir, ".arkeon"), { recursive: true });
+
+  // Plant agents.yaml BEFORE the space is registered, so the
+  // per-space scheduler's probe finds a buildable role and the
+  // auto-trigger worker actually starts.
+  const yamlLines = [
+    "defaults:",
+    `  provider: ${PROVIDER}`,
+    `  model: ${MODEL}`,
+  ];
+  if (process.env.AGENT_DEMO_BASE_URL) {
+    yamlLines.push(`  base_url: ${process.env.AGENT_DEMO_BASE_URL}`);
+  }
+  writeFileSync(
+    join(testDir, ".arkeon", "agents.yaml"),
+    yamlLines.join("\n") + "\n",
+  );
 
   process.env.ARKEON_WIKI_HOME = stateDir;
 
@@ -125,9 +119,9 @@ afterAll(async () => {
   }
 }, 30_000);
 
-describe.skipIf(!HAS_KEY)("real-LLM contributor agent", () => {
+describe.skipIf(!HAS_KEY)("real-LLM ingestor agent", () => {
   it(
-    "uses the built-in contributor role to extract subjects from a source",
+    "uses the built-in ingestor role to extract subjects from a source",
     async () => {
       const sourcePath = "sources/shannon-bio.md";
       writeFileSync(
@@ -143,49 +137,31 @@ describe.skipIf(!HAS_KEY)("real-LLM contributor agent", () => {
         ].join("\n"),
       );
 
-      // Wait for the watcher to index the source so contribute() can
-      // pass source_id through.
+      // Auto-trigger path: dropping the file is enough — the watcher
+      // will enqueue, the scheduler will run the ingestor. We just
+      // wait for the agent_runs row to register completion.
       const sql = createSql();
-      const deadline = Date.now() + 5000;
-      let sourceId: string | null = null;
+      const deadline = Date.now() + 120_000;
+      let completed = false;
       while (Date.now() < deadline) {
         const rows = await sql`
-          SELECT id FROM entities WHERE space_id = ${space.id} AND source_path = ${sourcePath}
+          SELECT status FROM agent_runs
+          WHERE role = ${"ingestor"} AND idempotency_key = ${sourcePath}
         `;
-        if (rows.length > 0) {
-          sourceId = rows[0].id as string;
+        if (rows[0]?.status === "completed") {
+          completed = true;
           break;
         }
-        await new Promise((r) => setTimeout(r, 200));
+        await new Promise((r) => setTimeout(r, 500));
       }
-      expect(sourceId).toBeTruthy();
-
-      // The whole point: build the role declaratively from config +
-      // built-in template. No inline role construction.
-      const role = buildAgentRole("contributor", demoConfig());
-
-      const result = await runAgent(
-        role,
-        { space, triggerPath: sourcePath, triggerEntityId: sourceId! },
-        ALL_TOOLS,
-      );
+      expect(completed).toBe(true);
 
       // ── Report ──────────────────────────────────────────────────
-      console.log("\n──────── REAL-LLM AGENT RESULT ────────");
+      console.log("\n──────── REAL-LLM AGENT RESULT (auto-trigger) ────────");
       console.log(`provider:  ${PROVIDER}`);
       console.log(`model:     ${MODEL}`);
-      console.log(`role:      contributor (built-in)`);
-      console.log(`steps:     ${result.steps}`);
-      console.log(`edits:     ${result.edits.length}`);
-      for (const e of result.edits) {
-        console.log(`           ${e.path}`);
-      }
-      console.log(
-        `tokens:    in=${result.usage?.inputTokens ?? "?"}  out=${result.usage?.outputTokens ?? "?"}`,
-      );
-      console.log(
-        `final text: ${result.text.slice(0, 200)}${result.text.length > 200 ? "..." : ""}`,
-      );
+      console.log(`role:      ingestor (built-in)`);
+      console.log(`completed: ${completed ? "✓" : "✗"}`);
       console.log("\nWikis on disk:");
       const wikiDir = join(testDir, "wiki");
       function walk(dir: string, prefix = "  ") {
@@ -203,13 +179,9 @@ describe.skipIf(!HAS_KEY)("real-LLM contributor agent", () => {
         }
       }
       walk(wikiDir);
-      console.log("───────────────────────────────────────\n");
+      console.log("──────────────────────────────────────────────────────\n");
 
       // ── Lenient assertions ──────────────────────────────────────
-      expect(result.skipped).toBe(false);
-      expect(result.steps).toBeGreaterThan(1);
-      expect(result.edits.length).toBeGreaterThan(0);
-
       const wikiFiles: string[] = [];
       function findMd(dir: string) {
         for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -220,10 +192,197 @@ describe.skipIf(!HAS_KEY)("real-LLM contributor agent", () => {
       }
       findMd(wikiDir);
       expect(wikiFiles.length).toBeGreaterThan(0);
-      expect(
-        wikiFiles.filter((p) => readFileSync(p, "utf-8").includes("contributions:"))
-          .length,
-      ).toBeGreaterThan(0);
+
+      // Ingestor writes wiki bodies, not placeholders. Each generated
+      // wiki should have a non-trivial body and at least one wiki has
+      // a markdown link back to the source path (provenance).
+      const bodyContents = wikiFiles.map((p) => readFileSync(p, "utf-8"));
+      const withBody = bodyContents.filter((s) => {
+        const parts = s.split(/^---$/m);
+        return parts.length >= 3 && parts[2].trim().length > 50;
+      });
+      expect(withBody.length).toBeGreaterThan(0);
+
+      const withSourceBacklink = bodyContents.filter((s) =>
+        s.includes(sourcePath),
+      );
+      expect(withSourceBacklink.length).toBeGreaterThan(0);
+    },
+    180_000,
+  );
+
+  it(
+    "amends an existing wiki when a new source mentions the same subject",
+    async () => {
+      // Plant a SECOND source that mentions Claude Shannon (already
+      // ingested by the previous test) plus a new subject the
+      // existing space hasn't seen. The ingestor should edit_file
+      // Shannon's wiki to weave in the new material — preserving the
+      // wiki's id and the original Bell-Labs paragraph — and
+      // write_file a fresh wiki for the new subject.
+      const shannonPath = join(testDir, "wiki/person/claude-shannon.md");
+      expect(existsSync(shannonPath)).toBe(true);
+
+      const before = readFileSync(shannonPath, "utf-8");
+      const beforeId = before.match(/^id:\s*(\S+)/m)?.[1];
+      expect(beforeId).toBeTruthy();
+      const beforeBodyLen = before.split(/^---$/m)[2]?.length ?? 0;
+      expect(beforeBodyLen).toBeGreaterThan(50);
+
+      const newSourcePath = "sources/shannon-circuits.md";
+      writeFileSync(
+        join(testDir, newSourcePath),
+        [
+          "# Boolean Circuits",
+          "",
+          "Claude Shannon's 1937 master's thesis at MIT showed that boolean",
+          "algebra could be applied to the design of electrical relay",
+          "circuits. The thesis is widely regarded as one of the most",
+          "important master's theses ever written and laid the groundwork",
+          "for digital circuit design.",
+          "",
+        ].join("\n"),
+      );
+
+      // Wait for the auto-trigger to finish ingesting the new source.
+      const sql = createSql();
+      const deadline = Date.now() + 120_000;
+      let completed = false;
+      while (Date.now() < deadline) {
+        const rows = await sql`
+          SELECT status FROM agent_runs
+          WHERE role = ${"ingestor"} AND idempotency_key = ${newSourcePath}
+        `;
+        if (rows[0]?.status === "completed") {
+          completed = true;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      expect(completed).toBe(true);
+
+      console.log("\n──────── EDIT-EXISTING REAL-LLM RESULT (auto-trigger) ────────");
+      console.log(`new source: ${newSourcePath}`);
+      console.log(`completed:  ✓`);
+      console.log("──────────────────────────────────────────────────────────\n");
+
+      // ── Lenient assertions ──────────────────────────────────────
+      // Shannon's wiki should still exist and have the SAME id.
+      const after = readFileSync(shannonPath, "utf-8");
+      const afterId = after.match(/^id:\s*(\S+)/m)?.[1];
+      expect(afterId).toBe(beforeId);
+
+      // The body should have grown — new source's material is woven in.
+      const afterBodyLen = after.split(/^---$/m)[2]?.length ?? 0;
+      expect(afterBodyLen).toBeGreaterThan(beforeBodyLen);
+
+      // The new source path should appear somewhere in the wiki body
+      // (the ingestor's instructions tell it to include a backlink).
+      const sawNewSourceInShannon =
+        after.includes(newSourcePath) ||
+        after.includes("shannon-circuits");
+      expect(sawNewSourceInShannon).toBe(true);
+
+      // Original Bell-Labs material should still be present (the edit
+      // should weave in, not replace).
+      expect(after.toLowerCase()).toContain("bell labs");
+    },
+    180_000,
+  );
+
+  it(
+    "auto-fires the ingestor when a source file lands (no explicit trigger)",
+    async () => {
+      // The previous tests called runAgent directly. This one drops a
+      // file into the watched directory and waits — the watcher →
+      // scheduler → runAgent chain should run the ingestor without
+      // any explicit invocation. Validates the daemon-side auto-
+      // trigger path that production users will rely on. (agents.yaml
+      // was planted in beforeAll so the per-space scheduler started
+      // a worker.)
+
+      // Drop a brand-new source file. No explicit runAgent call.
+      const sourcePath = "sources/auto-trigger-demo.md";
+      writeFileSync(
+        join(testDir, sourcePath),
+        [
+          "# Hedy Lamarr",
+          "",
+          "Hedy Lamarr was an Austrian-American actress and inventor whose",
+          "work on frequency-hopping radio guidance systems during World War",
+          "II laid groundwork for modern wireless communication technologies",
+          "including Wi-Fi and Bluetooth.",
+          "",
+        ].join("\n"),
+      );
+
+      // Wait for the daemon to: see the file → enqueue → run the
+      // ingestor → finish (agent_runs marked completed). Watching for
+      // agent_runs is the right signal — the wiki write happens
+      // mid-run, so a wiki-on-disk check can be observed before the
+      // run record exists. Generous timeout: real LLM calls take
+      // 30-60s plus the watcher's ~500ms debounce.
+      const sql = createSql();
+      const deadline = Date.now() + 120_000;
+      let completedRun:
+        | { idempotency_key: string; status: string }
+        | null = null;
+      while (Date.now() < deadline) {
+        const rows = await sql`
+          SELECT idempotency_key, status FROM agent_runs
+          WHERE role = ${"ingestor"} AND idempotency_key = ${sourcePath}
+        `;
+        const r = rows[0] as
+          | { idempotency_key: string; status: string }
+          | undefined;
+        if (r && r.status === "completed") {
+          completedRun = r;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+
+      // Diagnostic dump regardless of pass/fail.
+      const queueRows = await sql`
+        SELECT trigger_path, attempts, last_error, started_at
+        FROM agent_queue
+        WHERE space_id = ${space.id}
+      `;
+      const allRuns = await sql`
+        SELECT idempotency_key, status FROM agent_runs
+        WHERE role = ${"ingestor"}
+        ORDER BY finished_at DESC LIMIT 5
+      `;
+      console.log("\n──────── AUTO-TRIGGER REAL-LLM RESULT ────────");
+      console.log(`source dropped: ${sourcePath}`);
+      console.log(`completed run:  ${completedRun ? "✓" : "✗"}`);
+      console.log(`queue rows:     ${queueRows.length} pending/in-flight`);
+      console.log(`recent runs:    ${allRuns.length}`);
+      for (const r of allRuns) {
+        console.log(`  - ${r.status}  ${r.idempotency_key}`);
+      }
+      console.log("──────────────────────────────────────────────\n");
+
+      // Lenient: the LLM might pick a slightly different file path
+      // (e.g., wiki/person/lamarr.md). Walk wiki/ for any file
+      // mentioning Hedy Lamarr.
+      const allWikiFiles: string[] = [];
+      function walkMd(dir: string) {
+        if (!existsSync(dir)) return;
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const p = join(dir, entry.name);
+          if (entry.isDirectory()) walkMd(p);
+          else if (entry.name.endsWith(".md")) allWikiFiles.push(p);
+        }
+      }
+      walkMd(join(testDir, "wiki"));
+
+      const hedyWiki = allWikiFiles.find((p) => {
+        const c = readFileSync(p, "utf-8").toLowerCase();
+        return c.includes("hedy lamarr") || c.includes("frequency-hopping");
+      });
+      expect(hedyWiki).toBeTruthy();
+      expect(completedRun).toBeTruthy();
     },
     180_000,
   );

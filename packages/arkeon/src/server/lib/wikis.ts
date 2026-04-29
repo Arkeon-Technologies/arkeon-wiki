@@ -20,20 +20,19 @@ export interface ListWikisOptions {
   space_id?: string;
   /** Filter on `properties.subject_type`. */
   subject_type?: string;
-  /** Filter on `properties.status` (e.g. `placeholder`, `published`). */
+  /** Filter on `properties.status` (free-form; whatever the user puts
+   *  in their frontmatter — e.g. `draft`, `review`, `published`). */
   status?: string;
   /** Case-insensitive prefix match on `label`. LIKE wildcards in the
    *  caller's prefix are escaped so `%foo` matches literally. */
   label_prefix?: string;
-  /** Only wikis that have ≥1 contribution with `consumed_at IS NULL`. */
-  has_contributions?: boolean;
   /** `updated_at` (default, newest first) or `label` (case-insensitive A→Z).
    *  Typed loosely as `string` so HTTP callers can pass an unvalidated query
    *  string directly; listWikis validates against SORT_COLUMNS and throws
    *  ApiError(400) on unknown values. Typed callers can pass a `WikiSort`
    *  literal — the union narrowing is enforced at the call site. */
   sort?: string;
-  /** Attach a `counts` object per wiki (pending contributions + link counts). */
+  /** Attach an in/out link count per wiki. */
   include_counts?: boolean;
   /** Attach a top-level `relationships` array of all edges touching the
    *  matched wikis. Off by default since most callers don't need it. */
@@ -45,7 +44,6 @@ export interface ListWikisOptions {
 }
 
 export interface WikiCounts {
-  contributions_pending: number;
   incoming_links: number;
   outgoing_links: number;
 }
@@ -121,12 +119,6 @@ export async function listWikis(opts: ListWikisOptions = {}): Promise<ListWikisR
     params.push(`${escaped}%`);
     conditions.push(`e.label LIKE ? ESCAPE '\\' COLLATE NOCASE`);
   }
-  if (opts.has_contributions) {
-    conditions.push(
-      `EXISTS (SELECT 1 FROM contributions c
-               WHERE c.wiki_id = e.id AND c.consumed_at IS NULL)`,
-    );
-  }
 
   const where = `WHERE ${conditions.join(" AND ")}`;
 
@@ -159,8 +151,6 @@ export async function listWikis(opts: ListWikisOptions = {}): Promise<ListWikisR
     const counts = (await sql.query(
       `SELECT
          e.id,
-         (SELECT COUNT(*) FROM contributions c
-          WHERE c.wiki_id = e.id AND c.consumed_at IS NULL) AS contributions_pending,
          (SELECT COUNT(*) FROM relationships r WHERE r.target_id = e.id) AS incoming_links,
          (SELECT COUNT(*) FROM relationships r WHERE r.source_id = e.id) AS outgoing_links
        FROM entities e
@@ -168,7 +158,6 @@ export async function listWikis(opts: ListWikisOptions = {}): Promise<ListWikisR
       ids,
     )) as unknown as Array<{
       id: string;
-      contributions_pending: number;
       incoming_links: number;
       outgoing_links: number;
     }>;
@@ -176,7 +165,6 @@ export async function listWikis(opts: ListWikisOptions = {}): Promise<ListWikisR
     for (const wiki of wikis) {
       const c = byId.get(wiki.id);
       wiki.counts = {
-        contributions_pending: c?.contributions_pending ?? 0,
         incoming_links: c?.incoming_links ?? 0,
         outgoing_links: c?.outgoing_links ?? 0,
       };

@@ -12,7 +12,10 @@
 import { watch, type FSWatcher, existsSync, readdirSync, statSync } from "node:fs";
 import { join, extname } from "node:path";
 
+import { startScheduler } from "../agents/scheduler.js";
 import { syncFile, syncDirectory, removeByPath, type Space } from "./sync.js";
+
+type SchedulerHandle = Awaited<ReturnType<typeof startScheduler>>;
 
 // Directories to ignore when watching/walking
 const IGNORE_DIRS = new Set([".arkeon", ".git", "node_modules", ".claude", "__pycache__", ".venv"]);
@@ -20,8 +23,9 @@ const IGNORE_DIRS = new Set([".arkeon", ".git", "node_modules", ".claude", "__py
 // File extensions to index
 const INDEX_EXTENSIONS = new Set([".md", ".txt", ".json", ".csv", ".xml", ".html", ".rst"]);
 
-// Active watchers keyed by space ID
+// Active watchers + per-space agent schedulers
 const watchers = new Map<string, FSWatcher>();
+const schedulers = new Map<string, SchedulerHandle>();
 
 // Debounce timers keyed by absolute file path
 const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -101,6 +105,20 @@ export async function startWatching(space: Space): Promise<void> {
     `${summary.unchanged} unchanged, ${summary.removed} removed`,
   );
 
+  // Start the per-space agent scheduler. It reclaims any orphaned
+  // agent_queue rows from a previous crashed daemon and starts a
+  // worker that drains the ingestor queue. The watcher notifies it
+  // on every live file event (handleFileEvent below).
+  try {
+    const scheduler = await startScheduler({ space });
+    schedulers.set(space.id, scheduler);
+  } catch (err) {
+    console.error(
+      `[watcher] Failed to start agent scheduler for space "${space.name}":`,
+      (err as Error).message,
+    );
+  }
+
   // Start the live watcher
   try {
     const watcher = watch(space.watch_dir, { recursive: true }, (eventType, filename) => {
@@ -145,6 +163,12 @@ async function handleFileEvent(space: Space, relativePath: string): Promise<void
       const result = await syncFile(space, relativePath);
       if (result.action !== "unchanged") {
         console.log(`[watcher] ${result.action}: ${result.label} (${relativePath})`);
+        // Notify the scheduler — it'll filter out wiki/** and .arkeon/**
+        // and enqueue an ingestor run for everything else.
+        const scheduler = schedulers.get(space.id);
+        if (scheduler) {
+          await scheduler.notify(relativePath, result.entityId);
+        }
       }
     } catch (err) {
       console.error(`[watcher] Error syncing ${relativePath}:`, (err as Error).message);
@@ -165,21 +189,30 @@ async function handleFileEvent(space: Space, relativePath: string): Promise<void
 /**
  * Stop watching a space.
  */
-export function stopWatching(spaceId: string): void {
+export async function stopWatching(spaceId: string): Promise<void> {
   const watcher = watchers.get(spaceId);
   if (watcher) {
     watcher.close();
     watchers.delete(spaceId);
   }
+  const scheduler = schedulers.get(spaceId);
+  if (scheduler) {
+    await scheduler.stop();
+    schedulers.delete(spaceId);
+  }
 }
 
 /**
- * Stop all watchers.
+ * Stop all watchers and their schedulers.
  */
-export function stopAllWatchers(): void {
+export async function stopAllWatchers(): Promise<void> {
   for (const [id, watcher] of watchers) {
     watcher.close();
     watchers.delete(id);
+  }
+  for (const [id, scheduler] of schedulers) {
+    await scheduler.stop();
+    schedulers.delete(id);
   }
   // Clear any pending debounce timers
   for (const timer of debounceTimers.values()) {

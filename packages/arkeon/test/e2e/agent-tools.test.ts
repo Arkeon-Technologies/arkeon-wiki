@@ -319,88 +319,6 @@ describe("edit_file edge cases", () => {
   });
 });
 
-// ── contribute ────────────────────────────────────────────────────
-
-describe("contribute edge cases", () => {
-  it("routes to an existing wiki via alias match", async () => {
-    mkdirSync(join(testDir, "wiki/person"), { recursive: true });
-    writeFileSync(
-      join(testDir, "wiki/person/feynman.md"),
-      `---\nlabel: Richard Feynman\nsubject_type: person\naliases:\n  - Dick Feynman\n  - R.P. Feynman\n---\n\nPhysicist.\n`,
-    );
-
-    // wait for watcher
-    const sql = createSql();
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline) {
-      const rows = await sql`SELECT id FROM entities WHERE space_id = ${space.id} AND label = ${"Richard Feynman"}`;
-      if (rows.length > 0) break;
-      await new Promise((r) => setTimeout(r, 200));
-    }
-
-    const result = (await tool("contribute").execute({
-      subject: { label: "R.P. Feynman", subject_type: "person" },
-      excerpt: "Diagrams.",
-    })) as { was_created: boolean; wiki_path: string };
-
-    expect(result.was_created).toBe(false);
-    expect(result.wiki_path).toBe("wiki/person/feynman.md");
-  });
-
-  it("propagates source_id into the frontmatter contribution", async () => {
-    mkdirSync(join(testDir, "sources"), { recursive: true });
-    writeFileSync(
-      join(testDir, "sources/origin.txt"),
-      "An interesting article.",
-    );
-
-    const sql = createSql();
-    const deadline = Date.now() + 5000;
-    let sourceId: string | null = null;
-    while (Date.now() < deadline) {
-      const rows = await sql`SELECT id FROM entities WHERE space_id = ${space.id} AND source_path = ${"sources/origin.txt"}`;
-      if (rows.length > 0) {
-        sourceId = rows[0].id as string;
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 200));
-    }
-    expect(sourceId).toBeTruthy();
-
-    const result = (await tool("contribute").execute({
-      subject: { label: "Sourced Subject", subject_type: "concept" },
-      excerpt: "From a real source.",
-      source_id: sourceId!,
-    })) as { wiki_path: string };
-
-    const fm = readFileSync(join(testDir, result.wiki_path), "utf-8");
-    expect(fm).toContain(`source_id: ${sourceId}`);
-  });
-
-  it("does not lose entries when ten parallel contribute calls hit the same new label", async () => {
-    const calls = Array.from({ length: 10 }, (_, i) =>
-      tool("contribute").execute({
-        subject: { label: "Tool Layer Race", subject_type: "person" },
-        excerpt: `tool-excerpt-${i}`,
-      }),
-    );
-
-    const results = (await Promise.all(calls)) as Array<{
-      wiki_path: string;
-      was_created: boolean;
-    }>;
-
-    const created = results.filter((r) => r.was_created).length;
-    expect(created).toBe(1);
-
-    const wikiPath = results[0].wiki_path;
-    const fm = readFileSync(join(testDir, wikiPath), "utf-8");
-    for (let i = 0; i < 10; i++) {
-      expect(fm).toContain(`tool-excerpt-${i}`);
-    }
-  });
-});
-
 // ── search ────────────────────────────────────────────────────────
 
 describe("search edge cases", () => {
@@ -531,36 +449,38 @@ describe("list_wikis edge cases", () => {
     expect(result.wikis).toEqual([]);
   });
 
-  it("returns has_contributions=true wikis when contributions are pending", async () => {
-    // Add a placeholder via contribute(), which leaves a pending contribution
-    // attached to a fresh wiki.
-    await tool("contribute").execute({
-      subject: { label: "List Wikis Pending", subject_type: "concept" },
-      excerpt: "demo excerpt",
-    });
-
-    const result = (await tool("list_wikis").execute({
-      has_contributions: true,
-    })) as { wikis: Array<{ label: string }> };
-
-    expect(result.wikis.map((w) => w.label)).toContain("List Wikis Pending");
-  });
-
   it("attaches counts when include_counts is true", async () => {
+    // Plant a wiki with a known label and an outbound link so the
+    // counts query has something to find.
+    mkdirSync(join(testDir, "wiki/concept"), { recursive: true });
+    writeFileSync(
+      join(testDir, "wiki/concept/counts-target.md"),
+      "---\nlabel: Counts Target\nsubject_type: concept\n---\n\nLinks to [Marie Curie](../person/curie.md).\n",
+    );
+
+    const sql = createSql();
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const rows = await sql`SELECT id FROM entities WHERE label = ${"Counts Target"}`;
+      if (rows.length > 0) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
     const result = (await tool("list_wikis").execute({
-      label_prefix: "List Wikis Pending",
+      label_prefix: "Counts Target",
       include_counts: true,
     })) as {
       wikis: Array<{
         label: string;
-        counts?: { contributions_pending: number; incoming_links: number; outgoing_links: number };
+        counts?: { incoming_links: number; outgoing_links: number };
       }>;
     };
 
-    const w = result.wikis.find((x) => x.label === "List Wikis Pending");
+    const w = result.wikis.find((x) => x.label === "Counts Target");
     expect(w).toBeTruthy();
     expect(w!.counts).toBeDefined();
-    expect(w!.counts!.contributions_pending).toBeGreaterThanOrEqual(1);
+    expect(typeof w!.counts!.incoming_links).toBe("number");
+    expect(typeof w!.counts!.outgoing_links).toBe("number");
   });
 
   it("respects limit", async () => {
@@ -646,17 +566,16 @@ describe("cross-tool composition", () => {
     ).toContain("amended phrase");
   });
 
-  it("contribute → read shows the appended frontmatter entry", async () => {
-    const c = (await tool("contribute").execute({
-      subject: { label: "Compose Subject", subject_type: "concept" },
-      excerpt: "first excerpt",
-    })) as { wiki_path: string };
+  it("write → list_wikis surfaces the new wiki by label_prefix", async () => {
+    await tool("write_file").execute({
+      path: "wiki/concept/list-after-write.md",
+      content: "---\nlabel: List After Write\nsubject_type: concept\n---\n\nbody\n",
+    });
 
-    const r = (await tool("read_file").execute({ path: c.wiki_path })) as {
-      frontmatter: { contributions: Array<{ excerpt: string }> };
-    };
-
-    expect(r.frontmatter.contributions).toHaveLength(1);
-    expect(r.frontmatter.contributions[0].excerpt).toBe("first excerpt");
+    // applyEdit syncs synchronously, so the new entity is visible immediately.
+    const result = (await tool("list_wikis").execute({
+      label_prefix: "List After",
+    })) as { wikis: Array<{ label: string }> };
+    expect(result.wikis.map((w) => w.label)).toContain("List After Write");
   });
 });

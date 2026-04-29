@@ -4,9 +4,9 @@
 /**
  * The shared tool registry.
  *
- * Each entry wires a library function (or a deterministic helper like
- * `contribute`) into the agent runtime. Roles list tool names; the
- * runtime instantiates each named factory with the AgentContext.
+ * Each entry wires a library function into the agent runtime. Roles
+ * list tool names; the runtime instantiates each named factory with
+ * the AgentContext.
  *
  * Adding a new tool: one entry here. The cost is the description and
  * the Zod input schema, not the registration line.
@@ -16,7 +16,6 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 
 import { z } from "zod";
 
-import { contribute } from "../lib/contributions.js";
 import { safeResolve } from "../lib/file-edits.js";
 import { parseFrontmatter } from "../lib/frontmatter.js";
 import { search as ripgrepSearch } from "../lib/search.js";
@@ -87,9 +86,8 @@ const searchTool = defineTool("search", {
 const listWikisTool = defineTool("list_wikis", {
   description:
     "List wikis in the current space, with optional filters. Use this to " +
-    "enumerate existing wikis before contributing (so you can check if a " +
-    "subject already has a wiki) or to find wikis that need editing " +
-    "(filter by has_contributions or status='placeholder'). Returns " +
+    "check whether a subject already has a wiki before creating a new one, " +
+    "or to enumerate wikis of a given subject_type. Returns " +
     "{wikis, total, limit, offset}.",
   inputSchema: z.object({
     subject_type: z
@@ -99,7 +97,10 @@ const listWikisTool = defineTool("list_wikis", {
     status: z
       .string()
       .optional()
-      .describe("Filter on frontmatter `status` (e.g. 'placeholder', 'published')."),
+      .describe(
+        "Filter on frontmatter `status` — free-form, whatever values you " +
+          "put in your wikis (e.g. 'draft', 'review', 'published').",
+      ),
     label_prefix: z
       .string()
       .optional()
@@ -107,10 +108,6 @@ const listWikisTool = defineTool("list_wikis", {
         "Case-insensitive prefix match on the wiki's label. Useful for " +
           "checking whether a subject already exists before creating one.",
       ),
-    has_contributions: z
-      .boolean()
-      .optional()
-      .describe("If true, only wikis with at least one pending contribution."),
     sort: z
       .enum(["updated_at", "label"])
       .optional()
@@ -119,8 +116,7 @@ const listWikisTool = defineTool("list_wikis", {
       .boolean()
       .optional()
       .describe(
-        "Attach contributions_pending + incoming/outgoing link counts " +
-          "per wiki. Useful for prioritisation.",
+        "Attach incoming/outgoing markdown-link counts per wiki.",
       ),
     limit: z.number().int().positive().optional().describe("Default 100, max 10000."),
     offset: z.number().int().min(0).optional().describe("Pagination offset, default 0."),
@@ -131,7 +127,6 @@ const listWikisTool = defineTool("list_wikis", {
       subject_type: input.subject_type,
       status: input.status,
       label_prefix: input.label_prefix,
-      has_contributions: input.has_contributions,
       sort: input.sort,
       include_counts: input.include_counts,
       limit: input.limit,
@@ -162,7 +157,8 @@ const editFileTool = defineTool("edit_file", {
 const writeFileTool = defineTool("write_file", {
   description:
     "Create or overwrite a file with the given content. Use for net-new files " +
-    "(e.g. a fresh placeholder wiki); prefer edit_file for modifying existing ones.",
+    "(a freshly-created wiki for a subject that doesn't exist yet); prefer " +
+    "edit_file for modifying existing ones.",
   inputSchema: z.object({
     path: z.string().describe("Relative path inside the space's watch_dir."),
     content: z.string().describe("Full file contents."),
@@ -173,51 +169,6 @@ const writeFileTool = defineTool("write_file", {
   },
 });
 
-// ── contribute ────────────────────────────────────────────────────
-
-const contributeTool = defineTool("contribute", {
-  description:
-    "Route a (subject, excerpt, claim) triple to the right wiki. Matches an " +
-    "existing wiki by exact label/alias if one exists; otherwise creates a " +
-    "placeholder under wiki/{subject_type}/{slug}.md. The contribution is " +
-    "appended to the target wiki's frontmatter `contributions[]` array.",
-  inputSchema: z.object({
-    subject: z.object({
-      label: z.string().describe("Canonical subject name, e.g. 'Claude Shannon'."),
-      subject_type: z
-        .string()
-        .optional()
-        .describe("Semantic type, e.g. 'person', 'organization', 'concept'."),
-      aliases: z
-        .array(z.string())
-        .optional()
-        .describe("Alternate forms to try when matching existing wikis."),
-    }),
-    excerpt: z
-      .string()
-      .describe("Verbatim or near-verbatim quote from the source."),
-    claim: z
-      .string()
-      .optional()
-      .describe("Optional one-line summary of what the excerpt establishes."),
-    source_id: z
-      .string()
-      .optional()
-      .describe("Entity id of the source file this excerpt came from."),
-  }),
-  call: ({ subject, excerpt, claim, source_id }, ctx) =>
-    contribute({
-      space_id: ctx.space.id,
-      source_id: source_id ?? null,
-      subject,
-      excerpt,
-      claim,
-      // Route the resulting write through the context's applyEdit so the
-      // new/updated wiki shows up in ctx.edits alongside other tool edits.
-      applyEdit: ctx.applyEdit,
-    }),
-});
-
 // ── Registry ──────────────────────────────────────────────────────
 
 export const ALL_TOOLS: Record<string, ToolFactory> = {
@@ -226,5 +177,4 @@ export const ALL_TOOLS: Record<string, ToolFactory> = {
   list_wikis: listWikisTool,
   edit_file: editFileTool,
   write_file: writeFileTool,
-  contribute: contributeTool,
 };

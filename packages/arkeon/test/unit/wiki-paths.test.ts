@@ -9,9 +9,9 @@ import { join } from "node:path";
 import {
   normalizeLabel,
   slugify,
-  placeholderPath,
+  wikiPathFor,
   findFreePath,
-} from "../../src/server/lib/contributions.js";
+} from "../../src/server/lib/wiki-paths.js";
 import { withPathLock } from "../../src/server/lib/path-lock.js";
 
 describe("normalizeLabel", () => {
@@ -61,19 +61,19 @@ describe("slugify", () => {
   });
 });
 
-describe("placeholderPath", () => {
+describe("wikiPathFor", () => {
   it("uses subject_type as the directory", () => {
-    expect(placeholderPath("person", "Claude Shannon")).toBe(
+    expect(wikiPathFor("person", "Claude Shannon")).toBe(
       "wiki/person/claude-shannon.md",
     );
   });
 
   it("falls back to 'wiki' when subject_type is missing", () => {
-    expect(placeholderPath(undefined, "Some Concept")).toBe("wiki/wiki/some-concept.md");
+    expect(wikiPathFor(undefined, "Some Concept")).toBe("wiki/wiki/some-concept.md");
   });
 
   it("slugifies subject_type too", () => {
-    expect(placeholderPath("Research Paper", "Foo")).toBe("wiki/research-paper/foo.md");
+    expect(wikiPathFor("Research Paper", "Foo")).toBe("wiki/research-paper/foo.md");
   });
 });
 

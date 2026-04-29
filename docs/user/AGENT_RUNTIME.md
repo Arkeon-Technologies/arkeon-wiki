@@ -73,29 +73,22 @@ defaults:
     This wiki tracks researchers in climate science. Skip subjects
     not directly relevant to the field. Use British English.
 
-# Per-role overrides. Built-in roles (contributor, editor) are defined
-# in the package and inherited automatically — fields you omit fall
-# back to the built-in. Custom roles appear here too.
+# Per-role overrides. The built-in `ingestor` role is defined in the
+# package and inherited automatically — fields you omit fall back to
+# the built-in. Custom roles appear here too.
 roles:
-  contributor:
-    model: gpt-5-mini          # cheap extraction
-    max_steps: 12
+  ingestor:
+    model: gpt-5-mini
+    max_steps: 20
     instructions: |
-      Be aggressive about creating placeholders for any named subject
-      a reader might want a wiki page for. Skip generic terms.
+      Each new wiki body is 2-4 paragraphs grounded in the source.
+      Always include a markdown link from the wiki body back to the
+      source path. Skip generic terms — only cover named subjects.
 
-  editor:
+  link-checker:                # custom user-defined role
     provider: anthropic        # different provider per role is fine
     model: claude-opus-4-7
     api_key_env: ANTHROPIC_API_KEY
-    max_steps: 20
-    instructions: |
-      Each section is 2-4 paragraphs. Cite sources by linking to the
-      source file inline. End every wiki body with "Further reading"
-      if there are 3+ outgoing links.
-
-  link-checker:                # custom user-defined role
-    model: gpt-5-mini
     tools: [list_wikis, read_file, edit_file]
     max_steps: 30
     system: |
@@ -121,9 +114,9 @@ arkeon-wiki config validate           # schema-check the YAML
 | Section | Behavior when set in both global and repo |
 |---|---|
 | `defaults` | **Field-level merge.** `defaults.provider` from global + `defaults.model` from repo combine. Repo wins on shared fields. |
-| `roles.<name>` | **Per-role replacement.** If `roles.contributor` exists in both files, the repo entry replaces the global entry **wholesale** — fields you don't repeat are *not* inherited from the global. |
+| `roles.<name>` | **Per-role replacement.** If `roles.ingestor` exists in both files, the repo entry replaces the global entry **wholesale** — fields you don't repeat are *not* inherited from the global. |
 
-This asymmetry keeps role overrides predictable: when you write `roles.contributor:` in your repo's YAML, you're declaring exactly what that role looks like for this repo, not partially patching whatever your `~/` happens to have.
+This asymmetry keeps role overrides predictable: when you write `roles.ingestor:` in your repo's YAML, you're declaring exactly what that role looks like for this repo, not partially patching whatever your `~/` happens to have.
 
 To carry over a field from a global role override, copy it. The most common case is global YAML setting universal `defaults` and the per-repo file overriding individual roles — that works without copying anything because `defaults` *do* merge.
 
@@ -131,10 +124,11 @@ To carry over a field from a global role override, copy it. The most common case
 
 | Role | Tools | Job |
 |---|---|---|
-| `contributor` | `list_wikis`, `read_file`, `contribute` | Read source files, identify subjects, route them through `contribute()` to existing or new placeholder wikis. |
-| `editor` | `read_file`, `edit_file`, `write_file`, `list_wikis` | Take a wiki with pending contributions and either draft its body (placeholder → published) or weave new contributions into the existing body. |
+| `ingestor` | `read_file`, `list_wikis`, `search`, `write_file`, `edit_file` | Read a source file, identify the distinct subjects it discusses, and for each one either edit the existing wiki to weave the new material in (with a markdown link back to the source) or create a new wiki under `wiki/{subject_type}/{slug}.md` with a 2-4 paragraph body. |
 
-You can override any field of a built-in (`provider`, `model`, `tools`, `max_steps`, `instructions`, `system`, `user`) without redefining the whole role. To inherit a built-in's default workflow but bias the focus, set `instructions:` only.
+You can override any field of the built-in (`provider`, `model`, `tools`, `max_steps`, `instructions`, `system`, `user`) without redefining the whole role. To inherit the workflow but bias the focus, set `instructions:` only.
+
+Provenance: the `ingestor` writes a markdown link from each wiki body back to the source path it drew material from. The existing link-resolution path turns those into edges in the `relationships` table — so "which sources contributed to this wiki?" is a SQL query over `relationships`, not a separate inbox.
 
 ## Custom roles
 
@@ -149,12 +143,11 @@ The available tools are:
 
 | Tool | Use |
 |---|---|
-| `list_wikis` | Frontmatter-aware enumeration: filter by `subject_type`, `status`, `label_prefix`, `has_contributions`. |
+| `list_wikis` | Frontmatter-aware enumeration: filter by `subject_type`, `status`, `label_prefix`. |
 | `search` | Keyword search via ripgrep, returns ranked entity hits with snippets. |
 | `read_file` | Read a file's contents (markdown returns parsed frontmatter + body). |
 | `write_file` | Net-new file (or full overwrite). |
 | `edit_file` | SEARCH/REPLACE on an existing file (Aider-style; SEARCH must match exactly once). |
-| `contribute` | Macro: route a `(subject, excerpt, claim)` to an existing wiki by label/alias match, or create a placeholder. |
 
 ### Prompt template variables
 
@@ -208,12 +201,15 @@ defaults:
   model: gpt-5-mini
 
 roles:
-  contributor:                # cheap extraction on OpenAI
+  ingestor:                   # default ingestion on cheap OpenAI
     model: gpt-5-mini
-  editor:                     # stronger writing on Claude
+  reviewer:                   # custom role on stronger Claude
     provider: anthropic
     model: claude-opus-4-7
     api_key_env: ANTHROPIC_API_KEY
+    tools: [list_wikis, read_file, edit_file]
+    system: |
+      You review recently-edited wikis for clarity and citation quality...
   drafter:                    # local model for offline drafting
     provider: openai-compatible
     base_url: http://localhost:11434/v1
@@ -243,7 +239,7 @@ If you have the package source checked out:
 npm run test:manual -w packages/arkeon
 ```
 
-This runs the contributor role against a synthetic source paragraph and prints the wikis that landed, token usage, and total cost.
+This runs the `ingestor` role against a synthetic source paragraph and prints the wikis that landed, token usage, and total cost.
 
 ## Troubleshooting
 
@@ -265,8 +261,23 @@ Check the unknown field name; the schema is strict. The likely candidates:
 - `max_steps` must be a positive integer
 - `tools` is an array of strings (tool names)
 
+## How auto-triggering works
+
+When the daemon is running and you drop, edit, or save a file under the space's watch directory, the chain is:
+
+1. The file watcher fires.
+2. `syncFile` updates the SQLite index.
+3. The scheduler sees the path and asks `shouldTrigger`: is it under `wiki/**` or `.arkeon/**`? If yes, drop the event (this is what prevents the ingestor from re-firing on its own writes). Otherwise, enqueue a row in `agent_queue` keyed by `(space, role, source_path)`.
+4. A per-space worker claims the next pending row, calls `runAgent` for the `ingestor` role, and on success deletes the row. On failure it resets `started_at` to null with `last_error` set; the next claim retries.
+
+Rapid saves of the same file are coalesced: the `UNIQUE(space, role, path)` constraint means five saves in a second produce one queue row that runs against the latest content.
+
+The queue is crash-safe via a 5-minute lease. If the daemon dies while a row is in flight, the next daemon startup runs `reclaimOrphans()` which resets stale `started_at` values back to pending. The runtime's `agent_runs` idempotency table is the second safety net — re-runs against unchanged content are no-ops.
+
+In v1 the trigger filter is hardcoded: every non-`wiki/`, non-`.arkeon/` file event fires the ingestor. User-tunable include/exclude lands later when there's a real use case.
+
 ## What's not yet wired
 
-- **Auto-triggering** — roles in YAML don't yet specify *when* they fire. The contributor (#49) will register on file events for sources outside `wiki/`; the editor (#50) will poll wikis with pending contributions every N seconds. Until those workers land, run agents manually via the runtime API or the upcoming `arkeon-wiki agent run <role>` command.
+- **User-tunable trigger filters** — currently hardcoded to "everything except `wiki/**` and `.arkeon/**`". When operators need to scope it (e.g., only files under `inbox/**`), an opt-in `trigger.include` field lands in agents.yaml.
 - **Per-role budgets / cost caps** — set `max_steps` for now; spending caps are a planned follow-up.
 - **Streaming output** — `runAgent` currently waits for the full response. Streaming will come with the daemon integration.

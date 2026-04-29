@@ -85,7 +85,7 @@ arkeon-wiki start              # foreground (for use under pm2/launchd/etc.)
 
 ## Agents (LLM-powered)
 
-arkeon-wiki ships a small AI agent runtime with built-in roles for extracting subjects from sources (`contributor`) and drafting wiki bodies (`editor`). Configure them in `.arkeon/agents.yaml` (committed) and put your API key in `~/.arkeon-wiki/.env` (per-user, machine-local).
+arkeon-wiki ships a small AI agent runtime with a single built-in role — `ingestor` — that turns source files into wikis. Configure it in `.arkeon/agents.yaml` (committed) and put your API key in `~/.arkeon-wiki/.env` (per-user, machine-local).
 
 ```bash
 arkeon-wiki config init                                       # template config
