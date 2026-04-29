@@ -34,7 +34,7 @@ Default base URL: `http://localhost:8000`. No auth. JSON in, JSON out. All non-2
 | `POST` | `/spaces` | Register a directory. Body: `{ name, watch_dir }`. |
 | `GET` | `/spaces` | List spaces with entity counts. |
 | `GET` | `/spaces/:id` | Get a single space. |
-| `GET` | `/wikis?space_id=&subject_type=&status=&label_prefix=&sort=&limit=&offset=&include=` | List wikis. Frontmatter-aware filters; `include=relationships` adds an edges array, `include=counts` attaches per-wiki incoming/outgoing link counts. |
+| `GET` | `/wikis?space_id=&subject_type=&status=&label_contains=&sort=&limit=&offset=&include=` | List wikis. Frontmatter-aware filters; `label_contains` is a case-insensitive substring match. `include=relationships` adds an edges array, `include=counts` attaches per-wiki incoming/outgoing link counts. The legacy `label_prefix` query is accepted as an alias. |
 | `GET` | `/wikis/:id?include=content` | Properties + incoming/outgoing relationships. `include=content` reads the file from disk. |
 | `DELETE` | `/wikis/:id` | Remove a wiki from the index. |
 | `GET` | `/search?q=&space_id=&limit=&snippets=&regex=` | Ripgrep-backed keyword search. Returns ranked entity hits with line snippets. |

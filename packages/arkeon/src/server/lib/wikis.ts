@@ -23,9 +23,10 @@ export interface ListWikisOptions {
   /** Filter on `properties.status` (free-form; whatever the user puts
    *  in their frontmatter — e.g. `draft`, `review`, `published`). */
   status?: string;
-  /** Case-insensitive prefix match on `label`. LIKE wildcards in the
-   *  caller's prefix are escaped so `%foo` matches literally. */
-  label_prefix?: string;
+  /** Case-insensitive substring match on `label`. "Baker Street" matches
+   *  "221B Baker Street" or "Lower Baker Street". LIKE wildcards in the
+   *  caller's input are escaped so `%foo` matches literally. */
+  label_contains?: string;
   /** `updated_at` (default, newest first) or `label` (case-insensitive A→Z).
    *  Typed loosely as `string` so HTTP callers can pass an unvalidated query
    *  string directly; listWikis validates against SORT_COLUMNS and throws
@@ -114,9 +115,9 @@ export async function listWikis(opts: ListWikisOptions = {}): Promise<ListWikisR
     params.push(opts.status);
     conditions.push(`json_extract(e.properties, '$.status') = ?`);
   }
-  if (opts.label_prefix) {
-    const escaped = opts.label_prefix.replace(/[\\%_]/g, "\\$&");
-    params.push(`${escaped}%`);
+  if (opts.label_contains) {
+    const escaped = opts.label_contains.replace(/[\\%_]/g, "\\$&");
+    params.push(`%${escaped}%`);
     conditions.push(`e.label LIKE ? ESCAPE '\\' COLLATE NOCASE`);
   }
 

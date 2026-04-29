@@ -90,7 +90,7 @@ No actors, no auth, no queues, no versioning. Schema in `src/schema/001-foundati
 - `src/server/lib/search.ts` — ripgrep adapter: spawns `rg --json` per space, parses match events, joins paths back to entities, ranks by `match_count`.
 - `src/server/lib/wiki-paths.ts` — pure helpers for routing labels to wiki file paths: `slugify`, `normalizeLabel`, `wikiPathFor(subject_type, label)`, `findFreePath`.
 - `src/server/lib/file-edits.ts` — the universal mutation primitive. `applyEdit(space, edit)` is the chokepoint every agent and routing helper uses; runs `syncFile`/`removeByPath` after each change.
-- `src/server/agents/` — the agent runtime: declarative `.arkeon/agents.yaml` config (Zod-validated), built-in `ingestor` role template, role-builder that merges YAML + builtins + env, tool registry (`read_file`, `list_wikis`, `search`, `write_file`, `edit_file`), the runAgent loop (Vercel AI SDK), and the per-space scheduler that drives auto-triggering.
+- `src/server/agents/` — the agent runtime: declarative `.arkeon/agents.yaml` config (Zod-validated), built-in `ingestor` role template, role-builder that merges YAML + builtins + env, tool registry (`read_file`, `list_wikis`, `search`, `edit_file`), the runAgent loop (Vercel AI SDK), and the per-space scheduler that drives auto-triggering. `edit_file` is the only mutation tool — three modes (CREATE, APPEND, REPLACE) dispatched on whether `search` is empty and whether the file exists. There's no overwrite path.
 - `src/server/lib/agent-queue.ts` — pure SQL helpers around the `agent_queue` table (`enqueue`, `claimNext`, `complete`, `fail`, `reclaimOrphans`).
 - `src/server/agents/path-filter.ts` — `shouldTrigger(path)` — the hardcoded `wiki/**` + `.arkeon/**` filter the scheduler consults before enqueueing. Single source of truth; when user-tunable include/exclude lands, this file is the place.
 
@@ -98,7 +98,7 @@ No actors, no auth, no queues, no versioning. Schema in `src/schema/001-foundati
 
 - `POST /spaces` — register a directory
 - `GET /spaces` — list spaces
-- `GET /wikis?space_id=...&subject_type=...&status=...&label_prefix=...&sort=...&include=...` — list wikis with frontmatter filters; `include=relationships` adds edges, `include=counts` attaches per-wiki incoming/outgoing link counts
+- `GET /wikis?space_id=...&subject_type=...&status=...&label_contains=...&sort=...&include=...` — list wikis with frontmatter filters; `label_contains` is a case-insensitive substring match (so "Baker Street" finds "221B Baker Street"); `include=relationships` adds edges, `include=counts` attaches per-wiki incoming/outgoing link counts. The legacy `label_prefix` query is accepted as an alias and gets the same substring semantics.
 - `GET /wikis/{id}?include=content` — wiki properties + relationships (and body if requested)
 - `DELETE /wikis/{id}` — remove wiki from the index
 - `GET /search?q=...&space_id=...&limit=...&snippets=...&regex=...` — keyword search via ripgrep against the watched directory; returns ranked entity hits with line snippets

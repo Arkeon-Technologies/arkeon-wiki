@@ -106,19 +106,19 @@ describe("path safety", () => {
     await expect(tool("read_file").execute({ path })).rejects.toThrow(/absolute/);
   });
 
-  it("write_file rejects path that escapes the watch dir", async () => {
+  it("edit_file CREATE rejects path that escapes the watch dir", async () => {
     await expect(
-      tool("write_file").execute({ path: "../leak.txt", content: "x" }),
+      tool("edit_file").execute({ path: "../leak.txt", search: "", replace: "x" }),
     ).rejects.toThrow(/escapes/);
   });
 
-  it("write_file rejects absolute path", async () => {
+  it("edit_file CREATE rejects absolute path", async () => {
     await expect(
-      tool("write_file").execute({ path: "/tmp/leak.txt", content: "x" }),
+      tool("edit_file").execute({ path: "/tmp/leak.txt", search: "", replace: "x" }),
     ).rejects.toThrow(/absolute/);
   });
 
-  it("edit_file rejects path that escapes the watch dir", async () => {
+  it("edit_file REPLACE rejects path that escapes the watch dir", async () => {
     await expect(
       tool("edit_file").execute({
         path: "../leak.txt",
@@ -171,40 +171,112 @@ describe("read_file edge cases", () => {
   });
 });
 
-// ── write_file ────────────────────────────────────────────────────
+// ── edit_file CREATE/APPEND modes ────────────────────────────────
 
-describe("write_file edge cases", () => {
-  it("overwrites an existing file", async () => {
-    mkdirSync(join(testDir, "wiki/concept"), { recursive: true });
-    writeFileSync(join(testDir, "wiki/concept/over.md"), "old");
+describe("edit_file CREATE mode", () => {
+  it("creates a new file when search is empty and path doesn't exist", async () => {
+    const result = (await tool("edit_file").execute({
+      path: "wiki/concept/created.md",
+      search: "",
+      replace: "---\nlabel: Created\nsubject_type: concept\n---\n\nbody\n",
+    })) as { mode: string };
 
-    await tool("write_file").execute({
-      path: "wiki/concept/over.md",
-      content: "---\nlabel: Over\n---\n\nnew body\n",
-    });
-
-    expect(readFileSync(join(testDir, "wiki/concept/over.md"), "utf-8")).toContain(
-      "new body",
-    );
+    expect(result.mode).toBe("create");
+    expect(existsSync(join(testDir, "wiki/concept/created.md"))).toBe(true);
   });
 
   it("creates intermediate directories", async () => {
-    await tool("write_file").execute({
+    await tool("edit_file").execute({
       path: "wiki/deep/nested/new.md",
-      content: "---\nlabel: Deep\n---\n\nbody\n",
+      search: "",
+      replace: "---\nlabel: Deep\n---\n\nbody\n",
     });
     expect(existsSync(join(testDir, "wiki/deep/nested/new.md"))).toBe(true);
   });
 
-  it("accumulates edits on the context across multiple writes", async () => {
-    const { tool: t, ctx } = toolWithCtx("write_file");
-    await t.execute({ path: "wiki/concept/a.md", content: "---\nlabel: A\n---\n" });
-    await t.execute({ path: "wiki/concept/b.md", content: "---\nlabel: B\n---\n" });
+  it("accumulates edits on the context across multiple creates", async () => {
+    const { tool: t, ctx } = toolWithCtx("edit_file");
+    await t.execute({
+      path: "wiki/concept/a.md",
+      search: "",
+      replace: "---\nlabel: A\n---\n",
+    });
+    await t.execute({
+      path: "wiki/concept/b.md",
+      search: "",
+      replace: "---\nlabel: B\n---\n",
+    });
     expect(ctx.edits).toHaveLength(2);
     expect(ctx.edits.map((e) => e.path)).toEqual([
       "wiki/concept/a.md",
       "wiki/concept/b.md",
     ]);
+  });
+});
+
+describe("edit_file APPEND mode", () => {
+  it("appends to an existing file when search is empty", async () => {
+    mkdirSync(join(testDir, "wiki/concept"), { recursive: true });
+    writeFileSync(
+      join(testDir, "wiki/concept/append-target.md"),
+      "---\nlabel: Append Target\n---\n\noriginal body.\n",
+    );
+
+    const result = (await tool("edit_file").execute({
+      path: "wiki/concept/append-target.md",
+      search: "",
+      replace: "Added by APPEND.",
+    })) as { mode: string };
+
+    expect(result.mode).toBe("append");
+    const content = readFileSync(
+      join(testDir, "wiki/concept/append-target.md"),
+      "utf-8",
+    );
+    expect(content).toContain("original body.");
+    expect(content).toContain("Added by APPEND.");
+    // Append text should come AFTER the original.
+    expect(content.indexOf("Added by APPEND.")).toBeGreaterThan(
+      content.indexOf("original body."),
+    );
+  });
+
+  it("preserves the trailing newline when one exists", async () => {
+    mkdirSync(join(testDir, "wiki/concept"), { recursive: true });
+    writeFileSync(
+      join(testDir, "wiki/concept/append-newline.md"),
+      // Pre-set an id so the watcher's syncFile doesn't race-inject one
+      // mid-test (which would change the bytes we're asserting on).
+      "---\nid: 01TESTAPPENDNEWLINE\nlabel: NL\n---\n\nfirst line.\n",
+    );
+    await tool("edit_file").execute({
+      path: "wiki/concept/append-newline.md",
+      search: "",
+      replace: "second line.",
+    });
+    const content = readFileSync(
+      join(testDir, "wiki/concept/append-newline.md"),
+      "utf-8",
+    );
+    expect(content.endsWith("first line.\nsecond line.")).toBe(true);
+  });
+
+  it("inserts a separating newline if the file doesn't end with one", async () => {
+    mkdirSync(join(testDir, "wiki/concept"), { recursive: true });
+    writeFileSync(
+      join(testDir, "wiki/concept/append-no-nl.md"),
+      "---\nid: 01TESTAPPENDNONL\nlabel: NoNL\n---\n\nno-trailing-newline",
+    );
+    await tool("edit_file").execute({
+      path: "wiki/concept/append-no-nl.md",
+      search: "",
+      replace: "appended",
+    });
+    const content = readFileSync(
+      join(testDir, "wiki/concept/append-no-nl.md"),
+      "utf-8",
+    );
+    expect(content).toContain("no-trailing-newline\nappended");
   });
 });
 
@@ -268,23 +340,11 @@ describe("edit_file edge cases", () => {
     expect(updated).toContain("Keep this. Keep this too.");
   });
 
-  it("rejects an empty SEARCH", async () => {
-    mkdirSync(join(testDir, "wiki/concept"), { recursive: true });
-    writeFileSync(
-      join(testDir, "wiki/concept/empty-search.md"),
-      "---\nlabel: E\n---\n\nbody\n",
-    );
+  // Note: empty SEARCH is no longer an error — it's CREATE (new file)
+  // or APPEND (existing file). Covered in the dedicated CREATE/APPEND
+  // describe blocks above.
 
-    await expect(
-      tool("edit_file").execute({
-        path: "wiki/concept/empty-search.md",
-        search: "",
-        replace: "x",
-      }),
-    ).rejects.toThrow(/non-empty/);
-  });
-
-  it("throws when the file does not exist", async () => {
+  it("REPLACE throws when the file does not exist", async () => {
     await expect(
       tool("edit_file").execute({
         path: "wiki/missing.md",
@@ -428,23 +488,23 @@ describe("list_wikis edge cases", () => {
     expect(result.wikis.map((w) => w.label)).not.toContain("Charles Babbage");
   });
 
-  it("matches label_prefix case-insensitively, prefix-anchored only", async () => {
-    // Prefix 'BABB' (all caps) should match 'Babb Noted' (case-insensitive,
-    // starts with Babb) but NOT 'Charles Babbage' (starts with Charles).
+  it("matches label_contains as a case-insensitive substring", async () => {
+    // 'BABB' (all caps) should now match BOTH 'Babb Noted' AND
+    // 'Charles Babbage' — substring semantics, not prefix.
     const result = (await tool("list_wikis").execute({
-      label_prefix: "BABB",
+      label_contains: "BABB",
     })) as { wikis: Array<{ label: string }> };
 
     const labels = result.wikis.map((w) => w.label);
     expect(labels).toContain("Babb Noted");
-    expect(labels).not.toContain("Charles Babbage");
+    expect(labels).toContain("Charles Babbage");
   });
 
-  it("escapes LIKE wildcards in label_prefix so '%' matches literally", async () => {
-    // No wikis whose label literally starts with '%', so the result must
+  it("escapes LIKE wildcards in label_contains so '%' matches literally", async () => {
+    // No wikis whose label contains a literal '%', so the result must
     // be empty — proves '%' is not interpreted as a wildcard.
     const result = (await tool("list_wikis").execute({
-      label_prefix: "%",
+      label_contains: "%",
     })) as { wikis: unknown[] };
     expect(result.wikis).toEqual([]);
   });
@@ -467,7 +527,7 @@ describe("list_wikis edge cases", () => {
     }
 
     const result = (await tool("list_wikis").execute({
-      label_prefix: "Counts Target",
+      label_contains: "Counts Target",
       include_counts: true,
     })) as {
       wikis: Array<{
@@ -524,7 +584,7 @@ describe("list_wikis edge cases", () => {
     }
 
     const result = (await tool("list_wikis").execute({
-      label_prefix: "listwikis",
+      label_contains: "listwikis",
     })) as { wikis: Array<{ source_path: string }> };
 
     expect(result.wikis.find((w) => w.source_path?.startsWith("sources/"))).toBeUndefined();
@@ -534,11 +594,12 @@ describe("list_wikis edge cases", () => {
 // ── cross-tool composition ────────────────────────────────────────
 
 describe("cross-tool composition", () => {
-  it("write → read returns the content we just wrote", async () => {
-    const { tool: w } = toolWithCtx("write_file");
+  it("create → read returns the content we just created", async () => {
+    const { tool: w } = toolWithCtx("edit_file");
     await w.execute({
       path: "wiki/concept/wr-read.md",
-      content: "---\nlabel: WR-Read\n---\n\nbody from compose test\n",
+      search: "",
+      replace: "---\nlabel: WR-Read\n---\n\nbody from compose test\n",
     });
 
     const r = tool("read_file");
@@ -550,10 +611,11 @@ describe("cross-tool composition", () => {
     expect(result.body).toContain("body from compose test");
   });
 
-  it("write → edit modifies what we just wrote", async () => {
-    await tool("write_file").execute({
+  it("create → replace modifies what we just created", async () => {
+    await tool("edit_file").execute({
       path: "wiki/concept/wr-edit.md",
-      content: "---\nlabel: WR-Edit\n---\n\noriginal phrase here\n",
+      search: "",
+      replace: "---\nlabel: WR-Edit\n---\n\noriginal phrase here\n",
     });
     await tool("edit_file").execute({
       path: "wiki/concept/wr-edit.md",
@@ -566,15 +628,35 @@ describe("cross-tool composition", () => {
     ).toContain("amended phrase");
   });
 
-  it("write → list_wikis surfaces the new wiki by label_prefix", async () => {
-    await tool("write_file").execute({
-      path: "wiki/concept/list-after-write.md",
-      content: "---\nlabel: List After Write\nsubject_type: concept\n---\n\nbody\n",
+  it("create → append weaves new material onto an existing wiki", async () => {
+    await tool("edit_file").execute({
+      path: "wiki/concept/wr-append.md",
+      search: "",
+      replace: "---\nlabel: WR-Append\n---\n\nfirst paragraph.\n",
+    });
+    await tool("edit_file").execute({
+      path: "wiki/concept/wr-append.md",
+      search: "",
+      replace: "second paragraph from append.",
     });
 
-    // applyEdit syncs synchronously, so the new entity is visible immediately.
+    const content = readFileSync(
+      join(testDir, "wiki/concept/wr-append.md"),
+      "utf-8",
+    );
+    expect(content).toContain("first paragraph.");
+    expect(content).toContain("second paragraph from append.");
+  });
+
+  it("create → list_wikis surfaces the new wiki via label_contains", async () => {
+    await tool("edit_file").execute({
+      path: "wiki/concept/list-after-write.md",
+      search: "",
+      replace: "---\nlabel: List After Write\nsubject_type: concept\n---\n\nbody\n",
+    });
+
     const result = (await tool("list_wikis").execute({
-      label_prefix: "List After",
+      label_contains: "After Write",
     })) as { wikis: Array<{ label: string }> };
     expect(result.wikis.map((w) => w.label)).toContain("List After Write");
   });

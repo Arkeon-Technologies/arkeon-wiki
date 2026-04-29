@@ -463,20 +463,29 @@ describe("API read endpoints", () => {
     }
   });
 
-  it("filters by label_prefix", async () => {
-    const matches = await api("/wikis?label_prefix=Alan");
+  it("filters by label_contains (substring, case-insensitive)", async () => {
+    const matches = await api("/wikis?label_contains=Alan");
     expect(matches.wikis.length).toBeGreaterThan(0);
     for (const w of matches.wikis) {
-      expect(w.label.toLowerCase().startsWith("alan")).toBe(true);
+      expect(w.label.toLowerCase().includes("alan")).toBe(true);
     }
   });
 
-  it("escapes LIKE wildcards in label_prefix", async () => {
+  it("legacy label_prefix query is accepted as an alias for label_contains", async () => {
+    // Pre-1.0 transitional alias — same query gets substring semantics now.
+    const matches = await api("/wikis?label_prefix=Alan");
+    expect(matches.wikis.length).toBeGreaterThan(0);
+    for (const w of matches.wikis) {
+      expect(w.label.toLowerCase().includes("alan")).toBe(true);
+    }
+  });
+
+  it("escapes LIKE wildcards in label_contains", async () => {
     // Without escaping, `%` would match everything. With escaping, it
-    // matches only labels that literally start with `%` — none of ours.
-    const data = await api("/wikis?label_prefix=%25"); // URL-encoded `%`
+    // matches only labels that literally contain `%` — none of ours.
+    const data = await api("/wikis?label_contains=%25"); // URL-encoded `%`
     expect(data.total).toBe(0);
-    const data2 = await api("/wikis?label_prefix=_");
+    const data2 = await api("/wikis?label_contains=_");
     expect(data2.total).toBe(0);
   });
 
@@ -521,13 +530,13 @@ describe("API read endpoints", () => {
     expect(data.error?.code).toBe("validation_error");
   });
 
-  it("combines filters (subject_type + label_prefix)", async () => {
-    const data = await api("/wikis?subject_type=person&label_prefix=Alan");
+  it("combines filters (subject_type + label_contains)", async () => {
+    const data = await api("/wikis?subject_type=person&label_contains=Alan");
     expect(data.wikis.length).toBeGreaterThan(0);
     for (const w of data.wikis) {
       const props = typeof w.properties === "string" ? JSON.parse(w.properties) : w.properties;
       expect(props.subject_type).toBe("person");
-      expect(w.label.toLowerCase().startsWith("alan")).toBe(true);
+      expect(w.label.toLowerCase().includes("alan")).toBe(true);
     }
   });
 

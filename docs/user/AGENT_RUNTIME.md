@@ -124,7 +124,7 @@ To carry over a field from a global role override, copy it. The most common case
 
 | Role | Tools | Job |
 |---|---|---|
-| `ingestor` | `read_file`, `list_wikis`, `search`, `write_file`, `edit_file` | Read a source file, identify the distinct subjects it discusses, and for each one either edit the existing wiki to weave the new material in (with a markdown link back to the source) or create a new wiki under `wiki/{subject_type}/{slug}.md` with a 2-4 paragraph body. |
+| `ingestor` | `read_file`, `list_wikis`, `search`, `edit_file` | Read a source file, identify the distinct subjects it discusses, and for each one either edit the existing wiki to weave the new material in (with a markdown link back to the source) or create a new wiki under `wiki/{subject_type}/{slug}.md` with a 2-4 paragraph body. |
 
 You can override any field of the built-in (`provider`, `model`, `tools`, `max_steps`, `instructions`, `system`, `user`) without redefining the whole role. To inherit the workflow but bias the focus, set `instructions:` only.
 
@@ -143,11 +143,10 @@ The available tools are:
 
 | Tool | Use |
 |---|---|
-| `list_wikis` | Frontmatter-aware enumeration: filter by `subject_type`, `status`, `label_prefix`. |
+| `list_wikis` | Frontmatter-aware enumeration: filter by `subject_type`, `status`, `label_contains` (case-insensitive substring match — `"Baker Street"` finds `"221B Baker Street"`). |
 | `search` | Keyword search via ripgrep, returns ranked entity hits with snippets. |
 | `read_file` | Read a file's contents (markdown returns parsed frontmatter + body). |
-| `write_file` | Net-new file (or full overwrite). |
-| `edit_file` | SEARCH/REPLACE on an existing file (Aider-style; SEARCH must match exactly once). |
+| `edit_file` | The single file-mutation tool. Three modes dispatched on `search` and whether the path exists:<br>**CREATE** — empty `search`, file doesn't exist → creates the file with `replace` as content.<br>**APPEND** — empty `search`, file exists → appends `replace` to the body.<br>**REPLACE** — non-empty `search` (must match exactly once) → Aider-style SEARCH/REPLACE.<br>There's no overwrite path; to change a wiki's label, REPLACE just the `label:` line. |
 
 ### Prompt template variables
 
@@ -214,7 +213,7 @@ roles:
     provider: openai-compatible
     base_url: http://localhost:11434/v1
     model: llama3.1:70b
-    tools: [list_wikis, read_file, write_file]
+    tools: [list_wikis, read_file, edit_file]
     system: |
       You draft wiki bodies offline...
 ```

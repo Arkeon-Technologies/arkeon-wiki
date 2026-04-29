@@ -101,12 +101,15 @@ const listWikisTool = defineTool("list_wikis", {
         "Filter on frontmatter `status` — free-form, whatever values you " +
           "put in your wikis (e.g. 'draft', 'review', 'published').",
       ),
-    label_prefix: z
+    label_contains: z
       .string()
       .optional()
       .describe(
-        "Case-insensitive prefix match on the wiki's label. Useful for " +
-          "checking whether a subject already exists before creating one.",
+        "Case-insensitive substring match on the wiki's label. " +
+          "'Baker Street' matches '221B Baker Street', 'Watson' matches " +
+          "'John H. Watson'. Use this to check whether a subject " +
+          "already exists — try a few variants of the name (last name " +
+          "alone, etc.) before deciding to create a new wiki.",
       ),
     sort: z
       .enum(["updated_at", "label"])
@@ -126,7 +129,7 @@ const listWikisTool = defineTool("list_wikis", {
       space_id: ctx.space.id,
       subject_type: input.subject_type,
       status: input.status,
-      label_prefix: input.label_prefix,
+      label_contains: input.label_contains,
       sort: input.sort,
       include_counts: input.include_counts,
       limit: input.limit,
@@ -136,36 +139,79 @@ const listWikisTool = defineTool("list_wikis", {
 
 // ── edit_file ─────────────────────────────────────────────────────
 
+/**
+ * One file-mutation tool covers three operations, dispatched on the
+ * presence/absence of `search` and whether the file already exists:
+ *
+ *   - file does NOT exist + search="" → CREATE the file with `replace`
+ *     as the full content (frontmatter + body).
+ *   - file EXISTS + search=""        → APPEND `replace` to the end of
+ *     the file. New material is added; nothing existing is touched.
+ *   - file EXISTS + search!=""       → SEARCH/REPLACE: substitute
+ *     the span (must match exactly once). Aider-style.
+ *
+ * No way to overwrite an existing file. If you need to "rename" a
+ * wiki's label, use the SEARCH/REPLACE form on the `label:` line in
+ * frontmatter — the file path stays the same.
+ */
 const editFileTool = defineTool("edit_file", {
   description:
-    "Replace a unique span in an existing file (Aider-style SEARCH/REPLACE). " +
-    "The `search` string MUST appear exactly once in the file. " +
-    "Use the smallest unique anchor; copy whitespace verbatim.",
+    "Mutate a wiki file. Three modes:\n" +
+    "  1. CREATE — pass an empty `search` and full file content as `replace` " +
+    "when the file doesn't exist yet. Used when you've decided to add a new wiki.\n" +
+    "  2. APPEND — pass an empty `search` and the new material as `replace` " +
+    "when the file DOES exist. The text gets added at the end of the body.\n" +
+    "  3. REPLACE — pass a non-empty `search` (must match exactly once) and " +
+    "the substitution as `replace`. Aider-style SEARCH/REPLACE for surgical " +
+    "in-place edits, e.g. updating the `label:` frontmatter line. Copy " +
+    "whitespace verbatim.\n" +
+    "There is no way to overwrite a whole existing file — if you want to " +
+    "change a wiki's label, REPLACE just the `label:` line.",
   inputSchema: z.object({
     path: z.string().describe("Relative path inside the space's watch_dir."),
-    search: z.string().describe("The exact span to replace; must match exactly once."),
-    replace: z.string().describe("The text that replaces the matched span."),
+    search: z
+      .string()
+      .describe(
+        "Empty string for CREATE/APPEND, or the exact span to substitute " +
+          "for REPLACE. Must match exactly once when non-empty.",
+      ),
+    replace: z
+      .string()
+      .describe(
+        "The new content: full file body for CREATE, appended text for " +
+          "APPEND, or the substitution for REPLACE.",
+      ),
   }),
   call: async ({ path, search, replace }, ctx) => {
+    if (search === "") {
+      const absPath = safeResolve(ctx.space.watch_dir, path);
+      if (existsSync(absPath)) {
+        // APPEND: read current content, concat, write back via the
+        // 'write' primitive. We use applyEdit's write here because
+        // it's the deterministic "set this file's full content"
+        // operation; the LLM-facing tool never has access to it.
+        const current = readFileSync(absPath, "utf-8");
+        const joined = current.endsWith("\n") || current.length === 0
+          ? current + replace
+          : current + "\n" + replace;
+        const result = await ctx.applyEdit({
+          kind: "write",
+          path,
+          content: joined,
+        });
+        return { path: result.path, mode: "append" };
+      }
+      // CREATE: write the new file.
+      const result = await ctx.applyEdit({
+        kind: "write",
+        path,
+        content: replace,
+      });
+      return { path: result.path, mode: "create" };
+    }
+    // REPLACE: surgical edit.
     const result = await ctx.applyEdit({ kind: "edit", path, search, replace });
-    return { path: result.path, applied: true };
-  },
-});
-
-// ── write_file ────────────────────────────────────────────────────
-
-const writeFileTool = defineTool("write_file", {
-  description:
-    "Create or overwrite a file with the given content. Use for net-new files " +
-    "(a freshly-created wiki for a subject that doesn't exist yet); prefer " +
-    "edit_file for modifying existing ones.",
-  inputSchema: z.object({
-    path: z.string().describe("Relative path inside the space's watch_dir."),
-    content: z.string().describe("Full file contents."),
-  }),
-  call: async ({ path, content }, ctx) => {
-    const result = await ctx.applyEdit({ kind: "write", path, content });
-    return { path: result.path, applied: true };
+    return { path: result.path, mode: "replace" };
   },
 });
 
@@ -176,5 +222,4 @@ export const ALL_TOOLS: Record<string, ToolFactory> = {
   search: searchTool,
   list_wikis: listWikisTool,
   edit_file: editFileTool,
-  write_file: writeFileTool,
 };
