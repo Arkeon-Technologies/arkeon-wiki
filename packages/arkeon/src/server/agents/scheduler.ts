@@ -116,42 +116,73 @@ export async function startScheduler(
   let stopped = false;
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // A simple wakeup channel: notify() resolves the current wait, drain
-  // resets it. Avoids busy-polling.
+  // Wakeup channel — flag-based to avoid the race where notify()
+  // arrives between the worker resolving its wait and creating the
+  // next one. `wakeupPending` is set by notify() and cleared by the
+  // worker after it observes the wakeup. If a notify lands while
+  // wakeupResolve is null, the flag remains true; the next loop pass
+  // sees it and skips the wait entirely.
+  let wakeupPending = false;
   let wakeupResolve: (() => void) | null = null;
-  const nextWakeup = (): Promise<void> =>
-    new Promise<void>((resolve) => {
+
+  function nextWakeup(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      // If a notify arrived while we were busy, fast-path: resolve
+      // immediately and clear the flag.
+      if (wakeupPending) {
+        wakeupPending = false;
+        resolve();
+        return;
+      }
       wakeupResolve = resolve;
     });
+  }
 
   function wakeup(): void {
+    wakeupPending = true;
     if (wakeupResolve) {
       const r = wakeupResolve;
       wakeupResolve = null;
+      wakeupPending = false;
       r();
     }
   }
 
   // Worker loop. One per role; v1 only runs the default trigger role
-  // if it's set. Future: spawn one of these per role in agentConfig.
+  // if it's set. Wraps each iteration in try/catch so a transient DB
+  // error (connection blip, etc.) doesn't permanently kill the
+  // worker — we log, back off, and retry.
+  const ERROR_BACKOFF_MS = 5_000;
   async function worker(role: string): Promise<void> {
     while (!stopped) {
-      const item = await claimNext(opts.space.id, role);
-      if (item) {
-        await runOne(item);
-        // Continue immediately; there may be more pending.
-        continue;
-      }
-      // Nothing pending; wait for a notification or the poll tick.
-      await Promise.race([
-        nextWakeup(),
-        new Promise<void>((r) => {
-          pollTimer = setTimeout(r, POLL_INTERVAL_MS);
-        }),
-      ]);
-      if (pollTimer) {
-        clearTimeout(pollTimer);
-        pollTimer = null;
+      try {
+        const item = await claimNext(opts.space.id, role);
+        if (item) {
+          await runOne(item);
+          // Continue immediately; there may be more pending.
+          continue;
+        }
+        // Nothing pending; wait for a notification or the poll tick.
+        await Promise.race([
+          nextWakeup(),
+          new Promise<void>((r) => {
+            pollTimer = setTimeout(r, POLL_INTERVAL_MS);
+          }),
+        ]);
+        if (pollTimer) {
+          clearTimeout(pollTimer);
+          pollTimer = null;
+        }
+      } catch (err) {
+        // Errors here are infrastructure-level (database hiccup,
+        // unexpected throw from claimNext). runOne handles its own
+        // failures via the agent_queue row. Back off and retry so we
+        // don't spin and don't die silently.
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(
+          `[agent/scheduler] role=${role} worker loop error: ${message}`,
+        );
+        await new Promise((r) => setTimeout(r, ERROR_BACKOFF_MS));
       }
     }
   }
