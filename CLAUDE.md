@@ -63,7 +63,9 @@ YAML is a superset of JSON, so wikis written with the old JSON-style frontmatter
 
 A single agent role — `ingestor` — turns sources into wikis. When a source file is added or updated, the ingestor reads it, looks for related wikis (existing ones via `list_wikis` / `search`, new ones it decides to create), and either edits the relevant wiki body in place (SEARCH/REPLACE) or writes a new wiki file. Provenance is captured as plain markdown links from the wiki body back to the source path — those become relationship edges in SQLite via the same link-resolution path that handles wiki↔wiki links.
 
-> **Status (2026-04):** the runtime and the `ingestor` built-in role are shipped; the daemon trigger that fires the role on source events is the next piece. For now, run the agent manually via the runtime API or the manual real-LLM test (`npm run test:manual -w packages/arkeon`).
+The trigger is automatic. When the watcher sees a file event under the space's `watch_dir` that is **not** under `wiki/**` or `.arkeon/**`, it enqueues an ingestor run via `agent_queue` (a persistent FIFO). A per-space worker drains the queue, claims one item, calls `runAgent`, and either DELETEs the row on success or resets `started_at = NULL` and records `last_error` on failure. The `wiki/**` exclusion is hardcoded — it's the safety property that prevents the agent's own writes from re-firing the role infinitely. Operator-tunable include/exclude lands later.
+
+The queue is crash-safe: `started_at + 5min` lease semantics mean a daemon that died mid-run leaves an orphan that gets reclaimed on the next startup. Combined with `agent_runs` idempotency (skipping replays of the same input hash), the worst case after a crash is "we re-run the role, the runtime sees we already finished it, no-op."
 
 The pre-2026-04 `contributions[]` frontmatter inbox and matching SQLite table have been removed — the editor pattern they were designed for collapsed into a single ingest step. If you have wiki files left over with `contributions:` arrays in their frontmatter from older versions, they parse fine (just become unused properties); the wikis themselves are unaffected.
 
@@ -75,6 +77,7 @@ Four tables in SQLite:
 - `entities` — wikis and source files (id, space_id, type, label, source_path, source_hash, properties JSON text)
 - `relationships` — edges between entities (source_id, target_id, predicate, link_text, link_path)
 - `agent_runs` — idempotency tracking for the agent runtime, keyed by `(role, idempotency_key)` with an `input_hash` so re-triggers on the same input skip cleanly.
+- `agent_queue` — persistent FIFO of pending agent work. The watcher inserts on file events; the per-space worker claims, runs, and DELETEs on success. Lease pattern (`started_at + 5min`) makes it crash-safe.
 
 No actors, no auth, no queues, no versioning. Schema in `src/schema/001-foundation.sql`.
 
@@ -87,7 +90,9 @@ No actors, no auth, no queues, no versioning. Schema in `src/schema/001-foundati
 - `src/server/lib/search.ts` — ripgrep adapter: spawns `rg --json` per space, parses match events, joins paths back to entities, ranks by `match_count`.
 - `src/server/lib/wiki-paths.ts` — pure helpers for routing labels to wiki file paths: `slugify`, `normalizeLabel`, `wikiPathFor(subject_type, label)`, `findFreePath`.
 - `src/server/lib/file-edits.ts` — the universal mutation primitive. `applyEdit(space, edit)` is the chokepoint every agent and routing helper uses; runs `syncFile`/`removeByPath` after each change.
-- `src/server/agents/` — the agent runtime: declarative `.arkeon/agents.yaml` config (Zod-validated), built-in `ingestor` role template, role-builder that merges YAML + builtins + env, tool registry (`read_file`, `list_wikis`, `search`, `write_file`, `edit_file`), and the runAgent loop (Vercel AI SDK).
+- `src/server/agents/` — the agent runtime: declarative `.arkeon/agents.yaml` config (Zod-validated), built-in `ingestor` role template, role-builder that merges YAML + builtins + env, tool registry (`read_file`, `list_wikis`, `search`, `write_file`, `edit_file`), the runAgent loop (Vercel AI SDK), and the per-space scheduler that drives auto-triggering.
+- `src/server/lib/agent-queue.ts` — pure SQL helpers around the `agent_queue` table (`enqueue`, `claimNext`, `complete`, `fail`, `reclaimOrphans`).
+- `src/server/agents/path-filter.ts` — `shouldTrigger(path)` — the hardcoded `wiki/**` + `.arkeon/**` filter the scheduler consults before enqueueing. Single source of truth; when user-tunable include/exclude lands, this file is the place.
 
 ## API endpoints
 
@@ -168,7 +173,6 @@ Single file: `001-foundation.sql`. Must be idempotent (all `IF NOT EXISTS`). Run
 - No vector search (sqlite-vec + EmbeddingGemma planned, hybrid RRF with ripgrep)
 - No FTS5 / BM25 ranking (ripgrep gives substring matching only)
 - No auth / API keys
-- No daemon-driven trigger for the `ingestor` role yet — the runtime works (driveable via the runtime API or `npm run test:manual`), but the file-watcher event → `runAgent` wiring inside the daemon is the next step.
 - No explorer (needs updating for new API)
 
 The old architecture with all of these features is preserved on the `archive/pre-fs-first` branch and in a local worktree at `../arkeon-wiki-archive/` for reference.

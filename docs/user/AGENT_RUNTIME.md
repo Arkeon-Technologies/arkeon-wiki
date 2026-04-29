@@ -261,8 +261,23 @@ Check the unknown field name; the schema is strict. The likely candidates:
 - `max_steps` must be a positive integer
 - `tools` is an array of strings (tool names)
 
+## How auto-triggering works
+
+When the daemon is running and you drop, edit, or save a file under the space's watch directory, the chain is:
+
+1. The file watcher fires.
+2. `syncFile` updates the SQLite index.
+3. The scheduler sees the path and asks `shouldTrigger`: is it under `wiki/**` or `.arkeon/**`? If yes, drop the event (this is what prevents the ingestor from re-firing on its own writes). Otherwise, enqueue a row in `agent_queue` keyed by `(space, role, source_path)`.
+4. A per-space worker claims the next pending row, calls `runAgent` for the `ingestor` role, and on success deletes the row. On failure it resets `started_at` to null with `last_error` set; the next claim retries.
+
+Rapid saves of the same file are coalesced: the `UNIQUE(space, role, path)` constraint means five saves in a second produce one queue row that runs against the latest content.
+
+The queue is crash-safe via a 5-minute lease. If the daemon dies while a row is in flight, the next daemon startup runs `reclaimOrphans()` which resets stale `started_at` values back to pending. The runtime's `agent_runs` idempotency table is the second safety net — re-runs against unchanged content are no-ops.
+
+In v1 the trigger filter is hardcoded: every non-`wiki/`, non-`.arkeon/` file event fires the ingestor. User-tunable include/exclude lands later when there's a real use case.
+
 ## What's not yet wired
 
-- **Auto-triggering** — roles in YAML don't yet specify *when* they fire. The `ingestor` role will register on file events for sources outside `wiki/` once the daemon-side trigger lands. Until then, run it manually via the runtime API or the upcoming `arkeon-wiki agent run <role>` command.
+- **User-tunable trigger filters** — currently hardcoded to "everything except `wiki/**` and `.arkeon/**`". When operators need to scope it (e.g., only files under `inbox/**`), an opt-in `trigger.include` field lands in agents.yaml.
 - **Per-role budgets / cost caps** — set `max_steps` for now; spending caps are a planned follow-up.
 - **Streaming output** — `runAgent` currently waits for the full response. Streaming will come with the daemon integration.

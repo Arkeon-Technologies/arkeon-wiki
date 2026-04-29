@@ -12,6 +12,7 @@ import { serve } from "@hono/node-server";
 import type { AddressInfo } from "node:net";
 
 import { createApp } from "./app.js";
+import { loadAgentEnv } from "./agents/env-loader.js";
 import { startAllWatchers, stopAllWatchers } from "./lib/fs-watcher.js";
 import { initDb, closeDb } from "./lib/sql.js";
 
@@ -31,6 +32,11 @@ export async function startApi(config: ArkeonApiConfig = {}): Promise<ArkeonApi>
     initDb(config.dbPath);
   }
 
+  // Load ~/.arkeon-wiki/.env so the agent runtime sees API keys when
+  // the per-space scheduler invokes runAgent. (Per-repo .env layered
+  // by each scheduler when its space starts.)
+  loadAgentEnv();
+
   const app = createApp();
 
   const port = config.port ?? Number(process.env.PORT ?? 8000);
@@ -47,7 +53,7 @@ export async function startApi(config: ArkeonApiConfig = {}): Promise<ArkeonApi>
   async function stop(opts: { drainTimeoutMs?: number } = {}): Promise<void> {
     const DRAIN_TIMEOUT_MS = opts.drainTimeoutMs ?? 10_000;
 
-    stopAllWatchers();
+    await stopAllWatchers();
     closeDb();
 
     const drainPromise = new Promise<void>((resolve, reject) =>
