@@ -18,6 +18,15 @@ import { createSql, withTransaction } from "./sql.js";
 import { generateUlid } from "./ids.js";
 import { parseFrontmatter, serializeFrontmatter } from "./frontmatter.js";
 import { extractMarkdownLinks, resolveRelativeLink } from "./markdown-links.js";
+import { chunkWiki } from "./chunker.js";
+
+// Issue #47 — opt-in until the embedder + vec0 index land. Setting
+// ARKEON_WIKI_CHUNKING=1 makes syncWikiFile populate entity_chunks.
+// Read at call time, not module load, so tests and CLI flags can flip
+// it after the module is imported.
+function chunkingEnabled(): boolean {
+  return process.env.ARKEON_WIKI_CHUNKING === "1";
+}
 
 export interface Space {
   id: string;
@@ -151,6 +160,28 @@ async function syncWikiFile(
         linksResolved++;
       } else {
         linksDangling++;
+      }
+    }
+
+    if (chunkingEnabled()) {
+      const chunks = chunkWiki(parsed, label);
+      await tx`DELETE FROM entity_chunks WHERE entity_id = ${entityId}`;
+      for (const c of chunks) {
+        await tx`
+          INSERT INTO entity_chunks
+            (entity_id, chunk_index, chunk_kind, heading_path,
+             start_line, end_line, text, content_hash)
+          VALUES (
+            ${entityId},
+            ${c.chunk_index},
+            ${c.chunk_kind},
+            ${c.heading_path},
+            ${c.start_line},
+            ${c.end_line},
+            ${c.text},
+            ${c.content_hash}
+          )
+        `;
       }
     }
 

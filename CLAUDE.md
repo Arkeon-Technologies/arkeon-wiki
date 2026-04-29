@@ -55,6 +55,7 @@ He worked at [Bell Labs](../organization/bell-labs.md).
 - **Quote numeric-looking strings** you want to keep as strings (e.g. `version: "1.10"` — unquoted `1.10` becomes the float `1.1`). The serializer is defensive on the way out — IDs and digit-only strings are auto-quoted on write — but on read, what you write is what you get.
 - `id` is auto-generated on first sync if missing, written back to the file.
 - `label` is required. Everything else is arbitrary.
+- `short_description` (optional, single-line) is recognized by the chunker and embedded into the per-wiki "card" chunk for semantic search.
 - Standard markdown links (`[text](path.md)`) become relationship edges.
 
 YAML is a superset of JSON, so wikis written with the old JSON-style frontmatter (`---\n{ ... }\n---`) still parse correctly. The first sync that writes back a generated `id` will rewrite the file in YAML form — heads-up if you have uncommitted changes to a wiki that was authored with JSON frontmatter.
@@ -71,15 +72,16 @@ The pre-2026-04 `contributions[]` frontmatter inbox and matching SQLite table ha
 
 ## Schema
 
-Four tables in SQLite:
+Tables in SQLite:
 
 - `spaces` — registered directories (id, name, watch_dir)
 - `entities` — wikis and source files (id, space_id, type, label, source_path, source_hash, properties JSON text)
 - `relationships` — edges between entities (source_id, target_id, predicate, link_text, link_path)
 - `agent_runs` — idempotency tracking for the agent runtime, keyed by `(role, idempotency_key)` with an `input_hash` so re-triggers on the same input skip cleanly.
 - `agent_queue` — persistent FIFO of pending agent work. The watcher inserts on file events; the per-space worker claims, runs, and DELETEs on success. Lease pattern (`started_at + 5min`) makes it crash-safe.
+- `entity_chunks` — per-wiki chunks for embedding-based search (issue #47). Populated by the chunker only when `ARKEON_WIKI_CHUNKING=1`. Cascades on entity delete. Embeddings, the `vec0` virtual table, and RRF fusion arrive in follow-up PRs.
 
-No actors, no auth, no queues, no versioning. Schema in `src/schema/001-foundation.sql`.
+No actors, no auth, no versioning. Schema split across `src/schema/001-foundation.sql` and `src/schema/002-chunks.sql`.
 
 ## Key modules
 
@@ -93,6 +95,7 @@ No actors, no auth, no queues, no versioning. Schema in `src/schema/001-foundati
 - `src/server/agents/` — the agent runtime: declarative `.arkeon/agents.yaml` config (Zod-validated), built-in `ingestor` role template, role-builder that merges YAML + builtins + env, tool registry (`read_file`, `list_wikis`, `search`, `edit_file`), the runAgent loop (Vercel AI SDK), and the per-space scheduler that drives auto-triggering. `edit_file` is the only mutation tool — three modes (CREATE, APPEND, REPLACE) dispatched on whether `search` is empty and whether the file exists. There's no overwrite path.
 - `src/server/lib/agent-queue.ts` — pure SQL helpers around the `agent_queue` table (`enqueue`, `claimNext`, `complete`, `fail`, `reclaimOrphans`).
 - `src/server/agents/path-filter.ts` — `shouldTrigger(path)` — the hardcoded `wiki/**` + `.arkeon/**` filter the scheduler consults before enqueueing. Single source of truth; when user-tunable include/exclude lands, this file is the place.
+- `src/server/lib/chunker.ts` — `chunkWiki(parsed, label)`: pure function that turns a wiki into the chunks the embedder will see. Issue #47. Card chunk (label + subject_type + aliases + short_description + lead paragraph) plus one chunk per non-empty H2 with the heading path prepended. Oversized sections fall back to H3-then-paragraph splits with ~80-token overlap. Persistence is gated by `ARKEON_WIKI_CHUNKING=1` in `syncWikiFile()`; the embedder, vec0 index, and RRF fusion arrive in follow-up PRs.
 
 ## API endpoints
 
@@ -166,7 +169,7 @@ Override the state dir with `ARKEON_WIKI_HOME` env var or `--data-dir`.
 
 ## Schema migrations
 
-Single file: `001-foundation.sql`. Must be idempotent (all `IF NOT EXISTS`). Runs on every startup.
+`src/schema/*.sql`, applied in alphabetical order. Currently `001-foundation.sql` (entities, spaces, relationships, agent runtime) and `002-chunks.sql` (`entity_chunks`, dormant until `ARKEON_WIKI_CHUNKING=1`). Must be idempotent (all `IF NOT EXISTS`). Runs on every startup.
 
 ## What's NOT here (yet)
 
