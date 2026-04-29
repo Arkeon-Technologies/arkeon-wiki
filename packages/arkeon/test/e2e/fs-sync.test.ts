@@ -471,15 +471,6 @@ describe("API read endpoints", () => {
     }
   });
 
-  it("legacy label_prefix query is accepted as an alias for label_contains", async () => {
-    // Pre-1.0 transitional alias — same query gets substring semantics now.
-    const matches = await api("/wikis?label_prefix=Alan");
-    expect(matches.wikis.length).toBeGreaterThan(0);
-    for (const w of matches.wikis) {
-      expect(w.label.toLowerCase().includes("alan")).toBe(true);
-    }
-  });
-
   it("escapes LIKE wildcards in label_contains", async () => {
     // Without escaping, `%` would match everything. With escaping, it
     // matches only labels that literally contain `%` — none of ours.

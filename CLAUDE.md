@@ -98,7 +98,7 @@ No actors, no auth, no queues, no versioning. Schema in `src/schema/001-foundati
 
 - `POST /spaces` — register a directory
 - `GET /spaces` — list spaces
-- `GET /wikis?space_id=...&subject_type=...&status=...&label_contains=...&sort=...&include=...` — list wikis with frontmatter filters; `label_contains` is a case-insensitive substring match (so "Baker Street" finds "221B Baker Street"); `include=relationships` adds edges, `include=counts` attaches per-wiki incoming/outgoing link counts. The legacy `label_prefix` query is accepted as an alias and gets the same substring semantics.
+- `GET /wikis?space_id=...&subject_type=...&status=...&label_contains=...&sort=...&include=...` — list wikis with frontmatter filters; `label_contains` is a case-insensitive substring match (so "Baker Street" finds "221B Baker Street"); `include=relationships` adds edges, `include=counts` attaches per-wiki incoming/outgoing link counts.
 - `GET /wikis/{id}?include=content` — wiki properties + relationships (and body if requested)
 - `DELETE /wikis/{id}` — remove wiki from the index
 - `GET /search?q=...&space_id=...&limit=...&snippets=...&regex=...` — keyword search via ripgrep against the watched directory; returns ranked entity hits with line snippets

@@ -19,12 +19,7 @@ wikisRouter.get("/", async (c) => {
     space_id: c.req.query("space_id"),
     subject_type: c.req.query("subject_type"),
     status: c.req.query("status"),
-    // Accept the new `label_contains` and the legacy `label_prefix`
-    // query as a transitional alias. Pre-1.0 we don't promise stability,
-    // but anyone passing `label_prefix` now gets substring semantics
-    // (strictly more permissive — same prefix still matches).
-    label_contains:
-      c.req.query("label_contains") ?? c.req.query("label_prefix"),
+    label_contains: c.req.query("label_contains"),
     sort: c.req.query("sort"),
     include_relationships: include.includes("relationships"),
     include_counts: include.includes("counts"),
