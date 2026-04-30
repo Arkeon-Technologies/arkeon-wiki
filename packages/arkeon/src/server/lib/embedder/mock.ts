@@ -10,16 +10,33 @@
  * runs and platforms. Not semantically meaningful — only useful to
  * exercise the pipeline (write, store, look up) without pulling 200 MB
  * of real weights into CI.
+ *
+ * Mock ignores the `kind` parameter; semantic prefixes don't matter
+ * for hash-derived vectors. Always reports state="ready" and warmUp()
+ * is a no-op.
  */
 
 import { createHash } from "node:crypto";
-import { type Embedder, EMBEDDING_DIM } from "./types.js";
+import {
+  type Embedder,
+  type EmbedKind,
+  type EmbedderState,
+  EMBEDDING_DIM,
+} from "./types.js";
 
 export class MockEmbedder implements Embedder {
   readonly modelId = "mock@256";
   readonly dim = EMBEDDING_DIM;
 
-  async embed(texts: string[]): Promise<Float32Array[]> {
+  state(): EmbedderState {
+    return "ready";
+  }
+
+  async warmUp(): Promise<void> {
+    // Mock has nothing to warm up.
+  }
+
+  async embed(texts: string[], _kind: EmbedKind): Promise<Float32Array[]> {
     return texts.map((text) => mockVector(text, this.dim));
   }
 }

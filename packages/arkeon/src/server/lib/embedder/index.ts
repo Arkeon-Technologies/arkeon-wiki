@@ -7,26 +7,30 @@
  * `getEmbedder()` returns a singleton resolved at first use. The
  * resolution order is:
  *
- *   1. ARKEON_WIKI_EMBEDDER override (mock | ollama). Forces a specific
- *      backend; throws if unavailable.
- *   2. Auto-detect: Ollama at localhost:11434 with the configured model
- *      already pulled (fastest path when present).
- *   3. Mock fallback. Logs a warning — vector search will be exercising
- *      the pipeline, not real semantics.
+ *   1. ARKEON_WIKI_EMBEDDER override (`mock` | `onnx`). Forces a
+ *      specific backend; init failures still surface.
+ *   2. ONNX (default). Bundled via @huggingface/transformers; model
+ *      weights download on first use to ~/.arkeon-wiki/models/.
+ *   3. Mock — only if ONNX init genuinely throws (e.g. unsupported
+ *      platform). Tests force this explicitly via the env override.
  *
- * The ONNX runtime (transformers.js + EmbeddingGemma-300M, model cache,
- * threadpool pinning) will land in a follow-up PR alongside the query
- * path. Until then, real embeddings require a local Ollama install.
+ * Mock is test-only in production runs. Every user gets real embeddings
+ * once the model finishes downloading; during the warm-up window,
+ * search returns `{model: "warming", hits: []}` so a query never
+ * blocks on a 309 MB download.
  *
- * Each backend exposes the same shape: `embed(texts) → Float32Array[]`,
- * a `modelId` (used in entity_embeddings to detect stale rows when we
- * swap models), and a `dim` (used to validate writes against the
- * 256-dim vec0 schema).
- *
- * For tests we force the mock via env so CI doesn't depend on Ollama.
+ * Each backend exposes the same shape: `embed(texts, kind) →
+ * Float32Array[]`, a `modelId`, a `dim`, plus `state()` and `warmUp()`
+ * for lifecycle. See types.ts for the full interface.
  */
 
-export { type Embedder, type EmbedderKind, EMBEDDING_DIM } from "./types.js";
+export {
+  type Embedder,
+  type EmbedderKind,
+  type EmbedderState,
+  type EmbedKind,
+  EMBEDDING_DIM,
+} from "./types.js";
 
 import { type Embedder, type EmbedderKind } from "./types.js";
 
@@ -63,28 +67,30 @@ async function resolveEmbedder(): Promise<Embedder> {
     const { MockEmbedder } = await import("./mock.js");
     return new MockEmbedder();
   }
-  if (override === "ollama") {
-    const { createOllamaEmbedder } = await import("./ollama.js");
-    return createOllamaEmbedder();
+  if (override === "onnx") {
+    const { OnnxEmbedder } = await import("./onnx.js");
+    return new OnnxEmbedder();
   }
 
-  // Auto-detect: Ollama if reachable with the model pulled, else mock.
+  // Default: ONNX. The MockEmbedder is only reached if ONNX init
+  // throws synchronously here (e.g. dynamic import fails on an
+  // unsupported platform). Async load failures surface later via
+  // state() === "failed" and don't fall through to mock.
   try {
-    const { tryOllama } = await import("./ollama.js");
-    const ollama = await tryOllama();
-    if (ollama) return ollama;
-  } catch {
-    // fall through
+    const { OnnxEmbedder } = await import("./onnx.js");
+    return new OnnxEmbedder();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[embedder] ONNX backend could not be constructed (${msg}). ` +
+        `Falling back to mock — vector search will not be semantically meaningful. ` +
+        `Set ARKEON_WIKI_EMBEDDER=mock to silence this warning, or report the ` +
+        `error if you expected ONNX to work on your platform.`,
+    );
+    const { MockEmbedder } = await import("./mock.js");
+    return new MockEmbedder();
   }
-
-  console.warn(
-    `[embedder] No real embedder available. Falling back to mock — ` +
-      `vector search will exercise the pipeline only, not real semantics. ` +
-      `Install Ollama (https://ollama.com) and pull the embeddinggemma ` +
-      `model for real embeddings, or wait for the bundled ONNX runtime in #47.`,
-  );
-  const { MockEmbedder } = await import("./mock.js");
-  return new MockEmbedder();
 }
 
 export { MockEmbedder } from "./mock.js";
+export { OnnxEmbedder } from "./onnx.js";
