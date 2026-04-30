@@ -79,9 +79,12 @@ Tables in SQLite:
 - `relationships` — edges between entities (source_id, target_id, predicate, link_text, link_path)
 - `agent_runs` — idempotency tracking for the agent runtime, keyed by `(role, idempotency_key)` with an `input_hash` so re-triggers on the same input skip cleanly.
 - `agent_queue` — persistent FIFO of pending agent work. The watcher inserts on file events; the per-space worker claims, runs, and DELETEs on success. Lease pattern (`started_at + 5min`) makes it crash-safe.
-- `entity_chunks` — per-wiki chunks for embedding-based search (issue #47). Populated on every wiki sync; opt out with `ARKEON_WIKI_CHUNKING=0`. Cascades on entity delete. Embeddings, the `vec0` virtual table, and RRF fusion arrive in follow-up PRs.
+- `entity_chunks` — per-wiki chunks for embedding-based search (issue #47). Populated on every wiki sync; opt out with `ARKEON_WIKI_CHUNKING=0`. Cascades on entity delete.
+- `entity_embeddings` — pivot tracking which model + chunk content_hash produced each embedding. Cascades from `entity_chunks`.
+- `chunk_vectors` — `vec0` virtual table holding the actual float[256] vectors (sqlite-vec). Joined to chunks via `chunk_id`.
+- `embedding_queue` — per-entity work queue drained by the in-process embedding worker. Same lease pattern as `agent_queue`.
 
-No actors, no auth, no versioning. Schema split across `src/schema/001-foundation.sql` and `src/schema/002-chunks.sql`.
+No actors, no auth, no versioning. Schema across `src/schema/001-foundation.sql`, `002-chunks.sql`, and `003-embeddings.sql`.
 
 ## Key modules
 
@@ -95,7 +98,9 @@ No actors, no auth, no versioning. Schema split across `src/schema/001-foundatio
 - `src/server/agents/` — the agent runtime: declarative `.arkeon/agents.yaml` config (Zod-validated), built-in `ingestor` role template, role-builder that merges YAML + builtins + env, tool registry (`read_file`, `list_wikis`, `search`, `edit_file`), the runAgent loop (Vercel AI SDK), and the per-space scheduler that drives auto-triggering. `edit_file` is the only mutation tool — three modes (CREATE, APPEND, REPLACE) dispatched on whether `search` is empty and whether the file exists. There's no overwrite path.
 - `src/server/lib/agent-queue.ts` — pure SQL helpers around the `agent_queue` table (`enqueue`, `claimNext`, `complete`, `fail`, `reclaimOrphans`).
 - `src/server/agents/path-filter.ts` — `shouldTrigger(path)` — the hardcoded `wiki/**` + `.arkeon/**` filter the scheduler consults before enqueueing. Single source of truth; when user-tunable include/exclude lands, this file is the place.
-- `src/server/lib/chunker.ts` — `chunkWiki(parsed, label)`: pure function that turns a wiki into the chunks the embedder will see. Issue #47. Card chunk (label + subject_type + aliases + short_description + lead paragraph) plus one chunk per non-empty H2 with the heading path prepended. Oversized sections fall back to H3-then-paragraph splits with ~80-token overlap. Runs on every wiki sync (`syncWikiFile()`); set `ARKEON_WIKI_CHUNKING=0` to disable. The embedder, vec0 index, and RRF fusion arrive in follow-up PRs.
+- `src/server/lib/chunker.ts` — `chunkWiki(parsed, label)`: pure function that turns a wiki into the chunks the embedder will see. Issue #47. Card chunk (label + subject_type + aliases + short_description + lead paragraph) plus one chunk per non-empty H2 with the heading path prepended. Oversized sections fall back to H3-then-paragraph splits with ~80-token overlap. Runs on every wiki sync (`syncWikiFile()`); set `ARKEON_WIKI_CHUNKING=0` to disable.
+- `src/server/lib/embedding-queue.ts` — pure SQL helpers around `embedding_queue` (enqueue, claimNext, complete, fail, reclaimOrphans, queueStats, waitForDrain). Same lease pattern as `agent-queue.ts`.
+- `src/server/lib/embedder/` — the embedder runtime. `index.ts` resolves a singleton via `getEmbedder()` (Ollama auto-detect → mock fallback; `ARKEON_WIKI_EMBEDDER=mock|ollama` overrides). `mock.ts` is a deterministic SHA-derived embedder used in tests and as the no-runtime fallback. `ollama.ts` is the production HTTP backend (`embeddinggemma:300m` by default; `ARKEON_WIKI_OLLAMA_URL` / `ARKEON_WIKI_OLLAMA_MODEL` to customise). `worker.ts` claims entities off `embedding_queue`, embeds their chunks, and writes to `chunk_vectors` + `entity_embeddings`. The bundled-ONNX runtime + RRF query path land in follow-up PRs.
 
 ## API endpoints
 
@@ -117,8 +122,7 @@ Keyword search is filesystem-first: there is no keyword index in SQLite. The
 `--json` output, and join the matched paths back to entities. Results are
 ranked by `matched_lines` count.
 
-Vector / semantic search is planned next (sqlite-vec + EmbeddingGemma-300M)
-and will be fused with ripgrep results via reciprocal rank fusion.
+Vector / semantic search is in progress (issue #47). The chunker, queue, and embedder pipeline have landed: every wiki sync produces `entity_chunks` rows, enqueues the entity, and an in-process worker writes 256-dim embeddings into the `chunk_vectors` (sqlite-vec) virtual table via Ollama (auto-detected) or a deterministic mock fallback. The query path — query encoder, vector KNN, RRF fusion with ripgrep, public `/search` integration — and the bundled-ONNX runtime are still pending.
 
 ## Commands
 
@@ -169,11 +173,13 @@ Override the state dir with `ARKEON_WIKI_HOME` env var or `--data-dir`.
 
 ## Schema migrations
 
-`src/schema/*.sql`, applied in alphabetical order. Currently `001-foundation.sql` (entities, spaces, relationships, agent runtime) and `002-chunks.sql` (`entity_chunks`, populated on every wiki sync unless `ARKEON_WIKI_CHUNKING=0`). Must be idempotent (all `IF NOT EXISTS`). Runs on every startup.
+`src/schema/*.sql`, applied in alphabetical order. Currently `001-foundation.sql` (entities, spaces, relationships, agent runtime), `002-chunks.sql` (`entity_chunks`), and `003-embeddings.sql` (`chunk_vectors` vec0 table, `entity_embeddings` pivot, `embedding_queue`). Must be idempotent (all `IF NOT EXISTS`). Runs on every startup. Note: `003-embeddings.sql` requires the sqlite-vec extension to be loaded; `initDb()` does this automatically before migrations run.
 
 ## What's NOT here (yet)
 
-- No vector search (sqlite-vec + EmbeddingGemma planned, hybrid RRF with ripgrep)
+- No public vector-search query path. The pipeline writes embeddings; nothing queries them yet. RRF fusion with ripgrep and the `/search?mode=hybrid` integration are the next PR for issue #47.
+- No bundled ONNX runtime. Real embeddings require a local Ollama install + `ollama pull embeddinggemma:300m`. Without it, the worker falls back to a deterministic mock embedder that exercises the pipeline but is not semantically useful.
+- No per-chunk content-hash short-circuit. `syncWikiFile()` deletes and re-inserts every chunk on every wiki sync, so chunk_ids are ephemeral and the worker re-embeds the whole wiki on each save. Cheap during development, wasteful at scale — separate issue tracks the in-place upsert.
 - No FTS5 / BM25 ranking (ripgrep gives substring matching only)
 - No auth / API keys
 - No explorer (needs updating for new API)

@@ -19,6 +19,7 @@ import { generateUlid } from "./ids.js";
 import { parseFrontmatter, serializeFrontmatter } from "./frontmatter.js";
 import { extractMarkdownLinks, resolveRelativeLink } from "./markdown-links.js";
 import { chunkWiki } from "./chunker.js";
+import { enqueueEntity } from "./embedding-queue.js";
 
 // Issue #47 — chunking is on by default. Set ARKEON_WIKI_CHUNKING=0 to
 // skip writes to entity_chunks (e.g. for tarball smoke tests that don't
@@ -26,6 +27,14 @@ import { chunkWiki } from "./chunker.js";
 // CLI flags can flip it after the module is imported.
 function chunkingEnabled(): boolean {
   return process.env.ARKEON_WIKI_CHUNKING !== "0";
+}
+
+// Issue #47 — embeddings are also on by default but require an embedder
+// runtime. The mock fallback exercises the pipeline; for real semantic
+// search the user needs Ollama (or wait for the bundled ONNX runtime in
+// a follow-up). Set ARKEON_WIKI_EMBEDDINGS=0 to skip the queue entirely.
+function embeddingsEnabled(): boolean {
+  return process.env.ARKEON_WIKI_EMBEDDINGS !== "0" && chunkingEnabled();
 }
 
 export interface Space {
@@ -187,6 +196,21 @@ async function syncWikiFile(
 
     return { linksResolved, linksDangling };
   });
+
+  // Hand off to the embedding worker (issue #47). Outside the
+  // transaction so a slow embedder can't hold the write lock. The
+  // worker re-checks each chunk's content_hash against the pivot
+  // before re-embedding, so this is cheap in the no-changes case.
+  if (embeddingsEnabled()) {
+    try {
+      await enqueueEntity(entityId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[sync] failed to enqueue ${entityId} for embedding: ${msg}`,
+      );
+    }
+  }
 
   // If we generated a new ID, write it back to the file's frontmatter
   if (isNew) {
