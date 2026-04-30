@@ -41,6 +41,7 @@
     "dotenv": "^17.3.1",
     "hono": "^4.12.9",
     "js-yaml": "^4.1.1",
+    "sqlite-vec": "^0.1.9",
     "zod": "^4.3.6"
   },
   "devDependencies": {

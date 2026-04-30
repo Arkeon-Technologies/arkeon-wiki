@@ -15,6 +15,7 @@ import { createApp } from "./app.js";
 import { loadAgentEnv } from "./agents/env-loader.js";
 import { startAllWatchers, stopAllWatchers } from "./lib/fs-watcher.js";
 import { initDb, closeDb } from "./lib/sql.js";
+import { startEmbeddingWorker, type WorkerHandle } from "./lib/embedder/worker.js";
 
 export interface ArkeonApiConfig {
   port?: number;
@@ -50,10 +51,20 @@ export async function startApi(config: ArkeonApiConfig = {}): Promise<ArkeonApi>
   // Start file watchers for all registered spaces
   await startAllWatchers();
 
+  // Start the embedding worker (issue #47). Runs alongside the watcher;
+  // drains embedding_queue until stop() is called. Disable entirely with
+  // ARKEON_WIKI_EMBEDDINGS=0 (e.g. for tarball smoke tests that don't
+  // need embeddings).
+  let embeddingWorker: WorkerHandle | null = null;
+  if (process.env.ARKEON_WIKI_EMBEDDINGS !== "0") {
+    embeddingWorker = startEmbeddingWorker();
+  }
+
   async function stop(opts: { drainTimeoutMs?: number } = {}): Promise<void> {
     const DRAIN_TIMEOUT_MS = opts.drainTimeoutMs ?? 10_000;
 
     await stopAllWatchers();
+    if (embeddingWorker) await embeddingWorker.stop();
     closeDb();
 
     const drainPromise = new Promise<void>((resolve, reject) =>

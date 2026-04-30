@@ -19,13 +19,22 @@ import { generateUlid } from "./ids.js";
 import { parseFrontmatter, serializeFrontmatter } from "./frontmatter.js";
 import { extractMarkdownLinks, resolveRelativeLink } from "./markdown-links.js";
 import { chunkWiki } from "./chunker.js";
+import { enqueueEntity } from "./embedding-queue.js";
 
-// Issue #47 — opt-in until the embedder + vec0 index land. Setting
-// ARKEON_WIKI_CHUNKING=1 makes syncWikiFile populate entity_chunks.
-// Read at call time, not module load, so tests and CLI flags can flip
-// it after the module is imported.
+// Issue #47 — chunking is on by default. Set ARKEON_WIKI_CHUNKING=0 to
+// skip writes to entity_chunks (e.g. for tarball smoke tests that don't
+// need the chunker). Read at call time, not module load, so tests and
+// CLI flags can flip it after the module is imported.
 function chunkingEnabled(): boolean {
-  return process.env.ARKEON_WIKI_CHUNKING === "1";
+  return process.env.ARKEON_WIKI_CHUNKING !== "0";
+}
+
+// Issue #47 — embeddings are also on by default but require an embedder
+// runtime. The mock fallback exercises the pipeline; for real semantic
+// search the user needs Ollama (or wait for the bundled ONNX runtime in
+// a follow-up). Set ARKEON_WIKI_EMBEDDINGS=0 to skip the queue entirely.
+function embeddingsEnabled(): boolean {
+  return process.env.ARKEON_WIKI_EMBEDDINGS !== "0" && chunkingEnabled();
 }
 
 export interface Space {
@@ -165,28 +174,106 @@ async function syncWikiFile(
 
     if (chunkingEnabled()) {
       const chunks = chunkWiki(parsed, label);
-      await tx`DELETE FROM entity_chunks WHERE entity_id = ${entityId}`;
-      for (const c of chunks) {
-        await tx`
-          INSERT INTO entity_chunks
-            (entity_id, chunk_index, chunk_kind, heading_path,
-             start_line, end_line, text, content_hash)
-          VALUES (
-            ${entityId},
-            ${c.chunk_index},
-            ${c.chunk_kind},
-            ${c.heading_path},
-            ${c.start_line},
-            ${c.end_line},
-            ${c.text},
-            ${c.content_hash}
-          )
-        `;
+
+      // Diff-based upsert keyed on (entity_id, content_hash) — keeps
+      // chunk_ids stable for unchanged content so entity_embeddings (and
+      // therefore chunk_vectors) survive across edits. The plain
+      // DELETE+INSERT we used before threw away cascaded pivot rows on
+      // every save and forced a full re-embed of the wiki even when only
+      // one paragraph changed.
+      //
+      // The UNIQUE(entity_id, chunk_index) constraint complicates the
+      // shuffle when chunks reorder (e.g. a new section inserted between
+      // two existing ones bumps every chunk_index after it). Negate every
+      // chunk_index first so the positive-integer space is free; then do
+      // UPDATEs and INSERTs to the new positive indices; then DELETE any
+      // row left at a negative index — that's a chunk no longer present.
+      const existingRows = (await tx`
+        SELECT id, content_hash
+        FROM entity_chunks
+        WHERE entity_id = ${entityId}
+      `) as Array<{ id: number; content_hash: string }>;
+
+      const existingByHash = new Map<string, number[]>();
+      for (const r of existingRows) {
+        const ids = existingByHash.get(r.content_hash);
+        if (ids) ids.push(r.id);
+        else existingByHash.set(r.content_hash, [r.id]);
       }
+
+      await tx`
+        UPDATE entity_chunks
+        SET chunk_index = -chunk_index - 1
+        WHERE entity_id = ${entityId}
+      `;
+
+      for (const c of chunks) {
+        const candidates = existingByHash.get(c.content_hash);
+        if (candidates && candidates.length > 0) {
+          const id = candidates.shift()!;
+          await tx`
+            UPDATE entity_chunks SET
+              chunk_index = ${c.chunk_index},
+              chunk_kind = ${c.chunk_kind},
+              heading_path = ${c.heading_path},
+              start_line = ${c.start_line},
+              end_line = ${c.end_line},
+              text = ${c.text}
+            WHERE id = ${id}
+          `;
+        } else {
+          await tx`
+            INSERT INTO entity_chunks
+              (entity_id, chunk_index, chunk_kind, heading_path,
+               start_line, end_line, text, content_hash)
+            VALUES (
+              ${entityId},
+              ${c.chunk_index},
+              ${c.chunk_kind},
+              ${c.heading_path},
+              ${c.start_line},
+              ${c.end_line},
+              ${c.text},
+              ${c.content_hash}
+            )
+          `;
+        }
+      }
+
+      // chunk_ids left as un-claimed candidates are about to be deleted.
+      // entity_embeddings cascades from entity_chunks; chunk_vectors is a
+      // virtual table without FK support so we delete its rows directly.
+      // Doing this here (instead of as a periodic worker scan) means the
+      // embedder loop never has to do a global LEFT JOIN to find orphans.
+      const droppedIds: number[] = [];
+      for (const ids of existingByHash.values()) droppedIds.push(...ids);
+      for (const id of droppedIds) {
+        await tx`DELETE FROM chunk_vectors WHERE chunk_id = ${id}`;
+      }
+
+      await tx`
+        DELETE FROM entity_chunks
+        WHERE entity_id = ${entityId} AND chunk_index < 0
+      `;
     }
 
     return { linksResolved, linksDangling };
   });
+
+  // Hand off to the embedding worker (issue #47). Outside the
+  // transaction so a slow embedder can't hold the write lock. The
+  // worker re-checks each chunk's content_hash against the pivot
+  // before re-embedding, so this is cheap in the no-changes case.
+  if (embeddingsEnabled()) {
+    try {
+      await enqueueEntity(entityId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[sync] failed to enqueue ${entityId} for embedding: ${msg}`,
+      );
+    }
+  }
 
   // If we generated a new ID, write it back to the file's frontmatter
   if (isNew) {
