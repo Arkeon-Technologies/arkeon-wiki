@@ -174,24 +174,76 @@ async function syncWikiFile(
 
     if (chunkingEnabled()) {
       const chunks = chunkWiki(parsed, label);
-      await tx`DELETE FROM entity_chunks WHERE entity_id = ${entityId}`;
-      for (const c of chunks) {
-        await tx`
-          INSERT INTO entity_chunks
-            (entity_id, chunk_index, chunk_kind, heading_path,
-             start_line, end_line, text, content_hash)
-          VALUES (
-            ${entityId},
-            ${c.chunk_index},
-            ${c.chunk_kind},
-            ${c.heading_path},
-            ${c.start_line},
-            ${c.end_line},
-            ${c.text},
-            ${c.content_hash}
-          )
-        `;
+
+      // Diff-based upsert keyed on (entity_id, content_hash) — keeps
+      // chunk_ids stable for unchanged content so entity_embeddings (and
+      // therefore chunk_vectors) survive across edits. The plain
+      // DELETE+INSERT we used before threw away cascaded pivot rows on
+      // every save and forced a full re-embed of the wiki even when only
+      // one paragraph changed.
+      //
+      // The UNIQUE(entity_id, chunk_index) constraint complicates the
+      // shuffle when chunks reorder (e.g. a new section inserted between
+      // two existing ones bumps every chunk_index after it). Negate every
+      // chunk_index first so the positive-integer space is free; then do
+      // UPDATEs and INSERTs to the new positive indices; then DELETE any
+      // row left at a negative index — that's a chunk no longer present.
+      const existingRows = (await tx`
+        SELECT id, content_hash
+        FROM entity_chunks
+        WHERE entity_id = ${entityId}
+      `) as Array<{ id: number; content_hash: string }>;
+
+      const existingByHash = new Map<string, number[]>();
+      for (const r of existingRows) {
+        const ids = existingByHash.get(r.content_hash);
+        if (ids) ids.push(r.id);
+        else existingByHash.set(r.content_hash, [r.id]);
       }
+
+      await tx`
+        UPDATE entity_chunks
+        SET chunk_index = -chunk_index - 1
+        WHERE entity_id = ${entityId}
+      `;
+
+      for (const c of chunks) {
+        const candidates = existingByHash.get(c.content_hash);
+        if (candidates && candidates.length > 0) {
+          const id = candidates.shift()!;
+          await tx`
+            UPDATE entity_chunks SET
+              chunk_index = ${c.chunk_index},
+              chunk_kind = ${c.chunk_kind},
+              heading_path = ${c.heading_path},
+              start_line = ${c.start_line},
+              end_line = ${c.end_line},
+              text = ${c.text}
+            WHERE id = ${id}
+          `;
+        } else {
+          await tx`
+            INSERT INTO entity_chunks
+              (entity_id, chunk_index, chunk_kind, heading_path,
+               start_line, end_line, text, content_hash)
+            VALUES (
+              ${entityId},
+              ${c.chunk_index},
+              ${c.chunk_kind},
+              ${c.heading_path},
+              ${c.start_line},
+              ${c.end_line},
+              ${c.text},
+              ${c.content_hash}
+            )
+          `;
+        }
+      }
+
+      await tx`
+        DELETE FROM entity_chunks
+        WHERE entity_id = ${entityId} AND chunk_index < 0
+      `;
     }
 
     return { linksResolved, linksDangling };

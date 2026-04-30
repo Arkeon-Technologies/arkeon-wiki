@@ -47,6 +47,7 @@ interface PivotRow {
   chunk_id: number;
   model: string;
   content_hash: string;
+  created_at: string;
 }
 
 interface ChunkRow {
@@ -68,7 +69,7 @@ async function getChunks(entityId: string): Promise<ChunkRow[]> {
 async function getPivots(entityId: string): Promise<PivotRow[]> {
   const sql = createSql();
   return (await sql`
-    SELECT chunk_id, model, content_hash
+    SELECT chunk_id, model, content_hash, created_at
     FROM entity_embeddings
     WHERE chunk_id IN (
       SELECT id FROM entity_chunks WHERE entity_id = ${entityId}
@@ -171,16 +172,28 @@ describe("embedding pipeline (mock embedder)", () => {
     }
   });
 
-  it("re-embeds the whole wiki on edit (per-chunk caching is a follow-up)", async () => {
-    // sync.ts DELETEs+re-INSERTs entity_chunks on every wiki write,
-    // which assigns fresh AUTOINCREMENT chunk_ids. The content_hash
-    // column exists on entity_chunks + entity_embeddings so a future
-    // worker can match unchanged content across re-creations and skip
-    // the embed call. For now, every sync re-embeds every chunk.
+  it("preserves embeddings for unchanged sections; re-embeds only the changed one", async () => {
+    // The cache hit. syncWikiFile diffs new chunks against existing rows
+    // by content_hash and updates in place — chunk_ids stay stable for
+    // unchanged content, so entity_embeddings rows survive and the
+    // worker's content_hash short-circuit fires. Only the edited section
+    // gets a fresh pivot row (new content_hash → re-embed → new
+    // created_at).
     const entity = await waitForEntityBySourcePath(spaceId, "wiki/person/shannon.md");
-    const beforeChunkIds = new Set(
-      (await getChunks(entity.id)).map((c) => c.id),
-    );
+    const beforeChunks = await getChunks(entity.id);
+    const beforePivots = await getPivots(entity.id);
+    const beforePivotByChunkId = new Map(beforePivots.map((p) => [p.chunk_id, p]));
+
+    // Find each section's pre-edit chunk_id by heading_path semantics
+    // (read via the chunks' text — heading_path isn't selected here
+    // but the text starts with the heading path).
+    const earlyLifeBefore = beforeChunks.find((c) => c.text.startsWith("Claude Shannon > Early Life"))!;
+    const careerBefore = beforeChunks.find((c) => c.text.startsWith("Claude Shannon > Career"))!;
+    const cardBefore = beforeChunks.find((c) => !c.text.startsWith("Claude Shannon >"))!;
+
+    // Wait one second so the SQLite datetime('now') resolution can
+    // distinguish a new pivot's created_at from the pre-edit values.
+    await new Promise((r) => setTimeout(r, 1100));
 
     writeWiki("wiki/person/shannon.md", {
       id: entity.id,
@@ -199,32 +212,109 @@ describe("embedding pipeline (mock embedder)", () => {
       "Worked at Bell Labs and AT&T.",
     ].join("\n"));
 
-    // Wait for new chunk rows (different ids) and a drained queue.
+    // Wait for the Career chunk's content_hash to change in the DB
+    // (proves the watcher picked up the edit), then drain.
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
-      const chunks = await getChunks(entity.id);
-      if (chunks.length > 0 && chunks.every((c) => !beforeChunkIds.has(c.id))) {
-        await waitForDrain(15_000);
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 200));
+      const after = await getChunks(entity.id);
+      const careerNow = after.find((c) => c.text.startsWith("Claude Shannon > Career"));
+      if (careerNow && careerNow.content_hash !== careerBefore.content_hash) break;
+      await new Promise((r) => setTimeout(r, 100));
     }
+    await waitForDrain(15_000);
+
+    const afterChunks = await getChunks(entity.id);
+    const afterPivots = await getPivots(entity.id);
+    const afterPivotByChunkId = new Map(afterPivots.map((p) => [p.chunk_id, p]));
+
+    const earlyLifeAfter = afterChunks.find((c) => c.text.startsWith("Claude Shannon > Early Life"))!;
+    const careerAfter = afterChunks.find((c) => c.text.startsWith("Claude Shannon > Career"))!;
+    const cardAfter = afterChunks.find((c) => !c.text.startsWith("Claude Shannon >"))!;
+
+    // Unchanged chunks (Early Life, card): same chunk_id (UPDATE in
+    // place by content_hash). Their pivot rows survived — no cascade
+    // fired, no re-embed happened.
+    expect(earlyLifeAfter.id).toBe(earlyLifeBefore.id);
+    expect(cardAfter.id).toBe(cardBefore.id);
+    expect(afterPivotByChunkId.get(earlyLifeAfter.id)!.created_at)
+      .toBe(beforePivotByChunkId.get(earlyLifeBefore.id)!.created_at);
+    expect(afterPivotByChunkId.get(cardAfter.id)!.created_at)
+      .toBe(beforePivotByChunkId.get(cardBefore.id)!.created_at);
+
+    // Career CHANGED. Its new content_hash has no match in the
+    // pre-edit chunk set, so it's INSERTed as a new row with a fresh
+    // chunk_id; the old Career row gets DELETEd at the end of the diff.
+    expect(careerAfter.id).not.toBe(careerBefore.id);
+    expect(careerAfter.content_hash).not.toBe(careerBefore.content_hash);
+    expect(careerAfter.text).toContain("Bell Labs and AT&T");
+    expect(afterPivotByChunkId.get(careerAfter.id)!.content_hash)
+      .toBe(careerAfter.content_hash);
+  });
+
+  it("preserves chunk_id and pivot when only frontmatter changes (lead unchanged)", async () => {
+    // An unrelated frontmatter field that doesn't feed into any chunk
+    // text. Every chunk_id should survive the resync, and every pivot's
+    // created_at should be preserved (no re-embed).
+    writeWiki("wiki/person/probe.md", {
+      label: "Probe Subject",
+      subject_type: "person",
+      short_description: "Test fixture for the cache-hit assertion.",
+    }, [
+      "Some lead paragraph for the probe.",
+      "",
+      "## A Section",
+      "",
+      "Body of A.",
+    ].join("\n"));
+
+    const entity = await waitForEntityBySourcePath(spaceId, "wiki/person/probe.md");
+    await waitForDrain(15_000);
+
+    const beforeChunks = await getChunks(entity.id);
+    const beforePivots = await getPivots(entity.id);
+    const beforeIds = new Set(beforeChunks.map((c) => c.id));
+
+    await new Promise((r) => setTimeout(r, 1100));
+
+    writeWiki("wiki/person/probe.md", {
+      id: entity.id,
+      label: "Probe Subject",
+      subject_type: "person",
+      short_description: "Test fixture for the cache-hit assertion.",
+      birth_year: 1900, // does not feed into any chunk text
+    }, [
+      "Some lead paragraph for the probe.",
+      "",
+      "## A Section",
+      "",
+      "Body of A.",
+    ].join("\n"));
+
+    // Wait for the source_hash to change (proves the watcher reran sync)
+    // then drain.
+    const sql = createSql();
+    const deadline = Date.now() + 15_000;
+    const beforeRows = await sql`SELECT source_hash FROM entities WHERE id = ${entity.id}`;
+    const beforeHash = beforeRows[0]?.source_hash;
+    while (Date.now() < deadline) {
+      const rows = await sql`SELECT source_hash FROM entities WHERE id = ${entity.id}`;
+      if (rows[0]?.source_hash && rows[0].source_hash !== beforeHash) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    await waitForDrain(15_000);
 
     const afterChunks = await getChunks(entity.id);
     const afterPivots = await getPivots(entity.id);
 
-    // Every current chunk has a matching pivot with content_hash agreement.
-    expect(afterPivots).toHaveLength(afterChunks.length);
-    const pivotByChunk = new Map(afterPivots.map((p) => [p.chunk_id, p]));
-    for (const chunk of afterChunks) {
-      const pivot = pivotByChunk.get(chunk.id);
-      expect(pivot).toBeDefined();
-      expect(pivot!.content_hash).toBe(chunk.content_hash);
+    expect(afterChunks).toHaveLength(beforeChunks.length);
+    for (const c of afterChunks) {
+      expect(beforeIds.has(c.id)).toBe(true);
     }
 
-    // Career section's chunk_text reflects the edit.
-    const career = afterChunks.find((c) => c.text.includes("Career"))!;
-    expect(career.text).toContain("Bell Labs and AT&T");
+    const beforeByChunk = new Map(beforePivots.map((p) => [p.chunk_id, p.created_at]));
+    for (const p of afterPivots) {
+      expect(p.created_at).toBe(beforeByChunk.get(p.chunk_id));
+    }
   });
 
   it("cleans up vec0 rows when chunks are removed", async () => {

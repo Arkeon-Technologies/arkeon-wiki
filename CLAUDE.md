@@ -88,7 +88,7 @@ No actors, no auth, no versioning. Schema across `src/schema/001-foundation.sql`
 
 ## Key modules
 
-- `src/server/lib/sync.ts` — `syncFile()`: the core primitive. Reads a file, parses frontmatter, upserts entity, resolves links to relationship edges.
+- `src/server/lib/sync.ts` — `syncFile()`: the core primitive. Reads a file, parses frontmatter, upserts entity, resolves links to relationship edges. For wiki files, also runs the chunker and reconciles `entity_chunks` via a content_hash-keyed diff (UPDATE in place for unchanged chunks, INSERT for new, DELETE for removed) so embeddings survive across edits.
 - `src/server/lib/fs-watcher.ts` — watches registered directories, debounces changes, calls `syncFile()` / `removeByPath()`.
 - `src/server/lib/frontmatter.ts` — parse/serialize YAML frontmatter.
 - `src/server/lib/markdown-links.ts` — extract and resolve markdown links.
@@ -179,7 +179,6 @@ Override the state dir with `ARKEON_WIKI_HOME` env var or `--data-dir`.
 
 - No public vector-search query path. The pipeline writes embeddings; nothing queries them yet. RRF fusion with ripgrep and the `/search?mode=hybrid` integration are the next PR for issue #47.
 - No bundled ONNX runtime. Real embeddings require a local Ollama install + `ollama pull embeddinggemma:300m`. Without it, the worker falls back to a deterministic mock embedder that exercises the pipeline but is not semantically useful.
-- No per-chunk content-hash short-circuit. `syncWikiFile()` deletes and re-inserts every chunk on every wiki sync, so chunk_ids are ephemeral and the worker re-embeds the whole wiki on each save. Cheap during development, wasteful at scale — separate issue tracks the in-place upsert.
 - No FTS5 / BM25 ranking (ripgrep gives substring matching only)
 - No auth / API keys
 - No explorer (needs updating for new API)
