@@ -1,8 +1,8 @@
 -- 002-chunks.sql
 -- Per-wiki chunks for embedding-based search (issue #47).
--- This migration only sets up storage. The chunker itself is gated
--- behind ARKEON_WIKI_CHUNKING=1 (see syncWikiFile). The embedder
--- and vec0 virtual table arrive in follow-up PRs.
+-- The chunker runs on every wiki sync; opt out with
+-- ARKEON_WIKI_CHUNKING=0 (see syncWikiFile). The embedder and vec0
+-- virtual table arrive in follow-up PRs.
 
 CREATE TABLE IF NOT EXISTS entity_chunks (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -20,12 +20,12 @@ import { parseFrontmatter, serializeFrontmatter } from "./frontmatter.js";
 import { extractMarkdownLinks, resolveRelativeLink } from "./markdown-links.js";
 import { chunkWiki } from "./chunker.js";
 
-// Issue #47 — opt-in until the embedder + vec0 index land. Setting
-// ARKEON_WIKI_CHUNKING=1 makes syncWikiFile populate entity_chunks.
-// Read at call time, not module load, so tests and CLI flags can flip
-// it after the module is imported.
+// Issue #47 — chunking is on by default. Set ARKEON_WIKI_CHUNKING=0 to
+// skip writes to entity_chunks (e.g. for tarball smoke tests that don't
+// need the chunker). Read at call time, not module load, so tests and
+// CLI flags can flip it after the module is imported.
 function chunkingEnabled(): boolean {
-  return process.env.ARKEON_WIKI_CHUNKING === "1";
+  return process.env.ARKEON_WIKI_CHUNKING !== "0";
 }
 
 export interface Space {
