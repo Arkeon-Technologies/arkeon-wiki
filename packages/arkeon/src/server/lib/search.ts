@@ -14,6 +14,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { rgPath } from "@vscode/ripgrep";
 
 import { createSql } from "./sql.js";
@@ -214,6 +215,11 @@ export async function search(opts: SearchOptions): Promise<SearchResult> {
     const watchDir = space.watch_dir as string | null;
     const spaceId = space.id as string;
     if (!watchDir) continue;
+    // A registered space's directory can vanish out from under us (user
+    // rm'd it, or removable media unmounted). spawn() with a missing cwd
+    // surfaces as ENOENT on the rg path, which looks like a missing
+    // binary — skip cleanly instead.
+    if (!existsSync(watchDir)) continue;
 
     const fileResults = await runRipgrep({
       cwd: watchDir,

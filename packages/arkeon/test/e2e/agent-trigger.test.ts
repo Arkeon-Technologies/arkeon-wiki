@@ -27,7 +27,7 @@ import { randomBytes } from "node:crypto";
 
 import { startScheduler } from "../../src/server/agents/scheduler.js";
 import { applyEdit } from "../../src/server/lib/file-edits.js";
-import { createSql } from "../../src/server/lib/sql.js";
+import { closeDb, createSql } from "../../src/server/lib/sql.js";
 import type { Space } from "../../src/server/lib/sync.js";
 import type { AgentRunResult } from "../../src/server/agents/runtime.js";
 
@@ -71,6 +71,12 @@ beforeAll(async () => {
 
 afterAll(async () => {
   delete process.env.OPENAI_API_KEY;
+  // Close the singleton DB handle so the next e2e file's runMigrations()
+  // opens a fresh connection at its own path. Without this, initDb() short-
+  // circuits on the existing _db and the next test inherits this test's
+  // tables — including spaces whose watch_dir we rm -rf below, which makes
+  // ripgrep's spawn() fail with ENOENT on macOS.
+  closeDb();
   if (testDir && existsSync(testDir)) {
     rmSync(testDir.substring(0, testDir.lastIndexOf("/")), {
       recursive: true,
