@@ -128,7 +128,10 @@ async function embedEntity(entityId: string): Promise<void> {
   }
 
   if (toEmbed.length > 0) {
-    const vectors = await embedder.embed(toEmbed.map((c) => c.text));
+    const vectors = await embedder.embed(
+      toEmbed.map((c) => c.text),
+      "document",
+    );
     const db = getDb();
 
     // sqlite-vec's PRIMARY KEY validator rejects integers bound through

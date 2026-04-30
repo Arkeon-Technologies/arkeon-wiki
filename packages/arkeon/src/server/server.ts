@@ -16,6 +16,7 @@ import { loadAgentEnv } from "./agents/env-loader.js";
 import { startAllWatchers, stopAllWatchers } from "./lib/fs-watcher.js";
 import { initDb, closeDb } from "./lib/sql.js";
 import { startEmbeddingWorker, type WorkerHandle } from "./lib/embedder/worker.js";
+import { getEmbedder } from "./lib/embedder/index.js";
 
 export interface ArkeonApiConfig {
   port?: number;
@@ -58,6 +59,19 @@ export async function startApi(config: ArkeonApiConfig = {}): Promise<ArkeonApi>
   let embeddingWorker: WorkerHandle | null = null;
   if (process.env.ARKEON_WIKI_EMBEDDINGS !== "0") {
     embeddingWorker = startEmbeddingWorker();
+
+    // Eagerly kick off the embedder warm-up so the model download
+    // begins as soon as the daemon comes up — by the time a user
+    // issues their first search, the model is (often) ready. The call
+    // is non-blocking; failures are surfaced via embedder.state() and
+    // user queries get {model: "warming"|"unavailable"} instead of a
+    // hung connection.
+    getEmbedder()
+      .then((e) => e.warmUp())
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[embedder] warmUp failed: ${msg}`);
+      });
   }
 
   async function stop(opts: { drainTimeoutMs?: number } = {}): Promise<void> {

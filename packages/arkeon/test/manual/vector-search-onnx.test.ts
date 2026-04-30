@@ -2,35 +2,36 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Manual end-to-end test for vector search against a real embedder
- * (Ollama + embeddinggemma:300m). Not run in CI — requires:
- *
- *   - Ollama running locally on port 11434
- *   - The embeddinggemma:300m model pulled (`ollama pull embeddinggemma:300m`)
+ * Manual end-to-end test for vector search against the bundled ONNX
+ * embedder (issue #47). Not run in CI — first run downloads ~309 MB
+ * of model weights to ~/.arkeon-wiki/models/, which would slow CI to
+ * a crawl. Subsequent runs are fast (model already cached).
  *
  * Run:   npm run test:manual -w packages/arkeon
  *
  * What this catches that the mock-backed e2e suite cannot:
- *   - Ollama API contract bugs (e.g. wrong field name for the Matryoshka
- *     truncation parameter — silently returns 768d when we expect 256d)
  *   - Real semantic ranking — the mock is hash-derived and can't tell
  *     us whether "computer pioneer" actually retrieves Alan Turing
- *   - Vector format issues — wrong byte order, padding, etc. — that
- *     mock would happily produce in the schema but a real model would
- *     reject or return as garbage similarities
+ *   - The slice + L2-renormalise math against real 768d ONNX output
+ *   - The query/document prefix application
+ *   - Warm-up lifecycle: daemon comes up, vector returns
+ *     {model: "warming"} until the load resolves, then transitions
+ *     to ready and queue drains
+ *   - Whether transformers.js + onnxruntime-node + the q8 quantised
+ *     EmbeddingGemma weights actually run on the user's platform
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import yaml from "js-yaml";
 
 import { waitForDrain } from "../../src/server/lib/embedding-queue.js";
-import { resetEmbedder } from "../../src/server/lib/embedder/index.js";
+import { getEmbedder, resetEmbedder } from "../../src/server/lib/embedder/index.js";
 
-const API_PORT = 18792;
+const API_PORT = 18793;
 const BASE_URL = `http://localhost:${API_PORT}`;
 
 let testDir: string;
@@ -38,6 +39,7 @@ let stateDir: string;
 let serverHandle: { stop: () => Promise<void> } | null = null;
 let spaceId: string;
 const prevEmbedderEnv = process.env.ARKEON_WIKI_EMBEDDER;
+const prevModelsDirEnv = process.env.ARKEON_WIKI_MODELS_DIR;
 
 function writeWiki(
   relativePath: string,
@@ -57,33 +59,15 @@ async function api(path: string): Promise<any> {
   return res.text();
 }
 
-async function preflightOllama(): Promise<void> {
-  try {
-    const res = await fetch("http://localhost:11434/api/tags", {
-      signal: AbortSignal.timeout(2000),
-    });
-    if (!res.ok) throw new Error(`status ${res.status}`);
-    const body = (await res.json()) as { models?: Array<{ name?: string }> };
-    const present = (body.models ?? []).some((m) => m.name === "embeddinggemma:300m");
-    if (!present) {
-      throw new Error(
-        "embeddinggemma:300m is not pulled. Run: ollama pull embeddinggemma:300m",
-      );
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `Ollama preflight failed: ${msg}. Start Ollama on localhost:11434 ` +
-        `and ensure embeddinggemma:300m is pulled.`,
-    );
-  }
-}
-
 beforeAll(async () => {
-  await preflightOllama();
-  process.env.ARKEON_WIKI_EMBEDDER = "ollama";
+  process.env.ARKEON_WIKI_EMBEDDER = "onnx";
+  // Pin the model cache to a persistent location so we don't pay the
+  // ~309 MB download every time this test runs. The test's data
+  // (DB, watch_dir) still lives in the tempdir.
+  process.env.ARKEON_WIKI_MODELS_DIR = join(homedir(), ".arkeon-wiki", "models");
+  resetEmbedder();
 
-  const base = join(tmpdir(), `arkeon-vector-real-${randomBytes(4).toString("hex")}`);
+  const base = join(tmpdir(), `arkeon-onnx-real-${randomBytes(4).toString("hex")}`);
   testDir = join(base, "repo");
   stateDir = join(base, "state");
   mkdirSync(testDir, { recursive: true });
@@ -99,9 +83,7 @@ beforeAll(async () => {
   const apiHandle = await startApi({ port: API_PORT, dbPath: dbFile });
   serverHandle = { stop: async () => apiHandle.stop() };
 
-  // Three semantically distinct wikis so a real model can actually
-  // discriminate between them. Bodies are richer than the mock fixtures
-  // because semantic ranking needs real signal.
+  // Three semantically distinct wikis. Real model needs real signal.
   writeWiki(
     "wiki/person/alan-turing.md",
     { label: "Alan Turing", subject_type: "person" },
@@ -158,22 +140,28 @@ beforeAll(async () => {
   const created = await fetch(`${BASE_URL}/spaces`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name: "vector-real-space", watch_dir: testDir }),
+    body: JSON.stringify({ name: "onnx-real-space", watch_dir: testDir }),
   });
   const space = (await created.json()) as { id: string };
   spaceId = space.id;
 
-  // Wait for the watcher to pick up all three wikis, then drain the
-  // embedding queue. Real Ollama embedding takes ~50-200ms per chunk;
-  // 60s is generous.
-  const seenDeadline = Date.now() + 30_000;
-  while (Date.now() < seenDeadline) {
-    const wikis = await api(`/wikis?space_id=${spaceId}`);
-    if ((wikis.wikis ?? []).length === 3) break;
+  // Wait for the model to finish loading. First run = ~309 MB download
+  // + load (~30-60s on a fast connection, longer on slow). Subsequent
+  // runs hit the cache and finish in 5-15s.
+  const embedder = await getEmbedder();
+  const warmDeadline = Date.now() + 5 * 60_000;
+  while (Date.now() < warmDeadline) {
+    if (embedder.state() === "ready") break;
+    if (embedder.state() === "failed") {
+      throw new Error("OnnxEmbedder failed to load — see daemon logs");
+    }
     await new Promise((r) => setTimeout(r, 500));
   }
-  await waitForDrain(60_000);
-}, 120_000);
+  expect(embedder.state()).toBe("ready");
+
+  // Wait for chunks to embed via the worker.
+  await waitForDrain(120_000);
+}, 10 * 60_000);
 
 afterAll(async () => {
   if (serverHandle) await serverHandle.stop();
@@ -185,21 +173,27 @@ afterAll(async () => {
   } else {
     process.env.ARKEON_WIKI_EMBEDDER = prevEmbedderEnv;
   }
+  if (prevModelsDirEnv === undefined) {
+    delete process.env.ARKEON_WIKI_MODELS_DIR;
+  } else {
+    process.env.ARKEON_WIKI_MODELS_DIR = prevModelsDirEnv;
+  }
   resetEmbedder();
 }, 60_000);
 
-describe("vector search against live Ollama (embeddinggemma:300m)", () => {
+describe("vector search against bundled ONNX (embeddinggemma-300m, q8)", () => {
   it("reports the active model identifier", async () => {
     const data = await api(`/search?space_id=${spaceId}&q=mathematics&mode=vector`);
-    expect(data.vector.model).toBe("ollama:embeddinggemma:300m@256");
+    expect(data.vector.model).toBe("onnx:embeddinggemma-300m@256");
   });
 
-  it("returns 256-dim vectors (Matryoshka truncation works)", async () => {
-    // Indirect proof: if the truncation parameter wasn't being respected,
-    // the worker would have refused to insert any embeddings and we'd
-    // have zero hits. A populated result set means the dimension matched.
+  it("returns 256-dim vectors (slice + L2-renormalise from 768d output)", async () => {
     const data = await api(`/search?space_id=${spaceId}&q=mathematics&mode=vector`);
     expect(data.vector.hits.length).toBeGreaterThan(0);
+    for (const hit of data.vector.hits) {
+      expect(hit.similarity).toBeGreaterThanOrEqual(-1);
+      expect(hit.similarity).toBeLessThanOrEqual(1);
+    }
   });
 
   it("ranks Alan Turing first for 'computer pioneer'", async () => {
@@ -226,22 +220,27 @@ describe("vector search against live Ollama (embeddinggemma:300m)", () => {
     expect(data.vector.hits[0].label).toBe("Photosynthesis");
   });
 
-  it("similarity is meaningfully higher for the matching wiki than for the non-matching ones", async () => {
+  it("query and document prefixes give meaningfully different similarities", async () => {
+    // The model card requires different prefixes for queries vs
+    // documents. The Bletchley Park / Enigma chunks belong only to
+    // Turing — the query encoded with the query prefix should land
+    // closest to those.
     const data = await api(
       `/search?space_id=${spaceId}&q=Bletchley%20Park%20Enigma&mode=vector&limit=10`,
     );
     const turingHits = data.vector.hits.filter((h: any) => h.label === "Alan Turing");
-    const curieHits = data.vector.hits.filter((h: any) => h.label === "Marie Curie");
-    if (turingHits.length > 0 && curieHits.length > 0) {
+    const otherHits = data.vector.hits.filter((h: any) => h.label !== "Alan Turing");
+    if (turingHits.length > 0 && otherHits.length > 0) {
       const bestTuring = Math.max(...turingHits.map((h: any) => h.similarity));
-      const bestCurie = Math.max(...curieHits.map((h: any) => h.similarity));
-      expect(bestTuring).toBeGreaterThan(bestCurie);
+      const bestOther = Math.max(...otherHits.map((h: any) => h.similarity));
+      expect(bestTuring).toBeGreaterThan(bestOther);
     }
   });
 
-  it("hybrid mode populates both arrays from independent strategies", async () => {
+  it("hybrid mode populates both arrays from real backends", async () => {
     const data = await api(`/search?space_id=${spaceId}&q=Curie&mode=both`);
     expect(data.keyword.hits.some((h: any) => h.label === "Marie Curie")).toBe(true);
     expect(data.vector.hits.some((h: any) => h.label === "Marie Curie")).toBe(true);
+    expect(data.vector.model).toBe("onnx:embeddinggemma-300m@256");
   });
 });

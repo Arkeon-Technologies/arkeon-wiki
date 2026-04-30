@@ -334,7 +334,20 @@ export async function searchVector(
   const limit = Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
 
   const embedder = await getEmbedder();
-  const [vec] = await embedder.embed([opts.query]);
+
+  // If the model isn't loaded yet (e.g. cold start, weights still
+  // downloading), short-circuit with a "warming" marker so the user's
+  // query doesn't block on a 309 MB download. The caller can poll or
+  // re-issue the search once vector.model stops being "warming".
+  const state = embedder.state();
+  if (state === "warming") {
+    return { hits: [], total: 0, model: "warming" };
+  }
+  if (state === "failed") {
+    return { hits: [], total: 0, model: "unavailable" };
+  }
+
+  const [vec] = await embedder.embed([opts.query], "query");
   const vecBuf = Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
 
   const sql = createSql();
