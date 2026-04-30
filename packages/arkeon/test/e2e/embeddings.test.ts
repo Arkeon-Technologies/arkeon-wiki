@@ -20,7 +20,7 @@ import yaml from "js-yaml";
 import { createSql } from "../../src/server/lib/sql.js";
 import { waitForEntityBySourcePath } from "./helpers.js";
 import { waitForDrain, queueStats } from "../../src/server/lib/embedding-queue.js";
-import { EMBEDDING_DIM } from "../../src/server/lib/embedder/index.js";
+import { EMBEDDING_DIM, resetEmbedder } from "../../src/server/lib/embedder/index.js";
 
 const API_PORT = 18791;
 const BASE_URL = `http://localhost:${API_PORT}`;
@@ -130,6 +130,10 @@ afterAll(async () => {
   } else {
     process.env.ARKEON_WIKI_EMBEDDER = prevEmbedderEnv;
   }
+  // Clear the module-level embedder singleton so a later test file in
+  // the same vitest process (isolate: false) doesn't get our cached
+  // mock when it expects to resolve fresh.
+  resetEmbedder();
 }, 30_000);
 
 describe("embedding pipeline (mock embedder)", () => {

@@ -5,16 +5,23 @@
  * Embedding worker (issue #47).
  *
  * Drains the embedding_queue: for each claimed entity, fetches the
- * chunks whose content_hash differs from the pivot's stored hash,
- * embeds them, and upserts entity_embeddings + chunk_vectors. Chunks
- * removed from the wiki are also purged here (vec0 + pivot rows whose
- * chunk_id no longer exists in entity_chunks — guaranteed by the
- * pivot's ON DELETE CASCADE, so we just need to clean up vec0).
+ * chunks whose content_hash differs from the pivot's stored hash, and
+ * upserts entity_embeddings + chunk_vectors for the diff. Removed
+ * chunks are cleaned up at the source — syncWikiFile deletes their
+ * chunk_vectors and entity_chunks rows in the same transaction (the
+ * pivot cascades), so this loop only ever inserts.
  *
  * The worker is a single, in-process loop. There's no concurrency
  * within a process — Ollama calls and ONNX model invocations both want
  * a serialized batch path, and the queue's UNIQUE(entity_id) constraint
  * already coalesces concurrent edits.
+ *
+ * Two SQL APIs are used in tandem: createSql() for tagged-template
+ * reads (chunks, pivots) and getDb()/db.prepare() for chunk_vectors
+ * INSERTs. The latter is the documented workaround for sqlite-vec
+ * 0.1.9's PRIMARY KEY validator, which rejects integers bound through
+ * better-sqlite3's parameter path on virtual-table xUpdate. Inlining
+ * the validated chunk_id as a SQL literal sidesteps the binding path.
  */
 
 import { createSql, getDb } from "./../sql.js";
@@ -75,15 +82,11 @@ export async function drain(): Promise<void> {
  * content_hash or different model), embed only those, and upsert. Also
  * purges vec0 rows for chunks that no longer exist in entity_chunks.
  *
- * Splits the work into:
- *   1. Identify stale + new chunks → embed → upsert pivot + vec0.
- *   2. Identify orphaned vec0 rows (chunks gone from entity_chunks via
- *      cascade) → DELETE from chunk_vectors.
- *
- * Wraps step 1 in a transaction so a partial failure doesn't leave
- * pivot/vec0 out of sync. vec0 doesn't support nested transactions
- * the way regular tables do, but DELETE/INSERT inside an outer
- * BEGIN/COMMIT works in practice (sqlite-vec docs).
+ * Identifies stale + new chunks (by content_hash and embedder modelId)
+ * and embeds + upserts pivot + vec0 in a single transaction so a
+ * partial failure doesn't leave pivot/vec0 out of sync. Removed chunks
+ * are cleaned up at the source by syncWikiFile, so this loop never
+ * has to scan for orphans.
  */
 async function embedEntity(entityId: string): Promise<void> {
   const embedder = await getEmbedder();
@@ -170,24 +173,6 @@ async function embedEntity(entityId: string): Promise<void> {
       db.exec("ROLLBACK");
       throw err;
     }
-  }
-
-  // Purge vec0 rows whose chunk_id no longer exists. The pivot's
-  // ON DELETE CASCADE handles entity_embeddings; vec0 needs an
-  // explicit cleanup. Same parameterized-PK limitation as above —
-  // inline the chunk_id as a literal (it's an integer we just
-  // selected from chunk_vectors).
-  const db = getDb();
-  const orphanRows = await sql`
-    SELECT cv.chunk_id
-    FROM chunk_vectors cv
-    LEFT JOIN entity_chunks ec ON ec.id = cv.chunk_id
-    WHERE ec.id IS NULL
-  `;
-  for (const o of orphanRows) {
-    const id = Number(o.chunk_id);
-    if (!Number.isInteger(id)) continue;
-    db.prepare(`DELETE FROM chunk_vectors WHERE chunk_id = ${id}`).run();
   }
 }
 

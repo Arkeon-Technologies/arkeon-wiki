@@ -240,6 +240,17 @@ async function syncWikiFile(
         }
       }
 
+      // chunk_ids left as un-claimed candidates are about to be deleted.
+      // entity_embeddings cascades from entity_chunks; chunk_vectors is a
+      // virtual table without FK support so we delete its rows directly.
+      // Doing this here (instead of as a periodic worker scan) means the
+      // embedder loop never has to do a global LEFT JOIN to find orphans.
+      const droppedIds: number[] = [];
+      for (const ids of existingByHash.values()) droppedIds.push(...ids);
+      for (const id of droppedIds) {
+        await tx`DELETE FROM chunk_vectors WHERE chunk_id = ${id}`;
+      }
+
       await tx`
         DELETE FROM entity_chunks
         WHERE entity_id = ${entityId} AND chunk_index < 0
