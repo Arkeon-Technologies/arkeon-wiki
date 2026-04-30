@@ -2,15 +2,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Filesystem keyword search via ripgrep.
+ * Search strategies for the /search endpoint (issue #47).
  *
- * For each registered space, spawns ripgrep against the space's watch_dir
- * with --json output, parses the stream into per-file match counts and
- * snippets, then joins the results to entities in SQLite by source_path.
+ * Two independent backends:
  *
- * Filesystem-first: there is no keyword index in SQLite — the filesystem
- * (queried by ripgrep) is the index. Vector search will be layered on top
- * of this in a follow-up (sqlite-vec + EmbeddingGemma).
+ *   - searchKeyword(): filesystem keyword search via ripgrep. For each
+ *     registered space, spawns ripgrep against the space's watch_dir
+ *     with --json output, parses the stream into per-file match counts
+ *     and snippets, then joins the results to entities by source_path.
+ *
+ *   - searchVector(): semantic search via sqlite-vec. Embeds the query
+ *     once, KNN against chunk_vectors, joins to entity_chunks + entities.
+ *     Returns chunk-level hits with cosine similarity scores.
+ *
+ * No fusion. The /search route runs whichever strategies the caller
+ * asked for in parallel and dumps the results in a namespaced response.
+ * Caller (UI / LLM) decides how to combine.
  */
 
 import { spawn } from "node:child_process";
@@ -18,13 +25,14 @@ import { existsSync } from "node:fs";
 import { rgPath } from "@vscode/ripgrep";
 
 import { createSql } from "./sql.js";
+import { getEmbedder } from "./embedder/index.js";
 
 const SNIPPET_MAX_LEN = 240;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 200;
 const DEFAULT_SNIPPETS_PER_FILE = 3;
 
-export interface SearchOptions {
+export interface KeywordSearchOptions {
   query: string;
   spaceId?: string;
   limit?: number;
@@ -37,7 +45,7 @@ export interface SearchSnippet {
   text: string;
 }
 
-export interface SearchHit {
+export interface KeywordSearchHit {
   entity_id: string;
   space_id: string;
   type: string;
@@ -47,12 +55,42 @@ export interface SearchHit {
   snippets: SearchSnippet[];
 }
 
-export interface SearchResult {
-  query: string;
-  hits: SearchHit[];
+export interface KeywordSearchResult {
+  hits: KeywordSearchHit[];
+  total: number;
   /** Files matched by ripgrep that had no entity mapping (e.g., excluded
    *  extensions) and were therefore skipped. Useful for diagnostics. */
   unmatched_files: number;
+}
+
+export interface VectorSearchOptions {
+  query: string;
+  spaceId?: string;
+  limit?: number;
+}
+
+export interface VectorSearchHit {
+  entity_id: string;
+  space_id: string;
+  label: string;
+  source_path: string;
+  chunk_id: number;
+  chunk_kind: string;
+  heading_path: string;
+  text: string;
+  /** 1 - cosine_distance. Higher is more similar. Range: ~[-1, 1]. */
+  similarity: number;
+}
+
+export interface VectorSearchResult {
+  hits: VectorSearchHit[];
+  total: number;
+  /** Identifier of the embedder model that produced the query vector,
+   *  e.g. "mock@256" or "ollama:embeddinggemma:300m@256". Lets clients
+   *  see what kind of semantic search they actually got — important for
+   *  the mock-fallback case where the pipeline ran but the results are
+   *  not semantically meaningful. */
+  model: string;
 }
 
 interface FileResult {
@@ -192,9 +230,11 @@ export function runRipgrep(opts: {
 }
 
 /**
- * Run a keyword search across one or all registered spaces.
+ * Filesystem keyword search across one or all registered spaces.
  */
-export async function search(opts: SearchOptions): Promise<SearchResult> {
+export async function searchKeyword(
+  opts: KeywordSearchOptions,
+): Promise<KeywordSearchResult> {
   const query = opts.query;
   const limit = Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
   const maxSnippets = Math.max(0, opts.maxSnippetsPerFile ?? DEFAULT_SNIPPETS_PER_FILE);
@@ -205,11 +245,11 @@ export async function search(opts: SearchOptions): Promise<SearchResult> {
     : sql`SELECT id, watch_dir FROM spaces`);
 
   if (spaces.length === 0) {
-    return { query, hits: [], unmatched_files: 0 };
+    return { hits: [], total: 0, unmatched_files: 0 };
   }
 
   let unmatched = 0;
-  const hits: SearchHit[] = [];
+  const hits: KeywordSearchHit[] = [];
 
   for (const space of spaces) {
     const watchDir = space.watch_dir as string | null;
@@ -265,9 +305,89 @@ export async function search(opts: SearchOptions): Promise<SearchResult> {
       b.match_count - a.match_count || a.entity_id.localeCompare(b.entity_id),
   );
 
+  const limited = hits.slice(0, limit);
   return {
-    query,
-    hits: hits.slice(0, limit),
+    hits: limited,
+    total: limited.length,
     unmatched_files: unmatched,
+  };
+}
+
+/**
+ * Semantic search via sqlite-vec. Embeds the query, runs KNN over
+ * chunk_vectors, joins back to entity_chunks + entities, and returns
+ * chunk-level hits sorted by similarity (descending).
+ *
+ * `space_id`, when present, filters joined entity rows. The KNN happens
+ * across all chunks first because vec0's MATCH operator can't be
+ * combined with a join-table filter inside its query plan; the post-join
+ * WHERE then drops cross-space hits. With the typical wiki size this is
+ * fine; if it ever matters we can shard by space at write time.
+ *
+ * Returns an empty result if no embeddings exist yet, the embedder
+ * fails, or the space has no chunks. The route layer is responsible for
+ * deciding whether that's a 200 with []  or some other behaviour.
+ */
+export async function searchVector(
+  opts: VectorSearchOptions,
+): Promise<VectorSearchResult> {
+  const limit = Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
+
+  const embedder = await getEmbedder();
+  const [vec] = await embedder.embed([opts.query]);
+  const vecBuf = Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
+
+  const sql = createSql();
+
+  // vec0 KNN. The k value has to live inside the WHERE as
+  // `cv.k = <int>`; we pin it to the Number-validated limit + a margin so
+  // post-join space filtering doesn't starve the result. The embedding
+  // is bound as a Float32Array buffer (verified — vec0 only rejects
+  // parameterised PKs, not parameterised match operands).
+  const k = opts.spaceId ? Math.min(limit * 4, MAX_LIMIT) : limit;
+  if (!Number.isInteger(k) || k < 1) {
+    return { hits: [], total: 0, model: embedder.modelId };
+  }
+
+  const baseSql = `
+    SELECT
+      cv.chunk_id AS chunk_id,
+      cv.distance AS distance,
+      ec.entity_id AS entity_id,
+      ec.chunk_kind AS chunk_kind,
+      ec.heading_path AS heading_path,
+      ec.text AS text,
+      e.space_id AS space_id,
+      e.label AS label,
+      e.source_path AS source_path
+    FROM chunk_vectors cv
+    JOIN entity_chunks ec ON ec.id = cv.chunk_id
+    JOIN entities e ON e.id = ec.entity_id
+    WHERE cv.embedding MATCH ?
+      AND cv.k = ${k}
+      ${opts.spaceId ? "AND e.space_id = ?" : ""}
+    ORDER BY cv.distance
+    LIMIT ${limit}
+  `;
+
+  const params = opts.spaceId ? [vecBuf, opts.spaceId] : [vecBuf];
+  const rows = await sql.query(baseSql, params);
+
+  const hits: VectorSearchHit[] = rows.map((r) => ({
+    entity_id: r.entity_id as string,
+    space_id: r.space_id as string,
+    label: r.label as string,
+    source_path: r.source_path as string,
+    chunk_id: r.chunk_id as number,
+    chunk_kind: r.chunk_kind as string,
+    heading_path: r.heading_path as string,
+    text: r.text as string,
+    similarity: 1 - (r.distance as number),
+  }));
+
+  return {
+    hits,
+    total: hits.length,
+    model: embedder.modelId,
   };
 }

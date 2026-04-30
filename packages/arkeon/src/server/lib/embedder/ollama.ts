@@ -51,9 +51,12 @@ class OllamaEmbedder implements Embedder {
       body: JSON.stringify({
         model: this.model,
         input: texts,
-        // EmbeddingGemma supports Matryoshka — request 256d explicitly so
-        // we don't waste bytes round-tripping the full 768d.
-        options: { dimensions: EMBEDDING_DIM },
+        // EmbeddingGemma supports Matryoshka. The truncation knob lives
+        // at the *top level* of the embed request — Ollama silently
+        // ignores it if it's nested under `options`. Without this, the
+        // model returns its full 768-d output and our 256-d schema
+        // would reject every embed at the worker.
+        dimensions: EMBEDDING_DIM,
       }),
     });
 

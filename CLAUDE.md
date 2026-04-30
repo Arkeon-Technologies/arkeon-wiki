@@ -100,7 +100,8 @@ No actors, no auth, no versioning. Schema across `src/schema/001-foundation.sql`
 - `src/server/agents/path-filter.ts` — `shouldTrigger(path)` — the hardcoded `wiki/**` + `.arkeon/**` filter the scheduler consults before enqueueing. Single source of truth; when user-tunable include/exclude lands, this file is the place.
 - `src/server/lib/chunker.ts` — `chunkWiki(parsed, label)`: pure function that turns a wiki into the chunks the embedder will see. Issue #47. Card chunk (label + subject_type + aliases + short_description + lead paragraph) plus one chunk per non-empty H2 with the heading path prepended. Oversized sections fall back to H3-then-paragraph splits with ~80-token overlap. Runs on every wiki sync (`syncWikiFile()`); set `ARKEON_WIKI_CHUNKING=0` to disable.
 - `src/server/lib/embedding-queue.ts` — pure SQL helpers around `embedding_queue` (enqueue, claimNext, complete, fail, reclaimOrphans, queueStats, waitForDrain). Same lease pattern as `agent-queue.ts`.
-- `src/server/lib/embedder/` — the embedder runtime. `index.ts` resolves a singleton via `getEmbedder()` (Ollama auto-detect → mock fallback; `ARKEON_WIKI_EMBEDDER=mock|ollama` overrides). `mock.ts` is a deterministic SHA-derived embedder used in tests and as the no-runtime fallback. `ollama.ts` is the production HTTP backend (`embeddinggemma:300m` by default; `ARKEON_WIKI_OLLAMA_URL` / `ARKEON_WIKI_OLLAMA_MODEL` to customise). `worker.ts` claims entities off `embedding_queue`, embeds their chunks, and writes to `chunk_vectors` + `entity_embeddings`. The bundled-ONNX runtime + RRF query path land in follow-up PRs.
+- `src/server/lib/embedder/` — the embedder runtime. `index.ts` resolves a singleton via `getEmbedder()` (Ollama auto-detect → mock fallback; `ARKEON_WIKI_EMBEDDER=mock|ollama` overrides). `mock.ts` is a deterministic SHA-derived embedder used in tests and as the no-runtime fallback. `ollama.ts` is the production HTTP backend (`embeddinggemma:300m` by default; `ARKEON_WIKI_OLLAMA_URL` / `ARKEON_WIKI_OLLAMA_MODEL` to customise). `worker.ts` claims entities off `embedding_queue`, embeds their chunks, and writes to `chunk_vectors` + `entity_embeddings`. The bundled-ONNX runtime is the remaining piece for issue #47.
+- `src/server/lib/search.ts` — both search strategies. `searchKeyword()` is the ripgrep-backed entity-level keyword search; `searchVector()` embeds the query and runs KNN over `chunk_vectors`, joining back for entity metadata and chunk text. Pure functions; the route layer composes them.
 
 ## API endpoints
 
@@ -109,20 +110,22 @@ No actors, no auth, no versioning. Schema across `src/schema/001-foundation.sql`
 - `GET /wikis?space_id=...&subject_type=...&status=...&label_contains=...&sort=...&include=...` — list wikis with frontmatter filters; `label_contains` is a case-insensitive substring match (so "Baker Street" finds "221B Baker Street"); `include=relationships` adds edges, `include=counts` attaches per-wiki incoming/outgoing link counts.
 - `GET /wikis/{id}?include=content` — wiki properties + relationships (and body if requested)
 - `DELETE /wikis/{id}` — remove wiki from the index
-- `GET /search?q=...&space_id=...&limit=...&snippets=...&regex=...` — keyword search via ripgrep against the watched directory; returns ranked entity hits with line snippets
+- `GET /search?q=...&mode=keyword|vector|both&space_id=...&limit=...&snippets=...&regex=...` — search across registered spaces. Default `mode=both` runs keyword (ripgrep) and vector (sqlite-vec KNN) in parallel and returns each result set in its own namespace (`response.keyword`, `response.vector`). No fusion. Keyword hits are entity-level with line snippets ranked by match count; vector hits are chunk-level sorted by similarity (1 − cosine_distance) with `chunk_id`, `heading_path`, and the chunk text.
 - `GET /health` / `GET /ready`
 
 No auth required. Content lives on disk — the API returns metadata and relationships only.
 
 ## Search
 
-Keyword search is filesystem-first: there is no keyword index in SQLite. The
-`/search` endpoint and `arkeon-wiki search` CLI spawn ripgrep (bundled via
-`@vscode/ripgrep`, cross-platform) against each space's `watch_dir`, parse
-`--json` output, and join the matched paths back to entities. Results are
-ranked by `matched_lines` count.
+Two strategies, no fusion. The `/search` endpoint and `arkeon-wiki search` CLI run whichever the caller asks for and dump the results in a namespaced response — `{keyword: ..., vector: ...}`. Caller (UI, LLM, scripted client) decides what to do with both.
 
-Vector / semantic search is in progress (issue #47). The chunker, queue, and embedder pipeline have landed: every wiki sync produces `entity_chunks` rows, enqueues the entity, and an in-process worker writes 256-dim embeddings into the `chunk_vectors` (sqlite-vec) virtual table via Ollama (auto-detected) or a deterministic mock fallback. The query path — query encoder, vector KNN, RRF fusion with ripgrep, public `/search` integration — and the bundled-ONNX runtime are still pending.
+**Keyword** (`mode=keyword`) is filesystem-first: ripgrep (bundled via `@vscode/ripgrep`, cross-platform) spawns against each space's `watch_dir`, parses `--json` output, joins matched paths back to entities, and ranks by `matched_lines` count. There is no keyword index in SQLite — the filesystem is the index.
+
+**Vector** (`mode=vector`) embeds the query via the configured embedder (Ollama auto-detected → deterministic mock fallback), runs KNN against the `chunk_vectors` (sqlite-vec) virtual table, joins back to `entity_chunks` and `entities`, and returns chunk-level hits sorted by similarity (1 − cosine_distance, higher is better). No threshold; top-K with caller-side filtering. The vector response includes the embedder's `model` identifier so clients can detect when they're getting mock semantics vs real embeddings.
+
+**Both** (`mode=both`, default) runs the two in parallel with `Promise.allSettled` and populates both namespaces. If one strategy fails (e.g. embedder unreachable), the other still returns and the failed one is reported as empty hits — better UX than 5xx'ing a search query because half the pipeline isn't ready.
+
+The bundled ONNX runtime — so users without Ollama get real embeddings out of the box — is still pending and tracked in #47.
 
 ## Commands
 
@@ -177,8 +180,8 @@ Override the state dir with `ARKEON_WIKI_HOME` env var or `--data-dir`.
 
 ## What's NOT here (yet)
 
-- No public vector-search query path. The pipeline writes embeddings; nothing queries them yet. RRF fusion with ripgrep and the `/search?mode=hybrid` integration are the next PR for issue #47.
 - No bundled ONNX runtime. Real embeddings require a local Ollama install + `ollama pull embeddinggemma:300m`. Without it, the worker falls back to a deterministic mock embedder that exercises the pipeline but is not semantically useful.
+- No server-side fusion of keyword + vector results (RRF). `mode=both` returns parallel arrays; if a UI needs a single ranked list it does the merge client-side. The unfused-parallel shape is a deliberate choice for our LLM-downstream use case; if a fused mode turns out to be needed later we can add `mode=hybrid` as a fourth option without breaking existing callers.
 - No FTS5 / BM25 ranking (ripgrep gives substring matching only)
 - No auth / API keys
 - No explorer (needs updating for new API)
