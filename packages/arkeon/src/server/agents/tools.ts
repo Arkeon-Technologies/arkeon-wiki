@@ -18,7 +18,7 @@ import { z } from "zod";
 
 import { safeResolve } from "../lib/file-edits.js";
 import { parseFrontmatter } from "../lib/frontmatter.js";
-import { search as ripgrepSearch } from "../lib/search.js";
+import { searchKeyword } from "../lib/search.js";
 import { listWikis } from "../lib/wikis.js";
 
 import { defineTool, type ToolFactory } from "./define-tool.js";
@@ -72,7 +72,7 @@ const searchTool = defineTool("search", {
       .describe("Max line snippets per matching file (default 3)."),
   }),
   call: ({ query, regex, limit, max_snippets_per_file }, ctx) =>
-    ripgrepSearch({
+    searchKeyword({
       query,
       spaceId: ctx.space.id,
       regex,
