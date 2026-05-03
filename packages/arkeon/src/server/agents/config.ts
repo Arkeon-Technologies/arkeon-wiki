@@ -66,7 +66,19 @@ export type AgentConfig = z.infer<typeof AGENT_CONFIG_SCHEMA>;
 // ── Loader ────────────────────────────────────────────────────────
 
 const REPO_RELATIVE_PATH = join(".arkeon", "agents.yaml");
-const USER_GLOBAL_PATH = join(homedir(), ".arkeon-wiki", "agents.yaml");
+
+/**
+ * Resolve the user-global agents.yaml path at call time so
+ * ARKEON_WIKI_HOME (set by `--data-dir` or by the named-instance
+ * lifecycle helpers) actually relocates it. A module-level constant
+ * captured `homedir()` once at import, which made isolated test
+ * environments and named-instance installs silently fall back to the
+ * real `~/.arkeon-wiki/agents.yaml`.
+ */
+function userGlobalPath(): string {
+  const base = process.env.ARKEON_WIKI_HOME ?? join(homedir(), ".arkeon-wiki");
+  return join(base, "agents.yaml");
+}
 
 export interface LoadAgentConfigOptions {
   /** The space's watch_dir. The repo-local config is at
@@ -82,12 +94,12 @@ export interface LoadAgentConfigOptions {
  * empty) AgentConfig.
  */
 export function loadAgentConfig(opts: LoadAgentConfigOptions = {}): AgentConfig {
-  const userGlobalPath = opts.userGlobalPath ?? USER_GLOBAL_PATH;
+  const resolvedUserGlobal = opts.userGlobalPath ?? userGlobalPath();
   const repoLocalPath = opts.spaceDir
     ? join(opts.spaceDir, REPO_RELATIVE_PATH)
     : null;
 
-  const userGlobal = readConfigFile(userGlobalPath);
+  const userGlobal = readConfigFile(resolvedUserGlobal);
   const repoLocal = repoLocalPath ? readConfigFile(repoLocalPath) : {};
 
   return mergeConfigs(userGlobal, repoLocal);

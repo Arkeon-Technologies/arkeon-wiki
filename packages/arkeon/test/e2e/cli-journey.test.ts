@@ -53,12 +53,12 @@ interface CliResult {
 
 async function runCli(
   args: string[],
-  opts: { expectOk?: boolean } = {},
+  opts: { expectOk?: boolean; cwd?: string } = {},
 ): Promise<CliResult> {
   const { stdout, stderr } = await execFileP(
     "npx",
     ["tsx", CLI_ENTRY, ...args],
-    { env: testEnv, timeout: 30_000 },
+    { env: testEnv, timeout: 30_000, cwd: opts.cwd },
   ).catch((err: NodeJS.ErrnoException & { stdout?: string; stderr?: string }) => {
     if (err.stdout != null || err.stderr != null) {
       return { stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
@@ -252,5 +252,54 @@ describe("CLI search journey through detached daemon", () => {
     const status = await runCli(["status", "--name", NAME]);
     expect(status.json.state).toBe("running");
     expect(status.json.pid).toBeTypeOf("number");
+  });
+
+  it("--api-url overrides a stale .arkeon/state.json (regression for the silent-ignore bug)", async () => {
+    // The smoke-test agent caught: when both the root and the search
+    // subcommand declared --api-url, Commander routed the value to
+    // globals but runSearch read subcommand-local opts, so the user's
+    // override silently lost to repoState.api_url. Then in runSearch's
+    // precedence, repoState beat process.env.ARKE_API_URL anyway.
+    //
+    // After the fix:
+    //   - --api-url is declared once, at the root program
+    //   - precedence is ARKE_API_URL > repoState > default
+    //   - explicit overrides win over a stale state.json
+    //
+    // This test creates a state.json pointing at a dead port, runs
+    // `arkeon-wiki search` from that directory with --api-url pointing
+    // at the real daemon, and verifies the search succeeds.
+    const cwd = join(testHome, "stale-bound-dir");
+    mkdirSync(join(cwd, ".arkeon"), { recursive: true });
+    writeFileSync(
+      join(cwd, ".arkeon", "state.json"),
+      JSON.stringify({
+        api_url: "http://localhost:65530", // a port nothing listens on
+        space_id: "stale-space",
+        space_name: "stale",
+        created_at: new Date().toISOString(),
+      }),
+    );
+
+    const res = await runCli(
+      [
+        "search",
+        "Turing",
+        "--api-url",
+        apiUrl,
+        "--space",
+        spaceId,
+        "--mode",
+        "keyword",
+      ],
+      { cwd },
+    );
+
+    // If --api-url wins, the search reaches the real daemon and Turing
+    // is found. If repoState had won, we'd have hit a connect refused
+    // on port 65530.
+    expect(res.json.ok).toBe(true);
+    const labels = (res.json.keyword.hits as { label: string }[]).map((h) => h.label);
+    expect(labels).toContain("Alan Turing");
   });
 });

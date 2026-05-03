@@ -16,19 +16,19 @@ import { DEFAULT_API_PORT } from "../../lib/local-runtime.js";
 import { output } from "../../lib/output.js";
 import { loadRepoState, type RepoState } from "../../lib/repo-state.js";
 
-interface InitOptions {
-  apiUrl?: string;
-}
+// --api-url is declared on the root program (src/index.ts); the
+// preAction hook moves the value into ARKE_API_URL. Don't redeclare
+// it here — duplicate options have a precedence bug in Commander
+// where the value lands on globals but the subcommand reads locally.
 
 export function registerInitCommand(program: Command): void {
   program
     .command("init")
     .argument("[name]", "Space name (defaults to directory name)")
     .description("Register this directory as an Arkeon space")
-    .option("--api-url <url>", "API URL (default: http://localhost:8000)")
-    .action(async (name: string | undefined, options: InitOptions) => {
+    .action(async (name: string | undefined) => {
       try {
-        await runInit(name, options);
+        await runInit(name);
       } catch (error) {
         output.error(error, { operation: "init" });
         process.exitCode = 1;
@@ -36,10 +36,10 @@ export function registerInitCommand(program: Command): void {
     });
 }
 
-async function runInit(name: string | undefined, options: InitOptions): Promise<void> {
+async function runInit(name: string | undefined): Promise<void> {
   const cwd = process.cwd();
   const spaceName = name ?? basename(cwd);
-  const apiUrl = options.apiUrl ?? process.env.ARKE_API_URL ?? `http://localhost:${DEFAULT_API_PORT}`;
+  const apiUrl = process.env.ARKE_API_URL ?? `http://localhost:${DEFAULT_API_PORT}`;
 
   // Check if already initialized
   const existing = loadRepoState();

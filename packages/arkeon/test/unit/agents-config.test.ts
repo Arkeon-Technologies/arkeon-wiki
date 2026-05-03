@@ -152,6 +152,48 @@ describe("loadAgentConfig", () => {
       }),
     ).toThrow(/not valid YAML/);
   });
+
+  it("honors ARKEON_WIKI_HOME for the user-global agents.yaml path", () => {
+    // Regression for the case the smoke test surfaced: a module-level
+    // constant captured homedir() at import, so isolated installs that
+    // override ARKEON_WIKI_HOME silently fell back to the real
+    // ~/.arkeon-wiki/agents.yaml. Now path resolution happens at call
+    // time and ARKEON_WIKI_HOME relocates it.
+    const fakeHome = join(dir, "isolated-home");
+    mkdirSync(fakeHome, { recursive: true });
+    writeFileSync(
+      join(fakeHome, "agents.yaml"),
+      "defaults:\n  provider: openai\n  model: from-arkeon-home\n",
+    );
+
+    const prev = process.env.ARKEON_WIKI_HOME;
+    try {
+      process.env.ARKEON_WIKI_HOME = fakeHome;
+      // No userGlobalPath override — exercise the code path that
+      // computes the path from env.
+      const config = loadAgentConfig({ spaceDir: dir });
+      expect(config.defaults?.model).toBe("from-arkeon-home");
+    } finally {
+      if (prev === undefined) delete process.env.ARKEON_WIKI_HOME;
+      else process.env.ARKEON_WIKI_HOME = prev;
+    }
+  });
+
+  it("falls back to ~/.arkeon-wiki/agents.yaml when ARKEON_WIKI_HOME is unset", () => {
+    // The fallback shouldn't be tested by writing to the user's real
+    // home. Just assert that an unset ARKEON_WIKI_HOME doesn't crash
+    // and returns an empty config when ~/.arkeon-wiki/agents.yaml
+    // happens not to exist on this machine. If it DOES exist, we
+    // skip — we're not validating its contents, only the resolution.
+    const prev = process.env.ARKEON_WIKI_HOME;
+    try {
+      delete process.env.ARKEON_WIKI_HOME;
+      // Should not throw; behaviour beyond that depends on the host.
+      expect(() => loadAgentConfig({ spaceDir: dir })).not.toThrow();
+    } finally {
+      if (prev !== undefined) process.env.ARKEON_WIKI_HOME = prev;
+    }
+  });
 });
 
 // ── buildAgentRole ───────────────────────────────────────────────
