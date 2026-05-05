@@ -159,11 +159,18 @@ export async function applyEdit(
 
 /**
  * Stamp `edited_by` (and optionally `edit_note`) into the file's YAML
- * frontmatter. If the file has no frontmatter, one is added. If
- * `edit_note` is empty/missing, any prior note is removed so an old
- * note doesn't linger past the next edit.
+ * frontmatter. No-op when the input content doesn't already have a
+ * frontmatter block — we only annotate files whose authors opted in
+ * to YAML metadata, never invent it. Wiki bodies always start with
+ * `---\n`, so stamping applies to wiki CREATE / APPEND / REPLACE.
+ * A future tool that writes a non-wiki .md (e.g. README.md without
+ * frontmatter) gets no surprise stamp.
+ *
+ * If `edit_note` is empty/missing, any prior note is removed so an
+ * old note doesn't linger past the next edit.
  */
 function stampFrontmatter(content: string, role: string, note?: string): string {
+  if (!content.trimStart().startsWith("---")) return content;
   const { properties, body } = parseFrontmatter(content);
   properties.edited_by = role;
   if (note != null && note.trim().length > 0) {

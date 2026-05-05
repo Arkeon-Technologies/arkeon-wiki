@@ -221,4 +221,31 @@ describe("entity_edits audit log", () => {
     expect(latest[0].by_role).toBe("human");
     expect(latest[0].edit_kind).toBe("resync");
   });
+
+  it("applyEdit on a frontmatter-less .md file does NOT inject frontmatter", async () => {
+    // Hypothetical future tool that writes a plain markdown file
+    // (e.g. README.md). The stamp should leave non-wiki content alone
+    // — we only annotate files whose authors opted into YAML metadata,
+    // never invent it.
+    const result = await applyEdit(
+      space,
+      {
+        kind: "write",
+        path: "sources/notes.md",
+        content: "# Notes\n\nJust a plain markdown file. No frontmatter.\n",
+      },
+      { role: "ingestor", edit_kind: "create" },
+    );
+
+    expect(result.kind).toBe("write");
+    const onDisk = readFileSync(
+      join(testDir, "sources/notes.md"),
+      "utf-8",
+    );
+    // No frontmatter fence injected.
+    expect(onDisk).not.toContain("edited_by:");
+    expect(onDisk).not.toMatch(/^---\n/);
+    // Body untouched.
+    expect(onDisk).toBe("# Notes\n\nJust a plain markdown file. No frontmatter.\n");
+  });
 });
