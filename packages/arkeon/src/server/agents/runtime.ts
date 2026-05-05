@@ -28,7 +28,12 @@ import {
   type Tool,
 } from "ai";
 
-import { applyEdit, type ApplyEditResult, type FileEdit } from "../lib/file-edits.js";
+import {
+  applyEdit,
+  type ApplyEditResult,
+  type FileEdit,
+} from "../lib/file-edits.js";
+import type { EditKind } from "../lib/edit-context.js";
 import { withPathLock } from "../lib/path-lock.js";
 import { createSql } from "../lib/sql.js";
 import { type Space } from "../lib/sync.js";
@@ -37,11 +42,21 @@ import { resolveModel, type ModelConfig } from "./model.js";
 
 // ── Types ─────────────────────────────────────────────────────────
 
+/**
+ * Per-call attribution that the tool layer supplies to AgentContext.applyEdit.
+ * The role is implied by the context (whoever owns the AgentContext) so the
+ * tool layer only has to specify the semantic edit_kind and an optional note.
+ */
+export interface ToolEditOpts {
+  edit_kind: EditKind;
+  note?: string;
+}
+
 export interface AgentContext {
   space: Space;
   role: string;
   edits: ApplyEditResult[];
-  applyEdit(edit: FileEdit): Promise<ApplyEditResult>;
+  applyEdit(edit: FileEdit, opts: ToolEditOpts): Promise<ApplyEditResult>;
   log(level: "info" | "warn" | "error", msg: string, meta?: Record<string, unknown>): void;
 }
 
@@ -237,8 +252,12 @@ export function makeContext(space: Space, role: string): AgentContext {
     space,
     role,
     edits,
-    applyEdit: async (edit) => {
-      const result = await applyEdit(space, edit);
+    applyEdit: async (edit, opts) => {
+      const result = await applyEdit(space, edit, {
+        role,
+        edit_kind: opts.edit_kind,
+        note: opts.note,
+      });
       edits.push(result);
       return result;
     },

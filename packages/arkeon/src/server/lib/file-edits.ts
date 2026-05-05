@@ -24,12 +24,37 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
 
+import {
+  clearEditContext,
+  setEditContext,
+  type EditKind,
+} from "./edit-context.js";
+import { parseFrontmatter, serializeFrontmatter } from "./frontmatter.js";
 import { removeByPath, syncFile, type Space, type SyncResult } from "./sync.js";
 
 export type FileEdit =
   | { kind: "write"; path: string; content: string }
   | { kind: "edit"; path: string; search: string; replace: string }
   | { kind: "delete"; path: string };
+
+/**
+ * Caller-supplied attribution for a single applyEdit() call. The role
+ * is stamped into the file's frontmatter (for .md targets) so a human
+ * reading the file sees who last touched it, and is also threaded
+ * into the edit-context registry so syncFile() inserts the right
+ * `by_role` into entity_edits when it observes the resulting write.
+ *
+ * `edit_kind` is the semantic kind of edit (more granular than the
+ * FileEdit kind — e.g. a `kind: "write"` FileEdit can be a CREATE or
+ * an APPEND depending on whether the target already existed).
+ *
+ * `note` is an optional one-line summary surfaced by /wikis/{id}/history.
+ */
+export interface EditOpts {
+  role: string;
+  edit_kind: EditKind;
+  note?: string;
+}
 
 /**
  * Resolve a relative path against a watch dir, rejecting absolute paths
@@ -60,48 +85,93 @@ export type ApplyEditResult =
 /**
  * Apply a single edit and propagate the change into the SQLite index.
  *
+ * For write/edit kinds on .md files, the file's YAML frontmatter is
+ * stamped with `edited_by: <role>` (and `edit_note` if supplied) so a
+ * human reader of the file can see who last touched it. The same
+ * attribution is registered in the edit-context registry for the
+ * lifetime of the call so syncFile() can record an entity_edits row
+ * with the correct `by_role`.
+ *
  * Throws on edit semantics violations: missing files for `edit`/`delete`,
  * and SEARCH that doesn't match exactly once for `edit`.
  */
-export async function applyEdit(space: Space, edit: FileEdit): Promise<ApplyEditResult> {
+export async function applyEdit(
+  space: Space,
+  edit: FileEdit,
+  opts: EditOpts,
+): Promise<ApplyEditResult> {
   const absPath = safeResolve(space.watch_dir, edit.path);
+  const isMarkdown = edit.path.endsWith(".md");
 
-  if (edit.kind === "write") {
-    mkdirSync(dirname(absPath), { recursive: true });
-    writeFileSync(absPath, edit.content, "utf-8");
-    const sync = await syncFile(space, edit.path);
-    return { path: edit.path, kind: "write", sync };
-  }
+  setEditContext(space.id, edit.path, {
+    role: opts.role,
+    edit_kind: opts.edit_kind,
+    note: opts.note,
+  });
 
-  if (edit.kind === "edit") {
+  try {
+    if (edit.kind === "write") {
+      const stamped = isMarkdown
+        ? stampFrontmatter(edit.content, opts.role, opts.note)
+        : edit.content;
+      mkdirSync(dirname(absPath), { recursive: true });
+      writeFileSync(absPath, stamped, "utf-8");
+      const sync = await syncFile(space, edit.path);
+      return { path: edit.path, kind: "write", sync };
+    }
+
+    if (edit.kind === "edit") {
+      if (!existsSync(absPath)) {
+        throw new Error(`edit_file: ${edit.path} does not exist`);
+      }
+      if (edit.search.length === 0) {
+        throw new Error(`edit_file: search must be non-empty`);
+      }
+      const original = readFileSync(absPath, "utf-8");
+      const matches = countOccurrences(original, edit.search);
+      if (matches === 0) {
+        throw new Error(`edit_file: search did not match in ${edit.path}`);
+      }
+      if (matches > 1) {
+        throw new Error(
+          `edit_file: search matched ${matches} times in ${edit.path} (must be unique)`,
+        );
+      }
+      let updated = original.replace(edit.search, edit.replace);
+      if (isMarkdown) {
+        updated = stampFrontmatter(updated, opts.role, opts.note);
+      }
+      writeFileSync(absPath, updated, "utf-8");
+      const sync = await syncFile(space, edit.path);
+      return { path: edit.path, kind: "edit", sync };
+    }
+
     if (!existsSync(absPath)) {
-      throw new Error(`edit_file: ${edit.path} does not exist`);
+      throw new Error(`delete_file: ${edit.path} does not exist`);
     }
-    if (edit.search.length === 0) {
-      throw new Error(`edit_file: search must be non-empty`);
-    }
-    const original = readFileSync(absPath, "utf-8");
-    const matches = countOccurrences(original, edit.search);
-    if (matches === 0) {
-      throw new Error(`edit_file: search did not match in ${edit.path}`);
-    }
-    if (matches > 1) {
-      throw new Error(
-        `edit_file: search matched ${matches} times in ${edit.path} (must be unique)`,
-      );
-    }
-    const updated = original.replace(edit.search, edit.replace);
-    writeFileSync(absPath, updated, "utf-8");
-    const sync = await syncFile(space, edit.path);
-    return { path: edit.path, kind: "edit", sync };
+    unlinkSync(absPath);
+    const removedEntityId = await removeByPath(space.id, edit.path);
+    return { path: edit.path, kind: "delete", removedEntityId };
+  } finally {
+    clearEditContext(space.id, edit.path);
   }
+}
 
-  if (!existsSync(absPath)) {
-    throw new Error(`delete_file: ${edit.path} does not exist`);
+/**
+ * Stamp `edited_by` (and optionally `edit_note`) into the file's YAML
+ * frontmatter. If the file has no frontmatter, one is added. If
+ * `edit_note` is empty/missing, any prior note is removed so an old
+ * note doesn't linger past the next edit.
+ */
+function stampFrontmatter(content: string, role: string, note?: string): string {
+  const { properties, body } = parseFrontmatter(content);
+  properties.edited_by = role;
+  if (note != null && note.trim().length > 0) {
+    properties.edit_note = note;
+  } else {
+    delete properties.edit_note;
   }
-  unlinkSync(absPath);
-  const removedEntityId = await removeByPath(space.id, edit.path);
-  return { path: edit.path, kind: "delete", removedEntityId };
+  return serializeFrontmatter(properties, body);
 }
 
 function countOccurrences(haystack: string, needle: string): number {
