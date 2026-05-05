@@ -97,7 +97,8 @@ export const ROLE_CONFIG_SCHEMA = z.object({
    *          write:  gpt-5.4
    *  Layers like `defaults`: defaults < builtin < role. Same-provider
    *  swaps only — cross-provider tool-call format translation is out
-   *  of scope. Unknown phase names are silently ignored. */
+   *  of scope. Unknown phase names are ignored but trigger a console
+   *  warning at role-build time so typos are visible. */
   phase_models: z.record(z.string(), z.string()).optional(),
 });
 

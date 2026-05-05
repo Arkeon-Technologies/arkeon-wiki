@@ -116,6 +116,7 @@ export function buildAgentRole(name: string, config: AgentConfig): AgentRole {
   };
 
   // Resolve each phase's overrides against the role-level fallbacks.
+  const knownPhaseNames = new Set<string>();
   const resolvedPhases = phases.map((p, i): ResolvedPhase => {
     const phaseTools = p.tools ?? tools;
     if (phaseTools.length === 0) {
@@ -124,6 +125,7 @@ export function buildAgentRole(name: string, config: AgentConfig): AgentRole {
       );
     }
     const phaseName = p.name ?? `phase-${i + 1}`;
+    knownPhaseNames.add(phaseName);
     // Precedence: explicit phase.model wins over phase_models lookup,
     // which wins over the role-level model.
     const phaseModelId =
@@ -138,6 +140,20 @@ export function buildAgentRole(name: string, config: AgentConfig): AgentRole {
       model: toModelConfig(provider, phaseModelId, baseUrl, apiKey),
     };
   });
+
+  // Warn on phase_models keys that don't match any resolved phase
+  // name. Catches typos like `gathr:` that would otherwise silently
+  // fall through to the role-level model — the kind of bug you only
+  // notice when the cheap model bill arrives at the wrong size.
+  for (const key of Object.keys(phaseModelOverrides)) {
+    if (!knownPhaseNames.has(key)) {
+      console.warn(
+        `[agent/role-builder] role '${name}': phase_models key '${key}' ` +
+          `doesn't match any phase (${[...knownPhaseNames].join(", ")}). ` +
+          `Override ignored — check for a typo in agents.yaml.`,
+      );
+    }
+  }
 
   return {
     name,

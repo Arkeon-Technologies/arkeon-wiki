@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Arkeon Technologies, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -410,20 +410,54 @@ describe("buildAgentRole — built-in ingestor", () => {
     expect(phases[1].model.id).toBe("from-shorthand");
   });
 
-  it("phase_models with an unknown phase name is silently ignored", async () => {
-    const role = buildAgentRole("ingestor", {
-      defaults: { provider: "openai", model: "role-default" },
-      roles: {
-        ingestor: {
-          phase_models: { gather: "gpt-5.4-mini", nonexistent: "should-noop" },
+  it("phase_models with an unknown phase name is ignored but warned about", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const role = buildAgentRole("ingestor", {
+        defaults: { provider: "openai", model: "role-default" },
+        roles: {
+          ingestor: {
+            phase_models: { gather: "gpt-5.4-mini", nonexistent: "should-noop" },
+          },
         },
-      },
-    });
-    const { phases } = await role.buildPhases({
-      space: { id: "s1", name: "n", watch_dir: "/tmp" },
-    });
-    expect(phases[0].model.id).toBe("gpt-5.4-mini");
-    expect(phases[1].model.id).toBe("role-default");
+      });
+      const { phases } = await role.buildPhases({
+        space: { id: "s1", name: "n", watch_dir: "/tmp" },
+      });
+      expect(phases[0].model.id).toBe("gpt-5.4-mini");
+      expect(phases[1].model.id).toBe("role-default");
+
+      // The unknown key should produce a single warning naming it,
+      // listing valid phase names, and identifying the role.
+      const warnings = warnSpy.mock.calls.map((c) => c.join(" "));
+      const matching = warnings.filter((w) => w.includes("nonexistent"));
+      expect(matching).toHaveLength(1);
+      expect(matching[0]).toContain("ingestor");
+      expect(matching[0]).toContain("gather");
+      expect(matching[0]).toContain("write");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("phase_models with all-known keys does not warn", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      buildAgentRole("ingestor", {
+        defaults: { provider: "openai", model: "role-default" },
+        roles: {
+          ingestor: {
+            phase_models: { gather: "gpt-5.4-mini", write: "gpt-5.4" },
+          },
+        },
+      });
+      const matching = warnSpy.mock.calls
+        .map((c) => c.join(" "))
+        .filter((w) => w.includes("phase_models"));
+      expect(matching).toHaveLength(0);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("phase_models layers: role override beats defaults", async () => {
