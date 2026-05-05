@@ -21,8 +21,10 @@ import yaml from "js-yaml";
 import { waitForDrain } from "../../src/server/lib/embedding-queue.js";
 import { resetEmbedder } from "../../src/server/lib/embedder/index.js";
 
-const API_PORT = 18791;
-const BASE_URL = `http://localhost:${API_PORT}`;
+// Port is assigned by the OS (port 0) and read back from the server's
+// bound address. Hardcoding ports collides with anything the developer
+// happens to be running locally.
+let baseUrl: string;
 
 let testDir: string;
 let stateDir: string;
@@ -45,7 +47,7 @@ function writeWiki(
 }
 
 async function api(path: string): Promise<any> {
-  const res = await fetch(`${BASE_URL}${path}`);
+  const res = await fetch(`${baseUrl}${path}`);
   if (res.headers.get("content-type")?.includes("json")) {
     return res.json();
   }
@@ -84,7 +86,8 @@ beforeAll(async () => {
   await runMigrations({ dbPath: dbFile });
 
   const { startApi } = await import("../../src/server/server.js");
-  const apiHandle = await startApi({ port: API_PORT, dbPath: dbFile });
+  const apiHandle = await startApi({ port: 0, dbPath: dbFile });
+  baseUrl = `http://localhost:${apiHandle.address.port}`;
   serverHandle = { stop: async () => apiHandle.stop() };
 
   // Seed files BEFORE creating the space so reconciliation picks them up.
@@ -104,7 +107,7 @@ beforeAll(async () => {
     "Computability theory was advanced by Alan Turing.",
   );
 
-  const created = await fetch(`${BASE_URL}/spaces`, {
+  const created = await fetch(`${baseUrl}/spaces`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name: "search-space", watch_dir: testDir }),
@@ -452,7 +455,7 @@ describe("GET /search — vector edge cases", () => {
     expect(probeId).not.toBeNull();
 
     // Delete via the API. /wikis/{id} cascades.
-    const del = await fetch(`${BASE_URL}/wikis/${probeId}`, { method: "DELETE" });
+    const del = await fetch(`${baseUrl}/wikis/${probeId}`, { method: "DELETE" });
     expect((await del.json() as { deleted: boolean }).deleted).toBe(true);
 
     // Vector results should no longer surface this entity. The chunk row
@@ -568,7 +571,7 @@ describe("GET /search — cross-space scoping", () => {
       `---\n${fm}\n---\n\nA scoped probe: SECOND_SPACE_PROBE_TOKEN appears here.`,
     );
 
-    const created = await fetch(`${BASE_URL}/spaces`, {
+    const created = await fetch(`${baseUrl}/spaces`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({

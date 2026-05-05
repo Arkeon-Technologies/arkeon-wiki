@@ -22,8 +22,10 @@ import { waitForEntityBySourcePath } from "./helpers.js";
 import { waitForDrain, queueStats } from "../../src/server/lib/embedding-queue.js";
 import { EMBEDDING_DIM, resetEmbedder } from "../../src/server/lib/embedder/index.js";
 
-const API_PORT = 18791;
-const BASE_URL = `http://localhost:${API_PORT}`;
+// Port is assigned by the OS (port 0) and read back from the server's
+// bound address. Hardcoding ports collides with anything the developer
+// happens to be running locally.
+let baseUrl: string;
 
 let testDir: string;
 let stateDir: string;
@@ -108,10 +110,11 @@ beforeAll(async () => {
   await runMigrations({ dbPath: dbFile });
 
   const { startApi } = await import("../../src/server/server.js");
-  const apiHandle = await startApi({ port: API_PORT, dbPath: dbFile });
+  const apiHandle = await startApi({ port: 0, dbPath: dbFile });
+  baseUrl = `http://localhost:${apiHandle.address.port}`;
   serverHandle = { stop: () => apiHandle.stop() };
 
-  const res = await fetch(`${BASE_URL}/spaces`, {
+  const res = await fetch(`${baseUrl}/spaces`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ name: "embeddings-test", watch_dir: testDir }),
@@ -378,7 +381,7 @@ describe("embedding pipeline (mock embedder)", () => {
     expect(chunksBefore.length).toBeGreaterThan(0);
     expect((await getPivots(entity.id)).length).toBe(chunksBefore.length);
 
-    const res = await fetch(`${BASE_URL}/wikis/${entity.id}`, { method: "DELETE" });
+    const res = await fetch(`${baseUrl}/wikis/${entity.id}`, { method: "DELETE" });
     expect(((await res.json()) as { deleted: boolean }).deleted).toBe(true);
 
     // Cascades: chunks gone → pivots gone (FK CASCADE). Vec0 cleanup
