@@ -98,6 +98,78 @@ wikisRouter.get("/:id", async (c) => {
   return c.json(result);
 });
 
+// GET /wikis/:id/history — chronological audit log of edits to this wiki.
+//
+// Returns rows from entity_edits ordered newest-first. Useful for the
+// synthesizer (which polls for recent edits to drive its work) and for
+// human inspection of who-touched-what.
+//
+// Query params:
+//   limit  — max rows to return (default 50, max 500)
+//   offset — pagination offset
+//   since  — ISO-8601 timestamp; only return edits at-or-after this
+//   role   — restrict to edits made by a specific by_role
+wikisRouter.get("/:id/history", async (c) => {
+  const id = c.req.param("id");
+  const sql = createSql();
+
+  // Confirm the entity exists (otherwise 404 rather than empty array).
+  const entity = await sql`
+    SELECT id FROM entities WHERE id = ${id} AND type = 'wiki'
+  `;
+  if (entity.length === 0) {
+    throw new ApiError(404, "not_found", "Wiki not found");
+  }
+
+  const limit = Math.min(
+    Math.max(Number(c.req.query("limit") ?? 50), 1),
+    500,
+  );
+  const offset = Math.max(Number(c.req.query("offset") ?? 0), 0);
+  const since = c.req.query("since");
+  const role = c.req.query("role");
+
+  // Build the WHERE clause incrementally. The postgres-style
+  // tagged template SQL helper this codebase uses doesn't support
+  // dynamic AND-chains cleanly, so we branch on the four cases.
+  let rows;
+  if (since && role) {
+    rows = await sql`
+      SELECT id, by_role, edit_kind, edit_note, content_hash, at
+      FROM entity_edits
+      WHERE entity_id = ${id} AND at >= ${since} AND by_role = ${role}
+      ORDER BY at DESC, id DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `;
+  } else if (since) {
+    rows = await sql`
+      SELECT id, by_role, edit_kind, edit_note, content_hash, at
+      FROM entity_edits
+      WHERE entity_id = ${id} AND at >= ${since}
+      ORDER BY at DESC, id DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `;
+  } else if (role) {
+    rows = await sql`
+      SELECT id, by_role, edit_kind, edit_note, content_hash, at
+      FROM entity_edits
+      WHERE entity_id = ${id} AND by_role = ${role}
+      ORDER BY at DESC, id DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `;
+  } else {
+    rows = await sql`
+      SELECT id, by_role, edit_kind, edit_note, content_hash, at
+      FROM entity_edits
+      WHERE entity_id = ${id}
+      ORDER BY at DESC, id DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `;
+  }
+
+  return c.json({ entity_id: id, edits: rows });
+});
+
 // DELETE /wikis/:id — remove a wiki entity
 wikisRouter.delete("/:id", async (c) => {
   const id = c.req.param("id");
