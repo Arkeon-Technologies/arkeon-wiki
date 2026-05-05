@@ -104,4 +104,43 @@ describe("resolveRelativeLink", () => {
     const result = resolveRelativeLink("wiki/person/test.md", "../concept/sub/deep.md");
     expect(result).toBe("wiki/concept/sub/deep.md");
   });
+
+  // ── workspace-rooted form: paths starting with "/" ──────────────
+  it("resolves workspace-rooted link from a wiki file", () => {
+    const result = resolveRelativeLink(
+      "wiki/person/claude-shannon.md",
+      "/wiki/organization/bell-labs.md",
+    );
+    expect(result).toBe("wiki/organization/bell-labs.md");
+  });
+
+  it("resolves workspace-rooted link to a non-wiki file (sources)", () => {
+    // This is the case the dot-relative form gets wrong (../sources/x
+    // from wiki/<type>/<slug>.md should be ../../sources/x, two ups).
+    // The workspace-rooted form sidesteps the depth count entirely.
+    const result = resolveRelativeLink(
+      "wiki/concept/baptism.md",
+      "/sources/book-01-i.md",
+    );
+    expect(result).toBe("sources/book-01-i.md");
+  });
+
+  it("resolves workspace-rooted link the same regardless of source depth", () => {
+    // Same target reached from a shallow file and a deeply-nested one.
+    expect(
+      resolveRelativeLink("wiki/person/x.md", "/wiki/concept/y.md"),
+    ).toBe("wiki/concept/y.md");
+    expect(
+      resolveRelativeLink(
+        "wiki/person/saints/early-fathers/x.md",
+        "/wiki/concept/y.md",
+      ),
+    ).toBe("wiki/concept/y.md");
+  });
+
+  it("normalizes redundant segments in workspace-rooted paths", () => {
+    expect(
+      resolveRelativeLink("wiki/person/x.md", "/wiki/./person/../concept/y.md"),
+    ).toBe("wiki/concept/y.md");
+  });
 });
