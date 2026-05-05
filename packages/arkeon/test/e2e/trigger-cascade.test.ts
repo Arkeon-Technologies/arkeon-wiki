@@ -33,8 +33,16 @@ import { startScheduler } from "../../src/server/agents/scheduler.js";
 let testDir: string;
 let stateDir: string;
 let space: { id: string; name: string; watch_dir: string };
+let prevEmbeddingsEnv: string | undefined;
+let prevChunkingEnv: string | undefined;
+let prevOpenaiKey: string | undefined;
 
 beforeAll(async () => {
+  // Save before mutating — vitest e2e config has isolate: false, so
+  // sibling suites in the same process share process.env.
+  prevEmbeddingsEnv = process.env.ARKEON_WIKI_EMBEDDINGS;
+  prevChunkingEnv = process.env.ARKEON_WIKI_CHUNKING;
+  prevOpenaiKey = process.env.OPENAI_API_KEY;
   process.env.ARKEON_WIKI_EMBEDDINGS = "0";
   process.env.ARKEON_WIKI_CHUNKING = "0";
 
@@ -95,6 +103,12 @@ afterAll(async () => {
       force: true,
     });
   }
+  if (prevEmbeddingsEnv === undefined) delete process.env.ARKEON_WIKI_EMBEDDINGS;
+  else process.env.ARKEON_WIKI_EMBEDDINGS = prevEmbeddingsEnv;
+  if (prevChunkingEnv === undefined) delete process.env.ARKEON_WIKI_CHUNKING;
+  else process.env.ARKEON_WIKI_CHUNKING = prevChunkingEnv;
+  if (prevOpenaiKey === undefined) delete process.env.OPENAI_API_KEY;
+  else process.env.OPENAI_API_KEY = prevOpenaiKey;
 }, 10_000);
 
 describe("trigger cascade — ingestor edit fires synthesizer; synthesizer edit does not refire itself", () => {

@@ -30,10 +30,16 @@ import { generateUlid } from "../../src/server/lib/ids.js";
 let testDir: string;
 let stateDir: string;
 let space: { id: string; name: string; watch_dir: string };
+let prevEmbeddingsEnv: string | undefined;
+let prevChunkingEnv: string | undefined;
 
 beforeAll(async () => {
   // Disable embeddings + chunking — we don't need them for the audit
-  // log shape, and they pull in the bundled ONNX runtime.
+  // log shape, and they pull in the bundled ONNX runtime. Save and
+  // restore in afterAll so we don't poison sibling suites that run
+  // later in the same process (vitest e2e config has isolate: false).
+  prevEmbeddingsEnv = process.env.ARKEON_WIKI_EMBEDDINGS;
+  prevChunkingEnv = process.env.ARKEON_WIKI_CHUNKING;
   process.env.ARKEON_WIKI_EMBEDDINGS = "0";
   process.env.ARKEON_WIKI_CHUNKING = "0";
 
@@ -66,6 +72,10 @@ afterAll(async () => {
       force: true,
     });
   }
+  if (prevEmbeddingsEnv === undefined) delete process.env.ARKEON_WIKI_EMBEDDINGS;
+  else process.env.ARKEON_WIKI_EMBEDDINGS = prevEmbeddingsEnv;
+  if (prevChunkingEnv === undefined) delete process.env.ARKEON_WIKI_CHUNKING;
+  else process.env.ARKEON_WIKI_CHUNKING = prevChunkingEnv;
 }, 10_000);
 
 describe("entity_edits audit log", () => {
