@@ -29,6 +29,34 @@ import { z } from "zod";
 // ── Schema ────────────────────────────────────────────────────────
 
 /**
+ * One declarative trigger for a role. The scheduler watches for events
+ * (currently only `file_changed`; future kinds slot in here without
+ * breaking existing config) and evaluates each role's triggers against
+ * each event. A match enqueues a run for that role.
+ *
+ * Path filters (`path_under` / `path_not_under`) are picomatch globs
+ * matched against the path relative to the space's watch_dir.
+ *
+ * Attribution filters use entity_edits.by_role on the latest edit for
+ * the affected entity:
+ *   - `by_role`     : a positive list — only fire if the latest edit
+ *                     was made by one of these roles.
+ *   - `by_role_not` : a negative list — don't fire if the latest edit
+ *                     was made by one of these roles. The canonical
+ *                     loop-safety idiom: a worker should not re-trigger
+ *                     itself, so its own role goes here.
+ *
+ * Both attribution filters can be combined; positive applies first.
+ */
+export const TRIGGER_CONDITION_SCHEMA = z.object({
+  on: z.literal("file_changed"),
+  path_under: z.array(z.string()).min(1),
+  path_not_under: z.array(z.string()).optional(),
+  by_role: z.array(z.string()).optional(),
+  by_role_not: z.array(z.string()).optional(),
+});
+
+/**
  * One stage of a multi-phase agent run. The runtime loops over phases
  * in order, preserving conversation history across boundaries — so
  * phase 2 sees every tool call and result from phase 1. Between
@@ -100,6 +128,15 @@ export const ROLE_CONFIG_SCHEMA = z.object({
    *  of scope. Unknown phase names are ignored but trigger a console
    *  warning at role-build time so typos are visible. */
   phase_models: z.record(z.string(), z.string()).optional(),
+
+  /** Declarative event triggers for this role. The scheduler watches
+   *  for matching events and enqueues a run for each match. See
+   *  TRIGGER_CONDITION_SCHEMA for the shape of an individual trigger.
+   *
+   *  Setting `triggers: []` (an empty array) explicitly opts the role
+   *  out of automatic triggers — useful for roles that are only run
+   *  manually or by external schedulers. */
+  triggers: z.array(TRIGGER_CONDITION_SCHEMA).optional(),
 });
 
 export const AGENT_CONFIG_SCHEMA = z.object({
@@ -110,6 +147,7 @@ export const AGENT_CONFIG_SCHEMA = z.object({
   roles: z.record(z.string(), ROLE_CONFIG_SCHEMA).optional(),
 });
 
+export type TriggerCondition = z.infer<typeof TRIGGER_CONDITION_SCHEMA>;
 export type PhaseConfig = z.infer<typeof PHASE_CONFIG_SCHEMA>;
 export type RoleConfig = z.infer<typeof ROLE_CONFIG_SCHEMA>;
 export type AgentConfig = z.infer<typeof AGENT_CONFIG_SCHEMA>;

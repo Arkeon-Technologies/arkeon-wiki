@@ -5,8 +5,8 @@
  * Per-space agent scheduler.
  *
  * Bridges the file watcher and the agent runtime. One scheduler runs
- * per space; for each role configured in that space, it owns a worker
- * loop that:
+ * per space and owns a worker loop per role that has any declared
+ * trigger. Each worker:
  *
  *   1. claims the next pending row from agent_queue
  *   2. invokes runAgent under the runtime's per-key concurrency lock
@@ -14,15 +14,11 @@
  *   4. on failure: clears started_at, records last_error, lets the
  *      next claim retry
  *
- * The watcher calls scheduler.notify() after every relevant file
- * event so the worker wakes immediately instead of waiting for the
- * next poll. Polling is the safety net for missed wakeups (and for
- * orphan reclaim post-crash).
- *
- * v1 keeps things simple: one role (`ingestor`) per space, max 1
- * concurrent run per role. Adding more roles or per-role concurrency
- * caps later is just a config knob — the queue infra already handles
- * multi-role.
+ * The watcher calls scheduler.notify() after every file event. The
+ * scheduler walks every role's compiled triggers, finds the ones whose
+ * path globs and by_role filters match, and enqueues a row for each.
+ * Polling is the safety net for missed wakeups (and for orphan
+ * reclaim post-crash).
  */
 
 import {
@@ -33,18 +29,23 @@ import {
   reclaimOrphans,
   type QueuedItem,
 } from "../lib/agent-queue.js";
+import { createSql } from "../lib/sql.js";
 import type { Space } from "../lib/sync.js";
 
-import { loadAgentConfig } from "./config.js";
-import { isBuiltinRole } from "./builtins.js";
-import { shouldTrigger } from "./path-filter.js";
+import {
+  loadAgentConfig,
+  type AgentConfig,
+  type TriggerCondition,
+} from "./config.js";
+import { BUILTIN_ROLES, isBuiltinRole } from "./builtins.js";
 import { buildAgentRole } from "./role-builder.js";
 import { runAgent as defaultRunAgent } from "./runtime.js";
 import { ALL_TOOLS } from "./tools.js";
-
-/** Default role to run on source-file events. v1 hardcodes this; when
- *  user-defined triggers land, this becomes a fallback. */
-const DEFAULT_TRIGGER_ROLE = "ingestor";
+import {
+  compileRoleTriggers,
+  rolesToFire,
+  type RoleTrigger,
+} from "./triggers.js";
 
 /** How often a worker re-polls the queue when notify() hasn't fired
  *  recently. Mostly a safety net for missed wakeups. */
@@ -57,10 +58,12 @@ interface SchedulerHandle {
 
 export interface StartSchedulerOptions {
   space: Space;
-  /** Role to run when a non-wiki file event fires. Defaults to
-   *  `ingestor`; set to `null` to disable auto-triggering for this
-   *  space (e.g., for a bring-your-own-trigger setup). */
-  triggerRole?: string | null;
+  /** Restrict auto-triggering to a subset of roles. By default the
+   *  scheduler walks every role declared in agents.yaml plus every
+   *  built-in role with default triggers, and fires whichever match.
+   *  Pass an explicit role list to limit (mainly for tests). Pass an
+   *  empty array to disable auto-triggering for this space entirely. */
+  triggerRoles?: string[];
   /** Override the registry (mainly for tests). */
   toolRegistry?: typeof ALL_TOOLS;
   /** Inject a fake `runAgent` for tests. Production: omit (uses the
@@ -73,6 +76,54 @@ export interface StartSchedulerOptions {
 }
 
 /**
+ * Walk every role known in this space's config (built-ins overlaid
+ * with agents.yaml) and gather their declared triggers. Built-in roles
+ * keep their default triggers unless the user supplied their own; a
+ * user-supplied `triggers` array (including the empty array) replaces
+ * the built-in default wholesale.
+ */
+function collectRoleTriggers(
+  config: AgentConfig,
+  restrictTo?: string[] | null,
+): Array<{ role: string; triggers: TriggerCondition[] }> {
+  const out: Array<{ role: string; triggers: TriggerCondition[] }> = [];
+  const allRoles = new Set<string>([
+    ...Object.keys(BUILTIN_ROLES),
+    ...Object.keys(config.roles ?? {}),
+  ]);
+  for (const role of allRoles) {
+    if (restrictTo && !restrictTo.includes(role)) continue;
+    const fromConfig = config.roles?.[role]?.triggers;
+    const fromBuiltin = isBuiltinRole(role)
+      ? BUILTIN_ROLES[role].triggers
+      : undefined;
+    const triggers = fromConfig ?? fromBuiltin ?? [];
+    if (triggers.length > 0) out.push({ role, triggers });
+  }
+  return out;
+}
+
+/**
+ * Read the latest `entity_edits.by_role` for the entity at this path,
+ * if any. Used by the trigger evaluator to apply attribution filters.
+ * Returns null when no entity_edits row exists yet.
+ */
+async function lookupLatestByRole(
+  spaceId: string,
+  relativePath: string,
+): Promise<string | null> {
+  const sql = createSql();
+  const rows = (await sql`
+    SELECT le.last_edited_by AS by_role
+    FROM entities e
+    JOIN entity_latest_edit le ON le.entity_id = e.id
+    WHERE e.space_id = ${spaceId} AND e.source_path = ${relativePath}
+    LIMIT 1
+  `) as { by_role: string }[];
+  return rows.length > 0 ? rows[0].by_role : null;
+}
+
+/**
  * Start a scheduler for a space. Returns a handle the watcher uses to
  * notify of file events and the daemon uses to stop on shutdown.
  *
@@ -82,34 +133,42 @@ export interface StartSchedulerOptions {
 export async function startScheduler(
   opts: StartSchedulerOptions,
 ): Promise<SchedulerHandle> {
-  const triggerRole = opts.triggerRole ?? DEFAULT_TRIGGER_ROLE;
   const tools = opts.toolRegistry ?? ALL_TOOLS;
   const runAgent = opts.runAgentFn ?? defaultRunAgent;
 
-  // Probe: can we actually build this role from config + env right now?
-  // If not (e.g. agents.yaml says provider=openai but OPENAI_API_KEY
-  // isn't set), don't start a worker — otherwise it would tight-loop
-  // failing on every queued event. Returns a no-op handle so the
-  // watcher's call to notify() is a cheap silent skip.
-  if (triggerRole) {
+  // Collect every role with at least one declared trigger, then probe
+  // each: can we actually build it from config + env right now? If
+  // not (e.g. agents.yaml says provider=openai but OPENAI_API_KEY
+  // isn't set), drop the role from the active set so it doesn't
+  // tight-loop failing on every queued event. The watcher's notify()
+  // becomes a silent skip for any role that didn't pass probe.
+  const config = loadAgentConfig({ spaceDir: opts.space.watch_dir });
+  const allRoleTriggers = collectRoleTriggers(
+    config,
+    opts.triggerRoles ?? null,
+  );
+  const activeRoles: string[] = [];
+  const usableRoleTriggers: typeof allRoleTriggers = [];
+  for (const { role, triggers } of allRoleTriggers) {
     try {
-      const config = loadAgentConfig({ spaceDir: opts.space.watch_dir });
-      if (!isBuiltinRole(triggerRole) && !config.roles?.[triggerRole]) {
-        throw new Error(
-          `Role '${triggerRole}' is neither a built-in nor declared in agents.yaml`,
-        );
-      }
-      buildAgentRole(triggerRole, config);
+      buildAgentRole(role, config);
+      activeRoles.push(role);
+      usableRoleTriggers.push({ role, triggers });
     } catch (err) {
       console.log(
-        `[agent/scheduler] not auto-triggering for space "${opts.space.name}": ${(err as Error).message}`,
+        `[agent/scheduler] not auto-triggering role '${role}' for space "${opts.space.name}": ${(err as Error).message}`,
       );
-      return {
-        notify: async () => {},
-        stop: async () => {},
-      };
     }
   }
+
+  if (activeRoles.length === 0) {
+    return {
+      notify: async () => {},
+      stop: async () => {},
+    };
+  }
+
+  const compiledTriggers: RoleTrigger[] = compileRoleTriggers(usableRoleTriggers);
 
   await reclaimOrphans();
 
@@ -219,21 +278,31 @@ export async function startScheduler(
     }
   }
 
-  if (triggerRole) {
-    void worker(triggerRole);
+  // Spawn one worker loop per active role. Each pulls from its own
+  // role-scoped queue partition.
+  for (const role of activeRoles) {
+    void worker(role);
   }
 
   return {
     async notify(relativePath: string, entityId?: string | null) {
-      if (!triggerRole) return;
-      if (!shouldTrigger(relativePath)) return;
-      await enqueue({
-        space_id: opts.space.id,
-        role: triggerRole,
-        trigger_path: relativePath,
-        trigger_entity_id: entityId ?? null,
+      // Look up who most recently edited this entity so attribution
+      // filters can be applied. If no entity_edits row exists yet
+      // (first observation of a brand-new file), by_role is null.
+      const byRole = await lookupLatestByRole(opts.space.id, relativePath);
+      const fired = rolesToFire(compiledTriggers, {
+        path: relativePath,
+        by_role: byRole,
       });
-      wakeup();
+      for (const role of fired) {
+        await enqueue({
+          space_id: opts.space.id,
+          role,
+          trigger_path: relativePath,
+          trigger_entity_id: entityId ?? null,
+        });
+      }
+      if (fired.length > 0) wakeup();
     },
     async stop() {
       stopped = true;
