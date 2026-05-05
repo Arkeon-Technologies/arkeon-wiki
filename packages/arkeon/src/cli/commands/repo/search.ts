@@ -21,7 +21,6 @@ import { output } from "../../lib/output.js";
 import { loadRepoState } from "../../lib/repo-state.js";
 
 interface SearchOptions {
-  apiUrl?: string;
   space?: string;
   all?: boolean;
   limit?: string;
@@ -64,7 +63,10 @@ export function registerSearchCommand(program: Command): void {
     .command("search")
     .argument("<query>", "Search query")
     .description("Search across registered spaces (keyword via ripgrep, vector via sqlite-vec)")
-    .option("--api-url <url>", "API URL (default: http://localhost:8000)")
+    // --api-url is declared on the root program (src/index.ts); the
+    // preAction hook moves the value into ARKE_API_URL. Declaring it
+    // here too created a precedence bug where Commander routed the
+    // value to globals but runSearch read subcommand-local opts.
     .option("--space <id>", "Space ID to search (default: bound space, or all)")
     .option("--all", "Search every registered space")
     .option(
@@ -87,10 +89,12 @@ export function registerSearchCommand(program: Command): void {
 
 async function runSearch(query: string, options: SearchOptions): Promise<void> {
   const repoState = loadRepoState();
+  // Explicit override (--api-url, captured by the root preAction hook
+  // into ARKE_API_URL) wins over the bound state file. Otherwise the
+  // user couldn't override the bound URL without deleting state.json.
   const apiUrl =
-    options.apiUrl ??
-    repoState?.api_url ??
     process.env.ARKE_API_URL ??
+    repoState?.api_url ??
     `http://localhost:${DEFAULT_API_PORT}`;
 
   const mode = options.mode ?? "both";
