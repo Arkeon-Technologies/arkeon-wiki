@@ -28,6 +28,35 @@ import { z } from "zod";
 
 // ── Schema ────────────────────────────────────────────────────────
 
+/**
+ * One stage of a multi-phase agent run. The runtime loops over phases
+ * in order, preserving conversation history across boundaries — so
+ * phase 2 sees every tool call and result from phase 1. Between
+ * phases the runtime appends the next phase's `prompt` as a new user
+ * message and (optionally) swaps the model.
+ *
+ * Per-phase overrides default to the role-level value. Same-provider
+ * model swaps only — cross-provider tool-call format translation is
+ * out of scope for now.
+ */
+export const PHASE_CONFIG_SCHEMA = z.object({
+  /** Optional name, surfaced in logs and traces. */
+  name: z.string().optional(),
+  /** User-message template added to the conversation when this phase
+   *  starts. Variables: {{trigger_path}}, {{trigger_entity_id}},
+   *  {{space_id}}, {{space_name}}. The first phase's prompt is the
+   *  initial user message; subsequent phase prompts are appended. */
+  prompt: z.string(),
+  /** Override the role-level model for this phase only (e.g. cheap
+   *  model for context-gathering, strong model for writing). Same
+   *  provider as the role. */
+  model: z.string().optional(),
+  /** Override the role-level tool whitelist. */
+  tools: z.array(z.string()).optional(),
+  /** Per-phase step budget. Defaults to the role-level max_steps. */
+  max_steps: z.number().int().positive().max(100).optional(),
+});
+
 export const ROLE_CONFIG_SCHEMA = z.object({
   // Model selection
   provider: z.enum(["openai", "anthropic", "openai-compatible"]).optional(),
@@ -38,18 +67,39 @@ export const ROLE_CONFIG_SCHEMA = z.object({
   // Tools the LLM may call (names from ALL_TOOLS in tools.ts)
   tools: z.array(z.string()).optional(),
 
-  // Loop bound
+  // Loop bound (also the default per-phase budget)
   max_steps: z.number().int().positive().max(100).optional(),
 
   // Prompts
   /** Full system prompt. Replaces the built-in template entirely. */
   system: z.string().optional(),
-  /** User-message template. Variables: {{trigger_path}}, {{trigger_entity_id}},
-   *  {{space_id}}, {{space_name}}. */
+  /** User-message template — single-phase shape. Variables:
+   *  {{trigger_path}}, {{trigger_entity_id}}, {{space_id}}, {{space_name}}.
+   *  Mutually exclusive with `phases`: a role uses one or the other. */
   user: z.string().optional(),
   /** Operator notes appended to the system prompt (built-in or custom).
    *  Use this for focus/style/scope guidance without rewriting the workflow. */
   instructions: z.string().optional(),
+
+  /** Multi-phase shape. The runtime walks phases in order in a single
+   *  conversation (history preserved across boundaries). Mutually
+   *  exclusive with `user` — if both are present `phases` wins and
+   *  `user` is ignored. */
+  phases: z.array(PHASE_CONFIG_SCHEMA).optional(),
+
+  /** Per-phase model overrides keyed by phase.name. Lets agents.yaml
+   *  swap the model used for each phase without re-supplying the
+   *  builtin's phase prompts:
+   *    roles:
+   *      ingestor:
+   *        phase_models:
+   *          gather: gpt-5.4-mini
+   *          write:  gpt-5.4
+   *  Layers like `defaults`: defaults < builtin < role. Same-provider
+   *  swaps only — cross-provider tool-call format translation is out
+   *  of scope. Unknown phase names are ignored but trigger a console
+   *  warning at role-build time so typos are visible. */
+  phase_models: z.record(z.string(), z.string()).optional(),
 });
 
 export const AGENT_CONFIG_SCHEMA = z.object({
@@ -60,6 +110,7 @@ export const AGENT_CONFIG_SCHEMA = z.object({
   roles: z.record(z.string(), ROLE_CONFIG_SCHEMA).optional(),
 });
 
+export type PhaseConfig = z.infer<typeof PHASE_CONFIG_SCHEMA>;
 export type RoleConfig = z.infer<typeof ROLE_CONFIG_SCHEMA>;
 export type AgentConfig = z.infer<typeof AGENT_CONFIG_SCHEMA>;
 

@@ -234,11 +234,14 @@ describe("search tool", () => {
 
     const ctx = makeContext(space, "test");
     const tool = ALL_TOOLS.search(ctx) as ExecutableTool;
-    const result = (await tool.execute({ query: "polonium" })) as {
-      hits: Array<{ label: string; source_path: string }>;
+    // Scope to keyword for deterministic assertion against synthetic
+    // fixtures — vector mode would also fire under default `mode=both`
+    // but with mock embeddings its ranking isn't semantically grounded.
+    const result = (await tool.execute({ query: "polonium", mode: "keyword" })) as {
+      keyword: { hits: Array<{ label: string; source_path: string }> };
     };
 
-    expect(result.hits.length).toBeGreaterThan(0);
-    expect(result.hits[0].label).toBe("Marie Curie");
+    expect(result.keyword.hits.length).toBeGreaterThan(0);
+    expect(result.keyword.hits[0].label).toBe("Marie Curie");
   });
 });

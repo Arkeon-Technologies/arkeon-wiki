@@ -19,11 +19,12 @@
  */
 
 import type { ModelConfig } from "./model.js";
-import type { AgentConfig, RoleConfig } from "./config.js";
+import type { AgentConfig, PhaseConfig, RoleConfig } from "./config.js";
 import { BUILTIN_ROLES, isBuiltinRole } from "./builtins.js";
 import {
   hashInput,
   type AgentInput,
+  type AgentPhase,
   type AgentRole,
   type IdempotencyKey,
 } from "./runtime.js";
@@ -84,24 +85,104 @@ export function buildAgentRole(name: string, config: AgentConfig): AgentRole {
     ? `${baseSystem}\n\n--- Operator instructions ---\n${instructionsLayer}`
     : baseSystem;
 
-  const userTemplate =
-    fromConfig.user ?? builtin.user ?? defaults.user ?? "{{user_input}}";
-
   const apiKey = resolveApiKey(provider, apiKeyEnv);
   const model = toModelConfig(provider, modelId, baseUrl, apiKey);
+
+  // Resolve phases. `phases` (if present anywhere in the chain) wins
+  // over the legacy single-phase `user` field. The `phases` config
+  // never merges field-by-field: whichever level supplies it wins
+  // wholesale (most-specific-wins), so a user can override the entire
+  // pipeline by setting their own phases array.
+  const phasesConfig =
+    fromConfig.phases ?? builtin.phases ?? defaults.phases ?? null;
+
+  let phases: PhaseConfig[];
+  if (phasesConfig) {
+    phases = phasesConfig;
+  } else {
+    // Legacy / single-phase synthesis from `user`.
+    const userTemplate =
+      fromConfig.user ?? builtin.user ?? defaults.user ?? "{{user_input}}";
+    phases = [{ prompt: userTemplate }];
+  }
+
+  // Per-phase model shorthand. Keyed by phase.name so users don't have
+  // to know phase ordering. Layered like defaults — defaults < builtin
+  // < role — and folded into the per-phase resolution below.
+  const phaseModelOverrides: Record<string, string> = {
+    ...defaults.phase_models,
+    ...builtin.phase_models,
+    ...fromConfig.phase_models,
+  };
+
+  // Resolve each phase's overrides against the role-level fallbacks.
+  const knownPhaseNames = new Set<string>();
+  const resolvedPhases = phases.map((p, i): ResolvedPhase => {
+    const phaseTools = p.tools ?? tools;
+    if (phaseTools.length === 0) {
+      throw new Error(
+        `Role '${name}' phase ${i}: no tools (set phase.tools or role.tools).`,
+      );
+    }
+    const phaseName = p.name ?? `phase-${i + 1}`;
+    knownPhaseNames.add(phaseName);
+    // Precedence: explicit phase.model wins over phase_models lookup,
+    // which wins over the role-level model.
+    const phaseModelId =
+      p.model ?? phaseModelOverrides[phaseName] ?? modelId;
+    return {
+      name: phaseName,
+      promptTemplate: p.prompt,
+      tools: phaseTools,
+      maxSteps: p.max_steps ?? maxSteps,
+      // Per-phase model overrides keep the role's provider, base_url,
+      // and api_key — same provider only.
+      model: toModelConfig(provider, phaseModelId, baseUrl, apiKey),
+    };
+  });
+
+  // Warn on phase_models keys that don't match any resolved phase
+  // name. Catches typos like `gathr:` that would otherwise silently
+  // fall through to the role-level model — the kind of bug you only
+  // notice when the cheap model bill arrives at the wrong size.
+  for (const key of Object.keys(phaseModelOverrides)) {
+    if (!knownPhaseNames.has(key)) {
+      console.warn(
+        `[agent/role-builder] role '${name}': phase_models key '${key}' ` +
+          `doesn't match any phase (${[...knownPhaseNames].join(", ")}). ` +
+          `Override ignored — check for a typo in agents.yaml.`,
+      );
+    }
+  }
 
   return {
     name,
     model,
     tools,
     maxSteps,
-    buildPrompt: async (input: AgentInput) => ({
+    buildPhases: async (input: AgentInput) => ({
       system: fillTemplate(system, promptVars(name, input)),
-      prompt: fillTemplate(userTemplate, promptVars(name, input)),
+      phases: resolvedPhases.map(
+        (p): AgentPhase => ({
+          name: p.name,
+          prompt: fillTemplate(p.promptTemplate, promptVars(name, input)),
+          model: p.model,
+          tools: p.tools,
+          maxSteps: p.maxSteps,
+        }),
+      ),
     }),
     idempotencyKey: defaultIdempotencyKey(name),
     concurrencyKey: defaultConcurrencyKey(name),
   };
+}
+
+interface ResolvedPhase {
+  name: string;
+  promptTemplate: string;
+  tools: string[];
+  maxSteps: number;
+  model: ModelConfig;
 }
 
 // ── Prompt template ──────────────────────────────────────────────

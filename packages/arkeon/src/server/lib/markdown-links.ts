@@ -54,33 +54,48 @@ export function extractMarkdownLinks(content: string): MarkdownLink[] {
 }
 
 /**
- * Resolve a relative link path to a space-relative path.
+ * Resolve a markdown link path to a space-relative path.
  *
- * Given a wiki file at `wiki/person/claude-shannon.md` containing a link
- * `../organization/bell-labs.md`, this resolves to
- * `wiki/organization/bell-labs.md`.
+ * Two forms are accepted:
+ *
+ *   1. Workspace-rooted (preferred). A path starting with "/" means
+ *      "relative to the space's watch_dir root". So
+ *      `[Watson](/wiki/person/watson.md)` resolves to
+ *      `wiki/person/watson.md` regardless of how deep the link's source
+ *      file is nested. This is the form the ingestor prompt teaches
+ *      the agent because it's stable as the directory tree grows
+ *      (e.g. `wiki/<type>/<sub>/<slug>.md` future-proofing) and doesn't
+ *      require counting `..` levels. VS Code, Obsidian, and GitHub all
+ *      treat `/path` as workspace-rooted in their markdown previewers,
+ *      so click-through still works for human readers.
+ *
+ *   2. Dot-relative (legacy / standard). A path like `../organization/
+ *      bell-labs.md` from `wiki/person/claude-shannon.md` resolves to
+ *      `wiki/organization/bell-labs.md`. Kept as a fallback so existing
+ *      content keeps resolving and so authors who prefer pure-markdown
+ *      semantics aren't broken.
  *
  * @param fromPath - Space-relative path of the file containing the link
- * @param linkPath - The raw relative path from the markdown link
+ * @param linkPath - The raw path from the markdown link
  * @returns Space-relative path of the target, normalized
  */
 export function resolveRelativeLink(fromPath: string, linkPath: string): string {
-  // Get the directory of the source file
-  const parts = fromPath.split("/");
-  parts.pop(); // remove filename
-  const dir = parts;
-
-  // Resolve the relative path
-  const linkParts = linkPath.split("/");
-  const resolved = [...dir];
-
-  for (const part of linkParts) {
-    if (part === "..") {
-      resolved.pop();
-    } else if (part !== ".") {
-      resolved.push(part);
-    }
+  // Workspace-rooted: ignore the source file's directory entirely.
+  if (linkPath.startsWith("/")) {
+    return normalizePath(linkPath.slice(1).split("/"));
   }
 
-  return resolved.join("/");
+  // Dot-relative: resolve against the source file's directory.
+  const parts = fromPath.split("/");
+  parts.pop();
+  return normalizePath([...parts, ...linkPath.split("/")]);
+}
+
+function normalizePath(parts: string[]): string {
+  const out: string[] = [];
+  for (const part of parts) {
+    if (part === "..") out.pop();
+    else if (part !== "." && part !== "") out.push(part);
+  }
+  return out.join("/");
 }

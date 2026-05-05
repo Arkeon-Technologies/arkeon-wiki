@@ -68,12 +68,19 @@ interface ProgressEvent {
 }
 
 function defaultCacheDir(): string {
+  // Model weights are read-only and identical across instances, so we
+  // intentionally do NOT route this through ARKEON_WIKI_HOME. Per-
+  // instance model dirs would force every named instance to redownload
+  // 309 MB and surface a known transformers.js bug where a failed
+  // chunk download becomes an unhandled rejection that aborts the
+  // daemon (the executor `new Promise(async (resolve, reject) => {
+  // await getModelFile(...) })` in getModelDataFiles never reaches
+  // its resolve when the await rejects). Pinning the cache to a
+  // shared per-user directory means a single cold download serves
+  // every instance forever after.
   return (
     process.env.ARKEON_WIKI_MODELS_DIR ??
-    path.join(
-      process.env.ARKEON_WIKI_HOME ?? path.join(os.homedir(), ".arkeon-wiki"),
-      "models",
-    )
+    path.join(os.homedir(), ".arkeon-wiki", "models")
   );
 }
 
