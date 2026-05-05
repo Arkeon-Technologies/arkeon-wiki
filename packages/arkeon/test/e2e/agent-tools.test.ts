@@ -404,19 +404,26 @@ describe("search edge cases", () => {
   }, 15_000);
 
   it("returns an empty hits array when nothing matches", async () => {
+    // The search tool now returns a namespaced response (keyword and
+    // vector each get their own array). Default mode is "both"; we
+    // scope to keyword here so the assertion is deterministic against
+    // mock embeddings (vector with mock isn't semantically meaningful
+    // and may surface unrelated chunks).
     const result = (await tool("search").execute({
       query: "definitely-not-present-in-any-file-xyzzy",
-    })) as { hits: unknown[] };
-    expect(result.hits).toEqual([]);
+      mode: "keyword",
+    })) as { keyword: { hits: unknown[] } };
+    expect(result.keyword.hits).toEqual([]);
   });
 
   it("supports regex mode", async () => {
     const result = (await tool("search").execute({
       query: "electron[s]?",
       regex: true,
-    })) as { hits: Array<{ source_path: string }> };
+      mode: "keyword",
+    })) as { keyword: { hits: Array<{ source_path: string }> } };
 
-    const paths = result.hits.map((h) => h.source_path).sort();
+    const paths = result.keyword.hits.map((h) => h.source_path).sort();
     expect(paths).toContain("wiki/concept/oxidation.md");
     expect(paths).toContain("wiki/concept/redox.md");
   });
@@ -425,8 +432,32 @@ describe("search edge cases", () => {
     const result = (await tool("search").execute({
       query: "electron",
       limit: 1,
-    })) as { hits: unknown[] };
-    expect(result.hits.length).toBeLessThanOrEqual(1);
+      mode: "keyword",
+    })) as { keyword: { hits: unknown[] } };
+    expect(result.keyword.hits.length).toBeLessThanOrEqual(1);
+  });
+
+  it("returns both keyword and vector namespaces by default (mode=both)", async () => {
+    const result = (await tool("search").execute({
+      query: "electron",
+    })) as {
+      keyword: { hits: unknown[]; total: number };
+      vector: { hits: unknown[]; total: number; model: string };
+      mode: string;
+    };
+    expect(result.mode).toBe("both");
+    expect(result.keyword).toBeDefined();
+    expect(result.vector).toBeDefined();
+    expect(result.vector.model).toBeTruthy();
+  });
+
+  it("returns only the vector namespace when mode=vector", async () => {
+    const result = (await tool("search").execute({
+      query: "electron",
+      mode: "vector",
+    })) as { vector?: { hits: unknown[] }; keyword?: unknown };
+    expect(result.vector).toBeDefined();
+    expect(result.keyword).toBeUndefined();
   });
 });
 

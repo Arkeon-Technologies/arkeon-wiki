@@ -20,7 +20,13 @@
 
 import { createHash } from "node:crypto";
 
-import { generateText, stepCountIs, type LanguageModel, type Tool } from "ai";
+import {
+  generateText,
+  stepCountIs,
+  type LanguageModel,
+  type ModelMessage,
+  type Tool,
+} from "ai";
 
 import { applyEdit, type ApplyEditResult, type FileEdit } from "../lib/file-edits.js";
 import { withPathLock } from "../lib/path-lock.js";
@@ -56,6 +62,34 @@ export interface IdempotencyKey {
   hash: string;
 }
 
+/**
+ * One stage of a multi-phase run. The runtime walks phases in order
+ * within a single conversation, preserving message history across
+ * boundaries — phase N+1 sees every tool call and result from phase N.
+ *
+ * Most roles are single-phase. Phases let a role separate distinct
+ * sub-tasks (e.g. an ingestor that first surveys what exists, then
+ * writes/edits) and optionally swap models per phase (cheap for
+ * gathering, strong for writing).
+ */
+export interface AgentPhase {
+  /** Surfaced in logs / traces. */
+  name: string;
+  /** User-message prompt added when this phase begins. The first
+   *  phase's prompt is the initial user message; subsequent phases'
+   *  prompts are appended to the same conversation. */
+  prompt: string;
+  /** Per-phase model (defaults to role-level). Same provider only —
+   *  cross-provider conversation history requires translation that's
+   *  out of scope. */
+  model: ModelConfig;
+  /** Per-phase tool whitelist (defaults to role-level). Each name
+   *  must resolve in the ToolRegistry passed to runAgent. */
+  tools: string[];
+  /** Per-phase step budget (defaults to role-level maxSteps). */
+  maxSteps: number;
+}
+
 export interface AgentRole {
   name: string;
   model: ModelConfig;
@@ -63,7 +97,9 @@ export interface AgentRole {
   tools: string[];
   /** Default 10. Caps the tool-use loop so a runaway agent can't churn forever. */
   maxSteps?: number;
-  buildPrompt(input: AgentInput): Promise<{ system: string; prompt: string }>;
+  /** Build the system prompt and the ordered list of phases for this
+   *  input. Single-phase roles return a 1-element phases array. */
+  buildPhases(input: AgentInput): Promise<{ system: string; phases: AgentPhase[] }>;
   idempotencyKey(input: AgentInput): IdempotencyKey;
   concurrencyKey(input: AgentInput): string;
 }
@@ -101,40 +137,76 @@ export async function runAgent(
     }
 
     const ctx = makeContext(input.space, role.name);
-    const { system, prompt } = await role.buildPrompt(input);
-
-    const tools: Record<string, Tool> = {};
-    for (const name of role.tools) {
-      const factory = registry[name];
-      if (!factory) {
-        throw new Error(`Unknown tool '${name}' requested by role '${role.name}'`);
-      }
-      tools[name] = factory(ctx);
+    const { system, phases } = await role.buildPhases(input);
+    if (phases.length === 0) {
+      throw new Error(`Role '${role.name}': buildPhases returned no phases`);
     }
 
-    const model = options.modelOverride ?? (resolveModel(role.model) as LanguageModel);
+    // Each phase resolves to its own model + tools. We keep the system
+    // message constant across phases (it's the role's identity) and
+    // append a new user message at every phase boundary, preserving
+    // conversation history. The LLM in phase N sees every tool call
+    // and result from phases 1..N-1.
+    let conversation: ModelMessage[] = [];
+    let totalSteps = 0;
+    let lastText = "";
+    let aggregatedUsage: AgentRunResult["usage"] = undefined;
 
     try {
-      const result = await generateText({
-        model,
-        system,
-        prompt,
-        tools,
-        stopWhen: stepCountIs(role.maxSteps ?? 10),
-      });
+      for (let i = 0; i < phases.length; i++) {
+        const phase = phases[i];
+
+        // Resolve tools for this phase.
+        const tools: Record<string, Tool> = {};
+        for (const name of phase.tools) {
+          const factory = registry[name];
+          if (!factory) {
+            throw new Error(
+              `Phase '${phase.name}' of role '${role.name}': unknown tool '${name}'`,
+            );
+          }
+          tools[name] = factory(ctx);
+        }
+
+        // Append this phase's prompt as a user message. modelOverride
+        // (test seam) wins over per-phase model resolution.
+        conversation = [
+          ...conversation,
+          { role: "user", content: phase.prompt },
+        ];
+
+        const model =
+          options.modelOverride ?? (resolveModel(phase.model) as LanguageModel);
+
+        const result = await generateText({
+          model,
+          system,
+          messages: conversation,
+          tools,
+          stopWhen: stepCountIs(phase.maxSteps),
+        });
+
+        // Append the assistant + tool messages from this phase so the
+        // next phase sees them.
+        conversation = [...conversation, ...result.response.messages];
+
+        totalSteps += result.steps.length;
+        lastText = result.text;
+        aggregatedUsage = mergeUsage(aggregatedUsage, {
+          inputTokens: result.totalUsage?.inputTokens,
+          outputTokens: result.totalUsage?.outputTokens,
+          totalTokens: result.totalUsage?.totalTokens,
+        });
+      }
 
       await markProcessed(role.name, idem, "completed", null);
 
       return {
         skipped: false,
         edits: ctx.edits,
-        text: result.text,
-        steps: result.steps.length,
-        usage: {
-          inputTokens: result.totalUsage?.inputTokens,
-          outputTokens: result.totalUsage?.outputTokens,
-          totalTokens: result.totalUsage?.totalTokens,
-        },
+        text: lastText,
+        steps: totalSteps,
+        usage: aggregatedUsage,
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -142,6 +214,19 @@ export async function runAgent(
       throw err;
     }
   });
+}
+
+function mergeUsage(
+  a: AgentRunResult["usage"],
+  b: AgentRunResult["usage"],
+): AgentRunResult["usage"] {
+  if (!a) return b;
+  if (!b) return a;
+  return {
+    inputTokens: (a.inputTokens ?? 0) + (b.inputTokens ?? 0),
+    outputTokens: (a.outputTokens ?? 0) + (b.outputTokens ?? 0),
+    totalTokens: (a.totalTokens ?? 0) + (b.totalTokens ?? 0),
+  };
 }
 
 // ── Helpers ───────────────────────────────────────────────────────

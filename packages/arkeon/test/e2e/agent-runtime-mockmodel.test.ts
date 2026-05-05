@@ -139,16 +139,72 @@ function scriptModel(steps: LanguageModelV3GenerateResult[]): MockLanguageModelV
 // ── A reusable role for the runtime under test ────────────────────
 
 function makeTestRole(overrides: Partial<AgentRole> = {}): AgentRole {
+  const tools = ["read_file", "edit_file", "search", "list_wikis"];
+  const model = { provider: "anthropic" as const, id: "claude-test" }; // ignored: modelOverride wins
+  // The runtime reads phase.maxSteps; an `overrides.maxSteps` flows
+  // through to the synthesized single phase.
+  const maxSteps = overrides.maxSteps ?? 10;
   return {
     name: "mock-test-role",
-    model: { provider: "anthropic", id: "claude-test" }, // ignored: modelOverride wins
-    tools: ["read_file", "edit_file", "search", "list_wikis"],
-    buildPrompt: async () => ({ system: "you are a test", prompt: "do the thing" }),
+    model,
+    tools,
+    maxSteps,
+    buildPhases: async () => ({
+      system: "you are a test",
+      phases: [
+        {
+          name: "single",
+          prompt: "do the thing",
+          model,
+          tools,
+          maxSteps,
+        },
+      ],
+    }),
     idempotencyKey: ({ triggerPath, meta }) => ({
       key: triggerPath ?? "default-key",
       hash: (meta?.hash as string) ?? "default-hash",
     }),
     concurrencyKey: ({ space: s }) => `mock-test-role::${s.id}`,
+    ...overrides,
+  };
+}
+
+/**
+ * Two-phase test role: phase 1 makes some tool calls, phase 2 sees
+ * that history and makes more. Used by the multi-phase test below.
+ */
+function makeTwoPhaseRole(overrides: Partial<AgentRole> = {}): AgentRole {
+  const tools = ["read_file", "edit_file", "search", "list_wikis"];
+  const model = { provider: "anthropic" as const, id: "claude-test" };
+  return {
+    name: "mock-two-phase-role",
+    model,
+    tools,
+    buildPhases: async () => ({
+      system: "you are a two-phase test agent",
+      phases: [
+        {
+          name: "phase-one",
+          prompt: "PHASE_ONE_PROMPT_MARKER",
+          model,
+          tools,
+          maxSteps: 10,
+        },
+        {
+          name: "phase-two",
+          prompt: "PHASE_TWO_PROMPT_MARKER",
+          model,
+          tools,
+          maxSteps: 10,
+        },
+      ],
+    }),
+    idempotencyKey: ({ triggerPath, meta }) => ({
+      key: triggerPath ?? "default-key",
+      hash: (meta?.hash as string) ?? "default-hash",
+    }),
+    concurrencyKey: ({ space: s }) => `mock-two-phase-role::${s.id}`,
     ...overrides,
   };
 }
@@ -392,5 +448,107 @@ describe("runAgent — step cap", () => {
     expect(result.steps).toBeLessThanOrEqual(3);
     // And the edits accumulated reflect that bound.
     expect(result.edits.length).toBeLessThanOrEqual(3);
+  });
+});
+
+describe("runAgent — multi-phase", () => {
+  it("walks both phases in one conversation, history preserved across the boundary", async () => {
+    // Capture each call's prompt array so we can verify what the LLM
+    // saw in each phase. The runtime should:
+    //   1. Phase 1 starts: messages = [{user: PHASE_ONE_PROMPT_MARKER}]
+    //   2. Phase 1 ends: assistant + tool messages get appended
+    //   3. Phase 2 starts: messages = [phase 1 user, ...phase 1 history,
+    //                                  {user: PHASE_TWO_PROMPT_MARKER}]
+    //
+    // The assistant message produced inside Phase 1 (a search call)
+    // must be visible in the Phase 2 prompt — that's the "history
+    // preservation" property we care about.
+    const seenPrompts: unknown[][] = [];
+
+    let i = 0;
+    const model = new MockLanguageModelV3({
+      doGenerate: async (params) => {
+        // The AI SDK passes messages to the model; capture them
+        // verbatim so the test can assert on them.
+        seenPrompts.push(params.prompt as unknown[]);
+        i++;
+        // Phase 1: one search call, then text -> stop.
+        if (i === 1) {
+          return toolCallStep("search", { query: "phase-1-marker" });
+        }
+        if (i === 2) return textStep("phase 1 done");
+        // Phase 2: one edit call, then text -> stop.
+        if (i === 3) {
+          return toolCallStep("edit_file", {
+            path: "wiki/concept/from-phase-2.md",
+            search: "",
+            replace: "---\nlabel: From Phase 2\n---\n\nbody\n",
+          });
+        }
+        return textStep("phase 2 done");
+      },
+    });
+
+    const result = await runAgent(makeTwoPhaseRole(), { space }, ALL_TOOLS, {
+      modelOverride: model,
+    });
+
+    expect(result.skipped).toBe(false);
+    // 2 model calls in phase 1 + 2 in phase 2.
+    expect(result.steps).toBe(4);
+    // Phase 2 mutated the wiki; phase 1 only searched.
+    expect(result.edits).toHaveLength(1);
+    expect(existsSync(join(testDir, "wiki/concept/from-phase-2.md"))).toBe(true);
+    // The final text returned by runAgent is from the last phase.
+    expect(result.text).toBe("phase 2 done");
+
+    // We saw 4 model calls.
+    expect(seenPrompts).toHaveLength(4);
+
+    // Phase 1's first call: messages = [user "PHASE_ONE_PROMPT_MARKER"].
+    const firstCallMessages = seenPrompts[0];
+    expect(JSON.stringify(firstCallMessages)).toContain("PHASE_ONE_PROMPT_MARKER");
+    expect(JSON.stringify(firstCallMessages)).not.toContain("PHASE_TWO_PROMPT_MARKER");
+
+    // Phase 2's first call (the third overall): the phase 2 user
+    // message is present AND so is everything from phase 1 — including
+    // the original phase 1 user message and the phase 1 search tool
+    // call. This is the central property of multi-phase: history is
+    // preserved.
+    const phase2FirstCallMessages = seenPrompts[2];
+    const phase2Json = JSON.stringify(phase2FirstCallMessages);
+    expect(phase2Json).toContain("PHASE_ONE_PROMPT_MARKER");
+    expect(phase2Json).toContain("PHASE_TWO_PROMPT_MARKER");
+    expect(phase2Json).toContain("phase-1-marker"); // the search query from phase 1
+  });
+
+  it("aggregates token usage across phases", async () => {
+    // Each step we script returns 10 input + 5 output tokens via
+    // makeUsage(). With 4 total steps (2 per phase), we should see
+    // 40 input + 20 output aggregated.
+    const model = scriptModel([
+      textStep("p1 done"),
+      textStep("p2 done"),
+    ]);
+    // Use a role with two single-step phases.
+    const role: AgentRole = {
+      ...makeTwoPhaseRole(),
+      buildPhases: async () => ({
+        system: "you are",
+        phases: [
+          { name: "p1", prompt: "do p1", model: { provider: "anthropic", id: "claude-test" }, tools: [], maxSteps: 5 },
+          { name: "p2", prompt: "do p2", model: { provider: "anthropic", id: "claude-test" }, tools: [], maxSteps: 5 },
+        ],
+      }),
+    };
+
+    const result = await runAgent(role, { space, triggerPath: "src/usage-multi" }, ALL_TOOLS, {
+      modelOverride: model,
+    });
+
+    expect(result.steps).toBe(2); // 1 step per phase
+    // Both phases' tokens accumulated.
+    expect(result.usage?.inputTokens).toBe(20);
+    expect(result.usage?.outputTokens).toBe(10);
   });
 });

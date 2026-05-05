@@ -18,7 +18,7 @@ import { z } from "zod";
 
 import { safeResolve } from "../lib/file-edits.js";
 import { parseFrontmatter } from "../lib/frontmatter.js";
-import { searchKeyword } from "../lib/search.js";
+import { searchKeyword, searchVector } from "../lib/search.js";
 import { listWikis } from "../lib/wikis.js";
 
 import { defineTool, type ToolFactory } from "./define-tool.js";
@@ -57,28 +57,83 @@ const readFileTool = defineTool("read_file", {
 
 const searchTool = defineTool("search", {
   description:
-    "Keyword-search markdown content in the current space using ripgrep. " +
-    "Returns ranked entity hits with line snippets. Use this to find related " +
-    "wikis or source files before deciding what to contribute or edit.",
+    "Search the current space. Two strategies, no fusion:\n" +
+    "  - keyword (ripgrep): exact substring (or regex) over file contents. " +
+    "Best for proper nouns, code identifiers, ULIDs, exact phrases.\n" +
+    "  - vector (sqlite-vec): semantic similarity against wiki chunk " +
+    "embeddings. Best for concepts, paraphrased queries, finding related " +
+    "wikis you don't have a literal name for.\n" +
+    "Default `mode=both` runs both in parallel and returns each result " +
+    "set in its own namespace ({keyword, vector}). Pass `mode=keyword` " +
+    "or `mode=vector` to scope to one. Vector hits are chunk-level with " +
+    "similarity scores in [-1, 1]; keyword hits are entity-level with " +
+    "line snippets ranked by match count.",
   inputSchema: z.object({
-    query: z.string().describe("The substring or regex to search for."),
-    regex: z.boolean().optional().describe("Treat query as a regex (default false)."),
-    limit: z.number().int().positive().optional().describe("Max hits (default 20)."),
+    query: z.string().describe("The query string."),
+    mode: z
+      .enum(["keyword", "vector", "both"])
+      .optional()
+      .describe(
+        "Which strategy to run. Default 'both'. Use 'vector' alone when " +
+          "you want semantic matches and don't care about literal substrings.",
+      ),
+    regex: z
+      .boolean()
+      .optional()
+      .describe(
+        "Treat query as a regex (keyword mode only — ignored for vector).",
+      ),
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("Max hits per strategy (default 20)."),
     max_snippets_per_file: z
       .number()
       .int()
       .min(0)
       .optional()
-      .describe("Max line snippets per matching file (default 3)."),
+      .describe("Max line snippets per keyword hit (default 3)."),
   }),
-  call: ({ query, regex, limit, max_snippets_per_file }, ctx) =>
-    searchKeyword({
-      query,
-      spaceId: ctx.space.id,
-      regex,
-      limit,
-      maxSnippetsPerFile: max_snippets_per_file,
-    }),
+  call: async ({ query, mode, regex, limit, max_snippets_per_file }, ctx) => {
+    const m = mode ?? "both";
+    const wantKeyword = m === "keyword" || m === "both";
+    const wantVector = m === "vector" || m === "both";
+
+    // Run requested strategies in parallel, fail-soft per strategy:
+    // if vector throws (e.g. embedder still warming up), the agent
+    // still sees keyword results.
+    const [keywordSettled, vectorSettled] = await Promise.allSettled([
+      wantKeyword
+        ? searchKeyword({
+            query,
+            spaceId: ctx.space.id,
+            regex,
+            limit,
+            maxSnippetsPerFile: max_snippets_per_file,
+          })
+        : Promise.resolve(null),
+      wantVector
+        ? searchVector({ query, spaceId: ctx.space.id, limit })
+        : Promise.resolve(null),
+    ]);
+
+    const out: Record<string, unknown> = { query, mode: m };
+    if (wantKeyword) {
+      out.keyword =
+        keywordSettled.status === "fulfilled" && keywordSettled.value
+          ? keywordSettled.value
+          : { hits: [], total: 0, unmatched_files: 0 };
+    }
+    if (wantVector) {
+      out.vector =
+        vectorSettled.status === "fulfilled" && vectorSettled.value
+          ? vectorSettled.value
+          : { hits: [], total: 0, model: "unavailable" };
+    }
+    return out;
+  },
 });
 
 // ── list_wikis ────────────────────────────────────────────────────
