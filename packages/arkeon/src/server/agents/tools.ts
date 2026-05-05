@@ -249,23 +249,24 @@ const editFileTool = defineTool("edit_file", {
         const joined = current.endsWith("\n") || current.length === 0
           ? current + replace
           : current + "\n" + replace;
-        const result = await ctx.applyEdit({
-          kind: "write",
-          path,
-          content: joined,
-        });
+        const result = await ctx.applyEdit(
+          { kind: "write", path, content: joined },
+          { edit_kind: "append" },
+        );
         return { path: result.path, mode: "append" };
       }
       // CREATE: write the new file.
-      const result = await ctx.applyEdit({
-        kind: "write",
-        path,
-        content: replace,
-      });
+      const result = await ctx.applyEdit(
+        { kind: "write", path, content: replace },
+        { edit_kind: "create" },
+      );
       return { path: result.path, mode: "create" };
     }
     // REPLACE: surgical edit.
-    const result = await ctx.applyEdit({ kind: "edit", path, search, replace });
+    const result = await ctx.applyEdit(
+      { kind: "edit", path, search, replace },
+      { edit_kind: "replace" },
+    );
     return { path: result.path, mode: "replace" };
   },
 });

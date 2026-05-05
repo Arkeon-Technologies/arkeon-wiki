@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 
 import { createSql, withTransaction } from "./sql.js";
 import { generateUlid } from "./ids.js";
+import { getEditContext, type EditKind } from "./edit-context.js";
 import { parseFrontmatter, serializeFrontmatter } from "./frontmatter.js";
 import { extractMarkdownLinks, resolveRelativeLink } from "./markdown-links.js";
 import { chunkWiki } from "./chunker.js";
@@ -90,11 +91,48 @@ export async function syncFile(space: Space, relativePath: string): Promise<Sync
   // Determine if this is a wiki file (under wiki/ with .md extension)
   const isWiki = relativePath.startsWith("wiki/") && relativePath.endsWith(".md");
 
-  if (isWiki) {
-    return syncWikiFile(space, relativePath, content, hash, existing[0] ?? null);
-  } else {
-    return syncSourceFile(space, relativePath, content, hash, existing[0] ?? null);
-  }
+  const result = isWiki
+    ? await syncWikiFile(space, relativePath, content, hash, existing[0] ?? null)
+    : await syncSourceFile(space, relativePath, content, hash, existing[0] ?? null);
+
+  // Record an entity_edits audit row for this change. The edit-context
+  // registry tells us who is responsible: a worker that called applyEdit
+  // registered its role + edit_kind before writing, and we read that
+  // here. Filesystem-driven changes (a human saving in their editor,
+  // a watcher reconciling after restart) have no registered context
+  // and are attributed to "human" with edit_kind "resync".
+  //
+  // We re-read the file's hash from disk rather than using the
+  // pre-sync hash we computed at the top of syncFile, because
+  // syncWikiFile may have rewritten the file (e.g. to inject a
+  // generated id into the frontmatter on a brand-new wiki). Using
+  // the post-sync hash means the audit row matches the file's final
+  // content, so a subsequent watcher resync of the same file finds
+  // the (entity_id, content_hash) already recorded and the unique
+  // constraint correctly no-ops.
+  const finalContent = readFileSync(absPath, "utf-8");
+  const finalHash = contentHash(finalContent);
+  await recordEntityEdit(space.id, result.entityId, relativePath, finalHash);
+
+  return result;
+}
+
+async function recordEntityEdit(
+  spaceId: string,
+  entityId: string,
+  relativePath: string,
+  hash: string,
+): Promise<void> {
+  const ctx = getEditContext(spaceId, relativePath);
+  const byRole = ctx?.role ?? "human";
+  const editKind: EditKind = ctx?.edit_kind ?? "resync";
+  const note = ctx?.note ?? null;
+  const sql = createSql();
+  await sql`
+    INSERT INTO entity_edits (entity_id, by_role, edit_kind, edit_note, content_hash)
+    VALUES (${entityId}, ${byRole}, ${editKind}, ${note}, ${hash})
+    ON CONFLICT (entity_id, content_hash) DO NOTHING
+  `;
 }
 
 async function syncWikiFile(

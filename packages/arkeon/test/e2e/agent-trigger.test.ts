@@ -115,11 +115,11 @@ function makeFakeRunAgent(behavior: {
     }
     const edits = [];
     for (const w of behavior.writes ?? []) {
-      const result = await applyEdit(input.space, {
-        kind: "write",
-        path: w.path,
-        content: w.content,
-      });
+      const result = await applyEdit(
+        input.space,
+        { kind: "write", path: w.path, content: w.content },
+        { role: role.name, edit_kind: "create" },
+      );
       edits.push(result);
     }
     return {

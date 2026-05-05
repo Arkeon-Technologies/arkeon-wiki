@@ -258,6 +258,22 @@ export const BUILTIN_ROLES: Record<string, RoleConfig> = {
     tools: ["read_file", "list_wikis", "search", "edit_file"],
     max_steps: 30,
     system: INGESTOR_SYSTEM,
+    // Default triggers: fire on any file change outside `wiki/**` and
+    // `.arkeon/**`. Source files dropped into the watch dir become
+    // ingestion work. The wiki/** exclusion is loop safety — the
+    // ingestor's own writes shouldn't re-fire it. The .arkeon/**
+    // exclusion is internal state (agents.yaml, state.json).
+    //
+    // Operators can replace this in agents.yaml to scope the ingestor
+    // narrowly (e.g. `path_under: ["sources/**"]`) or broaden it.
+    triggers: [
+      {
+        on: "file_changed",
+        path_under: ["**"],
+        path_not_under: ["wiki/**", ".arkeon/**"],
+        by_role_not: ["ingestor"],
+      },
+    ],
     phases: [
       {
         name: "gather",
