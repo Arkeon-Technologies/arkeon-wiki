@@ -102,10 +102,17 @@ export async function syncFile(space: Space, relativePath: string): Promise<Sync
   // a watcher reconciling after restart) have no registered context
   // and are attributed to "human" with edit_kind "resync".
   //
-  // The unique (entity_id, content_hash) constraint means a watcher's
-  // post-write resync of a file applyEdit just wrote is a no-op — the
-  // applyEdit-attributed row is preserved.
-  await recordEntityEdit(space.id, result.entityId, relativePath, hash);
+  // We re-read the file's hash from disk rather than using the
+  // pre-sync hash we computed at the top of syncFile, because
+  // syncWikiFile may have rewritten the file (e.g. to inject a
+  // generated id into the frontmatter on a brand-new wiki). Using
+  // the post-sync hash means the audit row matches the file's final
+  // content, so a subsequent watcher resync of the same file finds
+  // the (entity_id, content_hash) already recorded and the unique
+  // constraint correctly no-ops.
+  const finalContent = readFileSync(absPath, "utf-8");
+  const finalHash = contentHash(finalContent);
+  await recordEntityEdit(space.id, result.entityId, relativePath, finalHash);
 
   return result;
 }
