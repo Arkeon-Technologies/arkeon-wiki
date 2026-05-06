@@ -18,7 +18,7 @@
  * SDK call, and persistence of the run record. Roles stay tiny.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
   generateText,
@@ -39,6 +39,7 @@ import { createSql } from "../lib/sql.js";
 import { type Space } from "../lib/sync.js";
 
 import { resolveModel, type ModelConfig } from "./model.js";
+import { getTracer, truncateForTrace, type Tracer } from "./tracer.js";
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -55,9 +56,20 @@ export interface ToolEditOpts {
 export interface AgentContext {
   space: Space;
   role: string;
+  /** Stable identifier for this run, threaded through every trace event
+   *  emitted by tools, edits, and the runtime itself. Random UUID per
+   *  invocation of `runAgent`. */
+  runId: string;
+  /** Name of the phase the runtime is currently executing, or `null`
+   *  when no phase is active (e.g. during run.start before phase 0).
+   *  Mutable so tools can read the current phase at call time. */
+  currentPhase: string | null;
   edits: ApplyEditResult[];
   applyEdit(edit: FileEdit, opts: ToolEditOpts): Promise<ApplyEditResult>;
   log(level: "info" | "warn" | "error", msg: string, meta?: Record<string, unknown>): void;
+  /** Emit a structured trace event. No-op when tracing is disabled.
+   *  Auto-fills run_id, role, space_id, and phase. */
+  trace(event: string, fields?: Record<string, unknown>): void;
 }
 
 export type ToolFactory = (ctx: AgentContext) => Tool;
@@ -147,15 +159,33 @@ export async function runAgent(
 ): Promise<AgentRunResult> {
   return withPathLock(role.concurrencyKey(input), async () => {
     const idem = role.idempotencyKey(input);
+    const ctx = makeContext(input.space, role.name);
+    const runStartedAt = Date.now();
+
     if (await alreadyProcessed(role.name, idem)) {
+      ctx.trace("run.skipped", {
+        reason: "already_processed",
+        idempotency_key: idem.key,
+        input_hash: idem.hash,
+        trigger_path: input.triggerPath,
+      });
       return { skipped: true, reason: "already_processed", edits: [], text: "", steps: 0 };
     }
 
-    const ctx = makeContext(input.space, role.name);
     const { system, phases } = await role.buildPhases(input);
     if (phases.length === 0) {
       throw new Error(`Role '${role.name}': buildPhases returned no phases`);
     }
+
+    ctx.trace("run.start", {
+      space_name: input.space.name,
+      idempotency_key: idem.key,
+      input_hash: idem.hash,
+      trigger_path: input.triggerPath,
+      trigger_entity_id: input.triggerEntityId,
+      phases: phases.map((p) => p.name),
+      system_chars: system.length,
+    });
 
     // Each phase resolves to its own model + tools. We keep the system
     // message constant across phases (it's the role's identity) and
@@ -170,6 +200,8 @@ export async function runAgent(
     try {
       for (let i = 0; i < phases.length; i++) {
         const phase = phases[i];
+        ctx.currentPhase = phase.name;
+        const phaseStartedAt = Date.now();
 
         // Resolve tools for this phase.
         const tools: Record<string, Tool> = {};
@@ -193,6 +225,15 @@ export async function runAgent(
         const model =
           options.modelOverride ?? (resolveModel(phase.model) as LanguageModel);
 
+        ctx.trace("phase.start", {
+          phase_index: i,
+          model: describeModel(phase.model),
+          tools: phase.tools,
+          max_steps: phase.maxSteps,
+          prompt_chars: phase.prompt.length,
+          prompt_preview: truncateForTrace(phase.prompt, 240),
+        });
+
         const result = await generateText({
           model,
           system,
@@ -212,9 +253,32 @@ export async function runAgent(
           outputTokens: result.totalUsage?.outputTokens,
           totalTokens: result.totalUsage?.totalTokens,
         });
+
+        ctx.trace("phase.end", {
+          phase_index: i,
+          steps: result.steps.length,
+          finish_reason: result.finishReason,
+          text_chars: result.text.length,
+          text_preview: truncateForTrace(result.text, 500),
+          usage: {
+            input_tokens: result.totalUsage?.inputTokens,
+            output_tokens: result.totalUsage?.outputTokens,
+            total_tokens: result.totalUsage?.totalTokens,
+          },
+          duration_ms: Date.now() - phaseStartedAt,
+        });
+        ctx.currentPhase = null;
       }
 
       await markProcessed(role.name, idem, "completed", null);
+
+      ctx.trace("run.end", {
+        ok: true,
+        total_steps: totalSteps,
+        total_edits: ctx.edits.length,
+        usage: aggregatedUsage,
+        duration_ms: Date.now() - runStartedAt,
+      });
 
       return {
         skipped: false,
@@ -226,6 +290,13 @@ export async function runAgent(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       await markProcessed(role.name, idem, "failed", msg);
+      ctx.trace("run.error", {
+        error: msg,
+        total_steps: totalSteps,
+        total_edits: ctx.edits.length,
+        usage: aggregatedUsage,
+        duration_ms: Date.now() - runStartedAt,
+      });
       throw err;
     }
   });
@@ -246,11 +317,19 @@ function mergeUsage(
 
 // ── Helpers ───────────────────────────────────────────────────────
 
-export function makeContext(space: Space, role: string): AgentContext {
+export function makeContext(
+  space: Space,
+  role: string,
+  options: { runId?: string; tracer?: Tracer } = {},
+): AgentContext {
   const edits: ApplyEditResult[] = [];
-  return {
+  const runId = options.runId ?? randomUUID();
+  const tracer = options.tracer ?? getTracer();
+  const ctx: AgentContext = {
     space,
     role,
+    runId,
+    currentPhase: null,
     edits,
     applyEdit: async (edit, opts) => {
       const result = await applyEdit(space, edit, {
@@ -259,13 +338,46 @@ export function makeContext(space: Space, role: string): AgentContext {
         note: opts.note,
       });
       edits.push(result);
+      // Edit event fires after the write succeeds. We deliberately log
+      // path + size, never the body — the source of truth is the file.
+      ctx.trace("edit", {
+        path: result.path,
+        edit_kind: opts.edit_kind,
+        edit_mode: edit.kind, // "write" | "edit"
+        note: opts.note,
+        search_chars: edit.kind === "edit" ? edit.search.length : 0,
+        replace_chars:
+          edit.kind === "edit"
+            ? edit.replace.length
+            : edit.kind === "write"
+              ? edit.content.length
+              : 0,
+      });
       return result;
     },
     log: (level, msg, meta) => {
       const tail = meta ? ` ${JSON.stringify(meta)}` : "";
       console.log(`[agent/${role}/${level}] ${msg}${tail}`);
     },
+    trace: (event, fields) => {
+      if (!tracer.enabled) return;
+      tracer.emit({
+        event,
+        run_id: runId,
+        role,
+        space_id: space.id,
+        phase: ctx.currentPhase,
+        ...(fields ?? {}),
+      });
+    },
   };
+  return ctx;
+}
+
+/** Compact representation of a model config for trace events. We don't
+ *  log the API key, baseURL, or anything that could leak secrets. */
+function describeModel(model: ModelConfig): string {
+  return `${model.provider}:${model.id}`;
 }
 
 /**
