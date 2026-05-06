@@ -127,6 +127,33 @@ describe("path safety", () => {
       }),
     ).rejects.toThrow(/escapes/);
   });
+
+  it("delete_wiki rejects a non-wiki path (e.g. sources/)", async () => {
+    await expect(
+      tool("delete_wiki").execute({
+        path: "sources/article.txt",
+        reason: "should be blocked by the wiki/ guardrail",
+      }),
+    ).rejects.toThrow(/must be under wiki\//);
+  });
+
+  it("delete_wiki rejects path traversal", async () => {
+    await expect(
+      tool("delete_wiki").execute({
+        path: "wiki/../../escape.md",
+        reason: "should be blocked by safeResolve",
+      }),
+    ).rejects.toThrow(/escapes/);
+  });
+
+  it("delete_wiki rejects absolute path", async () => {
+    await expect(
+      tool("delete_wiki").execute({
+        path: "/tmp/leak.md",
+        reason: "should be blocked by safeResolve",
+      }),
+    ).rejects.toThrow(/must be under wiki\//);
+  });
 });
 
 // ── read_file ─────────────────────────────────────────────────────
@@ -376,6 +403,79 @@ describe("edit_file edge cases", () => {
     expect(
       readFileSync(join(testDir, "wiki/concept/two-edits.md"), "utf-8"),
     ).toContain("FIRST SECOND THIRD.");
+  });
+});
+
+// ── delete_wiki ───────────────────────────────────────────────────
+
+describe("delete_wiki edge cases", () => {
+  it("removes the file from disk and the entity from the index", async () => {
+    // Create a wiki, wait for it to land in the index, then delete it.
+    mkdirSync(join(testDir, "wiki/concept"), { recursive: true });
+    const path = "wiki/concept/to-delete.md";
+    await tool("edit_file").execute({
+      path,
+      search: "",
+      replace: "---\nlabel: ToDelete\nsubject_type: concept\n---\n\nbody\n",
+    });
+    expect(existsSync(join(testDir, path))).toBe(true);
+
+    const sql = createSql();
+    const deadline = Date.now() + 5000;
+    let entityId: string | undefined;
+    while (Date.now() < deadline) {
+      const rows = (await sql`
+        SELECT id FROM entities WHERE space_id = ${space.id} AND source_path = ${path}
+      `) as { id: string }[];
+      if (rows.length > 0) {
+        entityId = rows[0].id;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    expect(entityId).toBeTruthy();
+
+    const result = (await tool("delete_wiki").execute({
+      path,
+      reason: "test cleanup",
+    })) as { path: string; removed_entity_id: string | null; reason: string };
+
+    expect(result.path).toBe(path);
+    expect(result.removed_entity_id).toBe(entityId);
+    expect(result.reason).toBe("test cleanup");
+    expect(existsSync(join(testDir, path))).toBe(false);
+
+    const after = (await sql`
+      SELECT id FROM entities WHERE space_id = ${space.id} AND source_path = ${path}
+    `) as { id: string }[];
+    expect(after).toHaveLength(0);
+  });
+
+  it("throws when the file does not exist", async () => {
+    await expect(
+      tool("delete_wiki").execute({
+        path: "wiki/concept/never-existed.md",
+        reason: "should fail — file is not there",
+      }),
+    ).rejects.toThrow(/does not exist/);
+  });
+
+  it("records the edit on the agent context with edit_kind=delete", async () => {
+    mkdirSync(join(testDir, "wiki/concept"), { recursive: true });
+    const path = "wiki/concept/ctx-record.md";
+    const { tool: w } = toolWithCtx("edit_file");
+    await w.execute({
+      path,
+      search: "",
+      replace: "---\nlabel: CtxRecord\nsubject_type: concept\n---\n\nbody\n",
+    });
+
+    const { tool: d, ctx } = toolWithCtx("delete_wiki");
+    await d.execute({ path, reason: "verifying ctx.edits" });
+
+    const last = ctx.edits[ctx.edits.length - 1];
+    expect(last.kind).toBe("delete");
+    expect(last.path).toBe(path);
   });
 });
 

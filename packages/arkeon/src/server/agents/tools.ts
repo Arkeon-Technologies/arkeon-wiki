@@ -307,6 +307,74 @@ const editFileTool = defineTool("edit_file", {
   summarize: (r) => ({ path: r.path, mode: r.mode }),
 });
 
+// ── delete_wiki ───────────────────────────────────────────────────
+
+/**
+ * Remove a wiki file from disk and its entity from the index.
+ *
+ * Off-limits to the ingestor by default — the consolidator role uses
+ * this to merge a wiki into another and then delete the now-empty
+ * source. The convention the consolidator's prompt enforces is "you
+ * only delete YOUR OWN subject's wiki, never someone else's", which
+ * keeps cascading consolidation runs orderly.
+ *
+ * `reason` is required and surfaces in the agent trace alongside the
+ * tool call. There's no permanent audit row in `entity_edits` because
+ * its FK cascades on entity deletion — provenance for deletes lives in
+ * `agent_runs` + the structured trace, not in the per-entity history.
+ *
+ * Restricted to `wiki/**` paths so an agent can never accidentally
+ * delete a source file or .arkeon state.
+ */
+const deleteWikiTool = defineTool("delete_wiki", {
+  description:
+    "Delete a wiki file from disk and remove it from the index. " +
+    "Use this when consolidating: you've folded the subject's content " +
+    "into another wiki (via edit_file APPEND on that wiki) and the " +
+    "current wiki should no longer exist. Only paths under `wiki/` are " +
+    "allowed — you cannot delete source files. The `reason` is recorded " +
+    "in the run trace; write it as if it were a commit message.",
+  inputSchema: z.object({
+    path: z
+      .string()
+      .describe(
+        "Relative path inside the space's watch_dir. Must start with `wiki/`.",
+      ),
+    reason: z
+      .string()
+      .min(1)
+      .describe(
+        "One-line explanation of why this wiki is being deleted (e.g. " +
+          "'merged into wiki/concept/lust.md — same subject under different label'). " +
+          "Surfaces in the agent trace; future operators read this when " +
+          "auditing what the consolidator did.",
+      ),
+  }),
+  call: async ({ path, reason }, ctx) => {
+    if (!path.startsWith("wiki/")) {
+      throw new Error(
+        `delete_wiki: path '${path}' must be under wiki/ (only wiki files can be deleted)`,
+      );
+    }
+    const result = await ctx.applyEdit(
+      { kind: "delete", path },
+      { edit_kind: "delete", note: reason },
+    );
+    if (result.kind !== "delete") {
+      throw new Error(`delete_wiki: unexpected applyEdit result kind`);
+    }
+    return {
+      path: result.path,
+      removed_entity_id: result.removedEntityId,
+      reason,
+    };
+  },
+  summarize: (r) => ({
+    path: r.path,
+    removed_entity_id: r.removed_entity_id,
+  }),
+});
+
 // ── Registry ──────────────────────────────────────────────────────
 
 export const ALL_TOOLS: Record<string, ToolFactory> = {
@@ -314,4 +382,5 @@ export const ALL_TOOLS: Record<string, ToolFactory> = {
   search: searchTool,
   list_wikis: listWikisTool,
   edit_file: editFileTool,
+  delete_wiki: deleteWikiTool,
 };
