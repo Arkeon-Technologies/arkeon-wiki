@@ -242,8 +242,9 @@ describe("CLI search journey through detached daemon", () => {
     expect(res.json.keyword).toBeUndefined();
     expect(Array.isArray(res.json.vector.hits)).toBe(true);
     for (const hit of res.json.vector.hits) {
-      expect(typeof hit.chunk_id).toBe("number");
-      expect(typeof hit.heading_path).toBe("string");
+      expect(typeof hit.entity_id).toBe("string");
+      expect(typeof hit.label).toBe("string");
+      expect(typeof hit.body).toBe("string");
       expect(typeof hit.similarity).toBe("number");
     }
   });

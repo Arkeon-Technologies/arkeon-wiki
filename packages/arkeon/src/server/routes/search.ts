@@ -33,9 +33,9 @@ interface SearchResponse {
 //   mode=both (default)    {keyword: ..., vector: ...}
 //
 // `keyword` hits are entity-level, ranked by ripgrep match_count, with
-// line-snippet evidence. `vector` hits are chunk-level, sorted by
-// cosine similarity (1 - distance), with the chunk text and heading_path
-// as evidence.
+// line-snippet evidence. `vector` hits are also entity-level (one row
+// per wiki, deduped from chunk-level KNN), sorted by cosine similarity,
+// with the wiki's full body and frontmatter inlined.
 //
 // `space_id` filters both strategies. `limit` is per-strategy — each
 // gets up to `limit` results. `snippets` and `regex` only affect keyword.

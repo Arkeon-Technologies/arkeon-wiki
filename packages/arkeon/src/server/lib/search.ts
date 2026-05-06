@@ -21,14 +21,17 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { rgPath } from "@vscode/ripgrep";
 
 import { createSql } from "./sql.js";
 import { getEmbedder } from "./embedder/index.js";
+import { parseFrontmatter } from "./frontmatter.js";
 
 const SNIPPET_MAX_LEN = 240;
 const DEFAULT_LIMIT = 20;
+const VECTOR_DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 200;
 const DEFAULT_SNIPPETS_PER_FILE = 3;
 
@@ -69,17 +72,32 @@ export interface VectorSearchOptions {
   limit?: number;
 }
 
+/**
+ * One vector search result. Wiki-level: each hit is a complete wiki,
+ * not a chunk. Chunk-level KNN runs underneath but we collapse multiple
+ * matches against the same wiki into a single hit (taking the best
+ * similarity), then read the wiki's body and frontmatter from disk.
+ *
+ * Consumers (LLM agents, the explorer) get exactly what they want from
+ * a "find related wikis" call: the wikis. No chunk_ids, no heading
+ * paths, no chunk text fragments — those are how we *rank*, not what
+ * the caller is asking for.
+ */
 export interface VectorSearchHit {
   entity_id: string;
   space_id: string;
   label: string;
+  /** Path of the wiki file relative to the space's watch_dir. */
   source_path: string;
-  chunk_id: number;
-  chunk_kind: string;
-  heading_path: string;
-  text: string;
-  /** 1 - cosine_distance. Higher is more similar. Range: ~[-1, 1]. */
+  /** 1 - cosine_distance of the wiki's best-matching chunk. Higher is
+   *  more similar. Range: ~[-1, 1]. */
   similarity: number;
+  /** Parsed YAML frontmatter (subject_type, label, aliases, etc.). */
+  frontmatter: Record<string, unknown>;
+  /** The wiki's full body markdown — everything after the frontmatter
+   *  fences. Read from disk at query time so it's always current with
+   *  whatever the file watcher last reconciled. */
+  body: string;
 }
 
 export interface VectorSearchResult {
@@ -315,23 +333,31 @@ export async function searchKeyword(
 
 /**
  * Semantic search via sqlite-vec. Embeds the query, runs KNN over
- * chunk_vectors, joins back to entity_chunks + entities, and returns
- * chunk-level hits sorted by similarity (descending).
+ * chunk_vectors, joins back to entities, and collapses chunk hits to
+ * one row per wiki — taking the wiki's best chunk similarity as its
+ * score and reading the wiki's body + frontmatter from disk.
  *
- * `space_id`, when present, filters joined entity rows. The KNN happens
- * across all chunks first because vec0's MATCH operator can't be
- * combined with a join-table filter inside its query plan; the post-join
- * WHERE then drops cross-space hits. With the typical wiki size this is
- * fine; if it ever matters we can shard by space at write time.
+ * The chunker exists so we can rank by topical-section similarity
+ * instead of forcing the model to embed whole wikis at once. From the
+ * caller's perspective, that's an implementation detail. What you ask
+ * for ("find wikis related to X") is what you get back: a ranked list
+ * of wikis, each with its full body.
+ *
+ * `space_id`, when present, filters joined entity rows. The KNN
+ * happens across all chunks first because vec0's MATCH operator can't
+ * be combined with a join-table filter inside its query plan; the
+ * post-join WHERE then drops cross-space hits.
  *
  * Returns an empty result if no embeddings exist yet, the embedder
- * fails, or the space has no chunks. The route layer is responsible for
- * deciding whether that's a 200 with []  or some other behaviour.
+ * fails, the space has no chunks, or every matched chunk's wiki file
+ * is missing from disk (a stale-index condition). The route layer is
+ * responsible for deciding whether that's a 200 with [] or some other
+ * behaviour.
  */
 export async function searchVector(
   opts: VectorSearchOptions,
 ): Promise<VectorSearchResult> {
-  const limit = Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
+  const limit = Math.min(opts.limit ?? VECTOR_DEFAULT_LIMIT, MAX_LIMIT);
 
   const embedder = await getEmbedder();
 
@@ -353,50 +379,85 @@ export async function searchVector(
   const sql = createSql();
 
   // vec0 KNN. The k value has to live inside the WHERE as
-  // `cv.k = <int>`; we pin it to the Number-validated limit + a margin so
-  // post-join space filtering doesn't starve the result. The embedding
-  // is bound as a Float32Array buffer (verified — vec0 only rejects
-  // parameterised PKs, not parameterised match operands).
-  const k = opts.spaceId ? Math.min(limit * 4, MAX_LIMIT) : limit;
+  // `cv.k = <int>`; we ask for many more chunks than wikis we want
+  // because (a) post-join space filtering may discard some and (b)
+  // multiple chunks per wiki collapse to a single hit. With the
+  // current chunker that's typically 1 card + 2-5 sections per wiki,
+  // so 10× the wiki limit gives plenty of headroom.
+  const k = Math.min(Math.max(limit * 10, 20), MAX_LIMIT);
   if (!Number.isInteger(k) || k < 1) {
     return { hits: [], total: 0, model: embedder.modelId };
   }
 
+  // We don't LIMIT here — we collapse chunks → wikis client-side and
+  // slice to `limit` after. SQL-side dedup via window functions would
+  // require wrapping the vec0 MATCH, which vec0 doesn't compose well
+  // with. The chunk row count is bounded by `k` already.
   const baseSql = `
     SELECT
-      cv.chunk_id AS chunk_id,
       cv.distance AS distance,
       ec.entity_id AS entity_id,
-      ec.chunk_kind AS chunk_kind,
-      ec.heading_path AS heading_path,
-      ec.text AS text,
       e.space_id AS space_id,
       e.label AS label,
-      e.source_path AS source_path
+      e.source_path AS source_path,
+      sp.watch_dir AS watch_dir
     FROM chunk_vectors cv
     JOIN entity_chunks ec ON ec.id = cv.chunk_id
     JOIN entities e ON e.id = ec.entity_id
+    JOIN spaces sp ON sp.id = e.space_id
     WHERE cv.embedding MATCH ?
       AND cv.k = ${k}
       ${opts.spaceId ? "AND e.space_id = ?" : ""}
     ORDER BY cv.distance
-    LIMIT ${limit}
   `;
 
   const params = opts.spaceId ? [vecBuf, opts.spaceId] : [vecBuf];
   const rows = await sql.query(baseSql, params);
 
-  const hits: VectorSearchHit[] = rows.map((r) => ({
-    entity_id: r.entity_id as string,
-    space_id: r.space_id as string,
-    label: r.label as string,
-    source_path: r.source_path as string,
-    chunk_id: r.chunk_id as number,
-    chunk_kind: r.chunk_kind as string,
-    heading_path: r.heading_path as string,
-    text: r.text as string,
-    similarity: 1 - (r.distance as number),
-  }));
+  // Collapse chunk hits → wiki hits. Rows are already in rank order
+  // (distance ascending = similarity descending), so the first row
+  // for an entity is its best match.
+  //
+  // Each surviving wiki incurs one disk read for body + frontmatter
+  // (up to `limit`, default 8). On a local filesystem that's
+  // microseconds and dwarfed by the embedder + KNN cost. On a network
+  // mount it could matter — if that ever becomes real, the fix is to
+  // add a `read_body=false` option on VectorSearchOptions for callers
+  // who only want labels and similarities.
+  const seen = new Set<string>();
+  const hits: VectorSearchHit[] = [];
+  for (const r of rows) {
+    if (hits.length >= limit) break;
+    const entityId = r.entity_id as string;
+    if (seen.has(entityId)) continue;
+    seen.add(entityId);
+
+    const sourcePath = r.source_path as string;
+    const watchDir = r.watch_dir as string | null;
+    if (!watchDir) continue; // space row vanished mid-query
+    const absPath = join(watchDir, sourcePath);
+    if (!existsSync(absPath)) continue; // stale index entry; skip silently
+    let frontmatter: Record<string, unknown>;
+    let body: string;
+    try {
+      const raw = readFileSync(absPath, "utf-8");
+      const parsed = parseFrontmatter(raw);
+      frontmatter = parsed.properties;
+      body = parsed.body;
+    } catch {
+      continue; // unreadable; skip rather than failing the whole search
+    }
+
+    hits.push({
+      entity_id: entityId,
+      space_id: r.space_id as string,
+      label: r.label as string,
+      source_path: sourcePath,
+      similarity: 1 - (r.distance as number),
+      frontmatter,
+      body,
+    });
+  }
 
   return {
     hits,

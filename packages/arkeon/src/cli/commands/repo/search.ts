@@ -44,11 +44,9 @@ interface VectorHit {
   space_id: string;
   label: string;
   source_path: string;
-  chunk_id: number;
-  chunk_kind: string;
-  heading_path: string;
-  text: string;
   similarity: number;
+  frontmatter: Record<string, unknown>;
+  body: string;
 }
 
 interface SearchResponse {
