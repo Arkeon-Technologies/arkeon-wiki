@@ -124,6 +124,32 @@ async function lookupLatestByRole(
 }
 
 /**
+ * Read the current `entities.source_hash` for the entity at this
+ * path. Threaded into AgentInput.meta so the runtime's default
+ * idempotency hash varies with file content — without this, the same
+ * (role, triggerPath) re-fired with new content gets short-circuited
+ * as already_processed and the agent never re-runs on the change.
+ *
+ * Returns null when the entity row no longer exists (e.g. it was
+ * deleted between trigger time and worker pickup). The agent run
+ * proceeds in that case; the role's prompt handles the missing-file
+ * path. We don't pre-empt here because it's the role's call whether
+ * "entity gone" is a no-op or an explicit cleanup.
+ */
+async function lookupSourceHash(
+  spaceId: string,
+  relativePath: string,
+): Promise<string | null> {
+  const sql = createSql();
+  const rows = (await sql`
+    SELECT source_hash FROM entities
+    WHERE space_id = ${spaceId} AND source_path = ${relativePath}
+    LIMIT 1
+  `) as { source_hash: string }[];
+  return rows.length > 0 ? rows[0].source_hash : null;
+}
+
+/**
  * Start a scheduler for a space. Returns a handle the watcher uses to
  * notify of file events and the daemon uses to stop on shutdown.
  *
@@ -256,12 +282,23 @@ export async function startScheduler(
       }
       const role = buildAgentRole(item.role, config);
 
+      // Pull the entity's current source_hash so the runtime's
+      // idempotency hash reflects content. Two edits to the same
+      // wiki (same triggerPath, same entityId) need to look like
+      // distinct work to runAgent — if meta is null they collapse to
+      // one hash and the second run gets skipped as already_processed.
+      const sourceHash = await lookupSourceHash(
+        opts.space.id,
+        item.trigger_path,
+      );
+
       await runAgent(
         role,
         {
           space: opts.space,
           triggerPath: item.trigger_path,
           triggerEntityId: item.trigger_entity_id ?? undefined,
+          meta: { source_hash: sourceHash },
         },
         tools,
         {},

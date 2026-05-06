@@ -149,6 +149,10 @@ describe("consolidator trigger — by_role positive attribution + loop safety", 
       expect(fakeConsolidator).toHaveBeenCalledTimes(1);
       expect(fakeConsolidator.mock.calls[0][0].name).toBe("consolidator");
       expect(fakeConsolidator.mock.calls[0][1].triggerPath).toBe(wikiPath);
+      // Scheduler threads the entity's source_hash into input.meta so
+      // the runtime's idempotency hash varies with content. Without
+      // this, a re-edited wiki gets short-circuited as already_processed.
+      expect(fakeConsolidator.mock.calls[0][1].meta?.source_hash).toBeTruthy();
 
       // ── 2. Consolidator's own edit ───────────────────────────────
       // Stamps by_role=consolidator. The consolidator's by_role_not
@@ -195,6 +199,77 @@ describe("consolidator trigger — by_role positive attribution + loop safety", 
         SELECT id FROM agent_queue WHERE space_id = ${space.id}
       `) as { id: number }[];
       expect(queueRows).toHaveLength(0);
+    } finally {
+      await scheduler.stop();
+    }
+  });
+
+  it("re-fires on a fresh ingestor edit with different content (distinct meta hashes)", async () => {
+    // The scheduler change that surfaces source_hash via input.meta is
+    // the load-bearing piece for cascading consolidation: when the
+    // ingestor re-writes a wiki, the consolidator must run again.
+    // Without source_hash in meta, the runtime's idempotency hash
+    // collapses to a single value and the second run gets skipped as
+    // already_processed.
+    const fakeConsolidator = vi.fn(async (_role, _input, _registry) => ({
+      skipped: false,
+      edits: [],
+      text: "ok",
+      steps: 0,
+      usage: undefined,
+    }));
+
+    const scheduler = await startScheduler({
+      space,
+      triggerRoles: ["consolidator"],
+      runAgentFn: fakeConsolidator,
+    });
+
+    try {
+      const wikiPath = "wiki/concept/refire.md";
+
+      // First ingestor edit (CREATE).
+      await applyEdit(
+        space,
+        {
+          kind: "write",
+          path: wikiPath,
+          content: [
+            "---",
+            "label: Refire",
+            "subject_type: concept",
+            "---",
+            "",
+            "Initial body, version one.",
+            "",
+          ].join("\n"),
+        },
+        { role: "ingestor", edit_kind: "create" },
+      );
+      await scheduler.notify(wikiPath);
+      await waitFor(() => fakeConsolidator.mock.calls.length >= 1, 3000);
+
+      const firstHash = fakeConsolidator.mock.calls[0][1].meta?.source_hash;
+      expect(firstHash).toBeTruthy();
+
+      // Second ingestor edit (REPLACE) — by_role stays "ingestor",
+      // entity_id stays the same, but source_hash changes.
+      await applyEdit(
+        space,
+        {
+          kind: "edit",
+          path: wikiPath,
+          search: "Initial body, version one.",
+          replace: "Substantially rewritten body, version two with new content.",
+        },
+        { role: "ingestor", edit_kind: "replace" },
+      );
+      await scheduler.notify(wikiPath);
+      await waitFor(() => fakeConsolidator.mock.calls.length >= 2, 3000);
+
+      const secondHash = fakeConsolidator.mock.calls[1][1].meta?.source_hash;
+      expect(secondHash).toBeTruthy();
+      expect(secondHash).not.toBe(firstHash);
     } finally {
       await scheduler.stop();
     }
