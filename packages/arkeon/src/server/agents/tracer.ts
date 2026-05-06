@@ -79,7 +79,17 @@ function build(): Tracer {
           mkdirSync(dirname(filePath), { recursive: true });
           dirEnsured = true;
         }
-        const line = JSON.stringify({ ts: new Date().toISOString(), ...event });
+        // ts is assigned AFTER the spread so a caller-supplied `ts`
+        // field can never shadow the auto-generated one. The trace
+        // timestamp is authoritative; events that happen to carry
+        // their own ts (e.g. a tool result echoing a server time)
+        // retain their fields under different names but never lie
+        // about when this writer recorded them.
+        const line = JSON.stringify({ ...event, ts: new Date().toISOString() });
+        // appendFileSync is synchronous, so concurrent emit() calls
+        // from the same process serialize on the JS event loop and
+        // can't interleave. If we ever spawn a worker thread that
+        // also writes here, switch to a queue.
         appendFileSync(filePath, line + "\n");
       } catch (err) {
         live = false;

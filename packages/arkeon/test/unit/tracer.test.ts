@@ -79,6 +79,24 @@ describe("tracer", () => {
     expect(parsed[2].event).toBe("run.end");
   });
 
+  it("auto-generated ts wins when an event also carries its own ts", () => {
+    const file = join(tmp, "trace.jsonl");
+    process.env.ARKEON_WIKI_AGENT_TRACE = "1";
+    process.env.ARKEON_WIKI_AGENT_TRACE_FILE = file;
+    _resetTracerForTests();
+
+    const tracer = getTracer();
+    tracer.emit({ event: "run.start", ts: "1999-01-01T00:00:00.000Z" });
+
+    const parsed = JSON.parse(readFileSync(file, "utf-8").trim());
+    // The writer must overwrite a caller-supplied ts so the trace
+    // timestamp is always the writer's notion of "now".
+    expect(parsed.ts).not.toBe("1999-01-01T00:00:00.000Z");
+    expect(parsed.ts).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    const written = new Date(parsed.ts).getTime();
+    expect(Math.abs(written - Date.now())).toBeLessThan(5000);
+  });
+
   it("creates the parent directory lazily on first emit", () => {
     const file = join(tmp, "nested", "deeply", "trace.jsonl");
     process.env.ARKEON_WIKI_AGENT_TRACE = "1";

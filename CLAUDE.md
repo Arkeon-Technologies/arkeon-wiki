@@ -189,6 +189,8 @@ When enabled, one JSON object per line is appended to `<arkeonHome>/agent-trace.
 
 Tail with `tail -f <path> | jq` or query with `jq -c 'select(.event=="tool.call" and .tool=="search")'`. The schema is unversioned debug-time output; consumers (jq queries, test harnesses) update with the producer.
 
+The writer is append-only — there is no built-in rotation, so the file grows as long as tracing stays on. That's fine for the intended use (turn it on for an investigation, off afterwards). Reset between investigations with `truncate -s 0 <path>` or `rm <path>` (the writer recreates it on next emit).
+
 ## Schema migrations
 
 `src/schema/*.sql`, applied in alphabetical order. Currently `001-foundation.sql` (entities, spaces, relationships, agent runtime), `002-chunks.sql` (`entity_chunks`), and `003-embeddings.sql` (`chunk_vectors` vec0 table, `entity_embeddings` pivot, `embedding_queue`). Must be idempotent (all `IF NOT EXISTS`). Runs on every startup. Note: `003-embeddings.sql` requires the sqlite-vec extension to be loaded; `initDb()` does this automatically before migrations run.
