@@ -563,6 +563,100 @@ describe("buildAgentRole — built-in ingestor", () => {
   });
 });
 
+describe("buildAgentRole — built-in consolidator", () => {
+  beforeEach(() => {
+    process.env.OPENAI_API_KEY = "sk-test";
+  });
+  afterEach(() => {
+    delete process.env.OPENAI_API_KEY;
+  });
+
+  it("resolves to two phases (gather + edit)", async () => {
+    const role = buildAgentRole("consolidator", {
+      defaults: { provider: "openai", model: "gpt-5-mini" },
+    });
+    const { phases } = await role.buildPhases({
+      space: { id: "s1", name: "n", watch_dir: "/tmp" },
+      triggerPath: "wiki/concept/lust.md",
+      triggerEntityId: "01ENT",
+    });
+    expect(phases).toHaveLength(2);
+    expect(phases[0].name).toBe("gather");
+    expect(phases[1].name).toBe("edit");
+  });
+
+  it("gather phase cannot edit or delete; edit phase can do both", async () => {
+    const role = buildAgentRole("consolidator", {
+      defaults: { provider: "openai", model: "gpt-5-mini" },
+    });
+    const { phases } = await role.buildPhases({
+      space: { id: "s1", name: "n", watch_dir: "/tmp" },
+      triggerPath: "wiki/concept/lust.md",
+    });
+    // Phase 1 surveys; explicitly no edit_file or delete_wiki on the
+    // tool surface so the model literally cannot mutate before plan.
+    expect(phases[0].tools).not.toContain("edit_file");
+    expect(phases[0].tools).not.toContain("delete_wiki");
+    // Phase 2 executes.
+    expect(phases[1].tools).toContain("edit_file");
+    expect(phases[1].tools).toContain("delete_wiki");
+  });
+
+  it("the role-level tools whitelist includes delete_wiki", () => {
+    const role = buildAgentRole("consolidator", {
+      defaults: { provider: "openai", model: "gpt-5-mini" },
+    });
+    expect(role.tools).toContain("delete_wiki");
+    expect(role.tools).toContain("edit_file");
+    expect(role.tools).toContain("search");
+  });
+
+  it("trigger fires on wiki/** edits attributed to the ingestor", () => {
+    // The trigger is declarative config; assert its shape from the
+    // builtin so YAML overrides that drop or change it would surface
+    // here. We don't compile-and-evaluate it (covered separately by
+    // the trigger-cascade e2e); just check the attribution + path
+    // filters that are the contract of the consolidator's identity.
+    const triggers = BUILTIN_ROLES.consolidator?.triggers ?? [];
+    expect(triggers).toHaveLength(1);
+    const t = triggers[0];
+    expect(t.on).toBe("file_changed");
+    expect(t.path_under).toEqual(["wiki/**"]);
+    expect(t.by_role).toEqual(["ingestor"]);
+    expect(t.by_role_not).toEqual(["consolidator"]);
+  });
+
+  it("templates {{trigger_path}} into the gather phase prompt", async () => {
+    const role = buildAgentRole("consolidator", {
+      defaults: { provider: "openai", model: "gpt-5-mini" },
+    });
+    const { phases } = await role.buildPhases({
+      space: { id: "s1", name: "n", watch_dir: "/tmp" },
+      triggerPath: "wiki/concept/lust.md",
+      triggerEntityId: "01ENT",
+    });
+    expect(phases[0].prompt).toContain("wiki/concept/lust.md");
+    expect(phases[0].prompt).toContain("01ENT");
+  });
+
+  it("system prompt declares the outward-only invariant", async () => {
+    // Sanity check: this is a defining property of the consolidator,
+    // and a YAML override that drops it from the system prompt would
+    // be a real regression — the loop-safety + cascade-discipline
+    // behavior depends on the model internalising it.
+    const role = buildAgentRole("consolidator", {
+      defaults: { provider: "openai", model: "gpt-5-mini" },
+    });
+    const { system } = await role.buildPhases({
+      space: { id: "s1", name: "n", watch_dir: "/tmp" },
+    });
+    expect(system).toMatch(/outward-only/i);
+    expect(system).toMatch(/MERGE_INTO/);
+    expect(system).toMatch(/BLEED_INTO/);
+    expect(system).toMatch(/CROSS_LINK/);
+  });
+});
+
 describe("buildAgentRole — user-defined role", () => {
   beforeEach(() => {
     process.env.OPENAI_API_KEY = "sk-test";
