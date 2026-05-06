@@ -233,7 +233,7 @@ describe("GET /search?mode=keyword", () => {
 });
 
 describe("GET /search?mode=vector", () => {
-  it("returns chunk-level hits with similarity scores", async () => {
+  it("returns wiki-level hits with body, frontmatter, and similarity", async () => {
     const data = await api(`/search?space_id=${spaceId}&q=Turing&mode=vector`);
     expect(data.vector).toBeDefined();
     expect(data.vector.model).toBe("mock@256");
@@ -241,9 +241,11 @@ describe("GET /search?mode=vector", () => {
 
     for (const hit of data.vector.hits) {
       expect(typeof hit.entity_id).toBe("string");
-      expect(typeof hit.chunk_id).toBe("number");
-      expect(typeof hit.heading_path).toBe("string");
-      expect(typeof hit.text).toBe("string");
+      expect(typeof hit.label).toBe("string");
+      expect(typeof hit.source_path).toBe("string");
+      expect(typeof hit.body).toBe("string");
+      expect(hit.body.length).toBeGreaterThan(0);
+      expect(hit.frontmatter).toBeTypeOf("object");
       expect(typeof hit.similarity).toBe("number");
       expect(hit.similarity).toBeLessThanOrEqual(1);
     }
@@ -270,10 +272,10 @@ describe("GET /search?mode=vector", () => {
     expect(data.vector.hits.length).toBeLessThanOrEqual(2);
   });
 
-  it("returns the same chunk_id for repeated identical queries (mock determinism)", async () => {
+  it("returns the same entity_id for repeated identical queries (mock determinism)", async () => {
     const a = await api(`/search?space_id=${spaceId}&q=stable-query&mode=vector&limit=1`);
     const b = await api(`/search?space_id=${spaceId}&q=stable-query&mode=vector&limit=1`);
-    expect(a.vector.hits[0]?.chunk_id).toBe(b.vector.hits[0]?.chunk_id);
+    expect(a.vector.hits[0]?.entity_id).toBe(b.vector.hits[0]?.entity_id);
   });
 });
 
@@ -326,20 +328,20 @@ describe("GET /search?mode=both", () => {
 // ────────────────────────────────────────────────────────────────────
 
 describe("GET /search — vector edge cases", () => {
-  it("returns multiple chunk hits from the same entity (no entity-level collapse)", async () => {
-    // Issue #47 deliberately keeps chunks as first-class hits — a wiki
-    // with multiple matching sections should appear multiple times.
-    // Pin this so a later "should hits be unique by entity?" change
-    // is intentional, not a regression.
+  it("collapses multiple chunk matches from the same wiki into a single hit", async () => {
+    // Wiki-level result shape: a wiki with several matching sections
+    // shows up exactly once, ranked by its best chunk's similarity.
+    // Pin this so a later "should chunks be hits again?" change is an
+    // intentional reversal, not a regression.
     //
-    // Write a probe wiki with several distinct H2 sections so we know
-    // it produces card + multiple section chunks; the seeded fixtures
-    // are body-only and only emit a single card chunk each.
+    // Probe wiki with several H2 sections so it generates card +
+    // multiple section chunks under the hood. The seeded fixtures are
+    // body-only and only emit a single card chunk each.
     writeWiki(
       "wiki/person/multi-section.md",
       { label: "MultiSectionSubject", subject_type: "person" },
       [
-        "MULTISECTIONPROBE is a fixture for the multi-chunk-per-entity test.",
+        "MULTISECTIONPROBE is a fixture for the wiki-level dedup test.",
         "",
         "## First Section",
         "",
@@ -351,10 +353,6 @@ describe("GET /search — vector edge cases", () => {
       ].join("\n"),
     );
 
-    // Wait for the watcher to sync the file AND the embedding queue to
-    // drain. Polling /wikis is the cheapest way to confirm sync ran;
-    // waiting for drain alone is racy because the queue can still be
-    // empty when the watcher hasn't fired yet.
     const seenDeadline = Date.now() + 8000;
     while (Date.now() < seenDeadline) {
       const wikis = await api(`/wikis?space_id=${spaceId}`);
@@ -363,36 +361,19 @@ describe("GET /search — vector edge cases", () => {
     }
     await waitForDrain(15_000);
 
-    // Mock embedder produces SHA-derived vectors per text — it doesn't
-    // understand semantics, so the query "MULTISECTIONPROBE" doesn't
-    // necessarily rank the chunks containing that string near the top.
-    // We check the structural property instead: pull a wide result set
-    // and confirm at least one entity_id repeats. With four wikis in
-    // this space (three seeded with one chunk each + this one with
-    // three) and limit=20, KNN returns all six chunks; exactly one
-    // entity_id (MultiSectionSubject) appears three times.
     const data = await api(
       `/search?space_id=${spaceId}&q=anything&mode=vector&limit=20`,
     );
 
+    // Every entity_id should appear at most once. The mock embedder
+    // ranking is deterministic-but-content-blind, but the dedup
+    // property is structural and holds regardless of ranking.
     const byEntity = new Map<string, number>();
     for (const hit of data.vector.hits) {
       byEntity.set(hit.entity_id, (byEntity.get(hit.entity_id) ?? 0) + 1);
     }
-    const counts = [...byEntity.values()].sort((a, b) => b - a);
-    expect(counts[0]).toBeGreaterThanOrEqual(2);
-  });
-
-  it("returns a mix of card and section chunk_kinds", async () => {
-    const data = await api(
-      `/search?space_id=${spaceId}&q=mathematician&mode=vector&limit=20`,
-    );
-    const kinds = new Set(data.vector.hits.map((h: any) => h.chunk_kind));
-    expect(kinds.has("card")).toBe(true);
-    // Sections may or may not surface depending on the seeded fixtures,
-    // but the chunk_kind values must always be one of the known set.
-    for (const k of kinds) {
-      expect(["card", "section", "section_part"]).toContain(k);
+    for (const count of byEntity.values()) {
+      expect(count).toBe(1);
     }
   });
 
@@ -502,23 +483,29 @@ describe("GET /search — vector edge cases", () => {
     // by default in tests, the failure is informative.
   });
 
-  it("hit.text matches the chunk text in entity_chunks", async () => {
-    // Integrity check — what we return as the snippet is exactly what
-    // got embedded. If sync.ts and the search join ever drift, this
-    // would be the first thing to break.
-    const data = await api(
-      `/search?space_id=${spaceId}&q=Turing&mode=vector&limit=5`,
+  it("hit.body reflects the live file on disk", async () => {
+    // The body comes from a fresh read at query time, not from cache —
+    // an edit between sync and search lands in the response immediately.
+    writeWiki(
+      "wiki/concept/live-body-probe.md",
+      { label: "LiveBodyProbe", subject_type: "concept" },
+      "LiveBodyProbe is the original body.",
     );
-    expect(data.vector.hits.length).toBeGreaterThan(0);
 
-    for (const hit of data.vector.hits) {
-      expect(hit.text.length).toBeGreaterThan(0);
-      // The chunk text always starts with the heading_path for section
-      // chunks; the card chunk doesn't (it's labels + lead).
-      if (hit.chunk_kind === "section" || hit.chunk_kind === "section_part") {
-        expect(hit.text.startsWith(hit.heading_path)).toBe(true);
+    const seenDeadline = Date.now() + 8000;
+    while (Date.now() < seenDeadline) {
+      const r = await api(
+        `/search?space_id=${spaceId}&q=LiveBodyProbe&mode=vector&limit=5`,
+      );
+      const hit = r.vector.hits.find((h: any) => h.label === "LiveBodyProbe");
+      if (hit && hit.body.includes("original body")) {
+        expect(hit.frontmatter.label).toBe("LiveBodyProbe");
+        expect(hit.frontmatter.subject_type).toBe("concept");
+        return;
       }
+      await new Promise((r) => setTimeout(r, 200));
     }
+    throw new Error("LiveBodyProbe never appeared in vector search results");
   });
 });
 

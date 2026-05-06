@@ -54,12 +54,12 @@ const prevModelsDirEnv = process.env.ARKEON_WIKI_MODELS_DIR;
 
 interface VectorHit {
   entity_id: string;
+  space_id: string;
   label: string;
-  chunk_id: number;
-  chunk_kind: string;
-  heading_path: string;
-  text: string;
+  source_path: string;
   similarity: number;
+  frontmatter: Record<string, unknown>;
+  body: string;
 }
 
 function writeWiki(
@@ -494,14 +494,18 @@ describe("full-journey: corpus shape and embedding coverage", () => {
     }
   });
 
-  it("returns chunks with sensible shape across the corpus", async () => {
+  it("returns hits with sensible shape across the corpus", async () => {
     const hits = await vectorSearch("research", 30);
-    expect(hits.length).toBeGreaterThan(10);
+    expect(hits.length).toBeGreaterThan(0);
+    // Wiki-level hits: at most one per entity, body present, frontmatter
+    // parsed, similarity in range.
+    const seen = new Set<string>();
     for (const h of hits) {
-      expect(typeof h.chunk_id).toBe("number");
-      expect(["card", "section", "section_part"]).toContain(h.chunk_kind);
-      expect(typeof h.heading_path).toBe("string");
-      expect(h.text.length).toBeGreaterThan(0);
+      expect(seen.has(h.entity_id)).toBe(false);
+      seen.add(h.entity_id);
+      expect(typeof h.label).toBe("string");
+      expect(h.body.length).toBeGreaterThan(0);
+      expect(h.frontmatter).toBeTypeOf("object");
       expect(h.similarity).toBeGreaterThanOrEqual(-1);
       expect(h.similarity).toBeLessThanOrEqual(1);
     }

@@ -68,14 +68,17 @@ const searchTool = defineTool("search", {
     "Search the current space. Two strategies, no fusion:\n" +
     "  - keyword (ripgrep): exact substring (or regex) over file contents. " +
     "Best for proper nouns, code identifiers, ULIDs, exact phrases.\n" +
-    "  - vector (sqlite-vec): semantic similarity against wiki chunk " +
-    "embeddings. Best for concepts, paraphrased queries, finding related " +
-    "wikis you don't have a literal name for.\n" +
+    "  - vector (sqlite-vec): semantic similarity. Returns a ranked list " +
+    "of WIKIS — each hit is a complete wiki with its full body and " +
+    "frontmatter, deduplicated from chunk-level matches under the hood. " +
+    "Best for finding related or possibly-duplicate wikis you don't have " +
+    "a literal name for. The body is right there in the response, so " +
+    "there's no need to read_file the wiki separately to inspect it.\n" +
     "Default `mode=both` runs both in parallel and returns each result " +
     "set in its own namespace ({keyword, vector}). Pass `mode=keyword` " +
-    "or `mode=vector` to scope to one. Vector hits are chunk-level with " +
-    "similarity scores in [-1, 1]; keyword hits are entity-level with " +
-    "line snippets ranked by match count.",
+    "or `mode=vector` to scope to one. Vector results carry similarity " +
+    "scores in [-1, 1] (higher = more similar); keyword hits are " +
+    "ranked by match count with line snippets.",
   inputSchema: z.object({
     query: z.string().describe("The query string."),
     mode: z
@@ -96,7 +99,10 @@ const searchTool = defineTool("search", {
       .int()
       .positive()
       .optional()
-      .describe("Max hits per strategy (default 20)."),
+      .describe(
+        "Max hits per strategy. Default 20 for keyword, 8 for vector " +
+          "(vector hits include full wiki bodies, so K is smaller).",
+      ),
     max_snippets_per_file: z
       .number()
       .int()
