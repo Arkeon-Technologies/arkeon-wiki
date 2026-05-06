@@ -51,6 +51,14 @@ const readFileTool = defineTool("read_file", {
     }
     return { path, content };
   },
+  summarize: (r) => {
+    const text = "body" in r ? r.body : r.content;
+    return {
+      path: r.path,
+      body_chars: text?.length ?? 0,
+      has_frontmatter: "frontmatter" in r,
+    };
+  },
 });
 
 // ── search ────────────────────────────────────────────────────────
@@ -134,6 +142,19 @@ const searchTool = defineTool("search", {
     }
     return out;
   },
+  summarize: (r) => {
+    const k = r.keyword as { hits?: unknown[]; total?: number } | undefined;
+    const v = r.vector as { hits?: unknown[]; total?: number; model?: string } | undefined;
+    return {
+      query: r.query,
+      mode: r.mode,
+      keyword_hits: k?.hits?.length,
+      keyword_total: k?.total,
+      vector_hits: v?.hits?.length,
+      vector_total: v?.total,
+      vector_model: v?.model,
+    };
+  },
 });
 
 // ── list_wikis ────────────────────────────────────────────────────
@@ -190,6 +211,14 @@ const listWikisTool = defineTool("list_wikis", {
       limit: input.limit,
       offset: input.offset,
     }),
+  summarize: (r) => {
+    const wikis = (r as { wikis?: unknown[] }).wikis;
+    const total = (r as { total?: number }).total;
+    return {
+      total,
+      returned: Array.isArray(wikis) ? wikis.length : undefined,
+    };
+  },
 });
 
 // ── edit_file ─────────────────────────────────────────────────────
@@ -269,6 +298,7 @@ const editFileTool = defineTool("edit_file", {
     );
     return { path: result.path, mode: "replace" };
   },
+  summarize: (r) => ({ path: r.path, mode: r.mode }),
 });
 
 // ── Registry ──────────────────────────────────────────────────────

@@ -19,6 +19,7 @@ import type { Tool } from "ai";
 import { z } from "zod";
 
 import type { AgentContext } from "./runtime.js";
+import { truncateForTrace } from "./tracer.js";
 
 export interface DefineToolOptions<TInput, TOutput> {
   description: string;
@@ -26,6 +27,11 @@ export interface DefineToolOptions<TInput, TOutput> {
   /** What actually runs. Receives the validated input and the agent
    *  context (space, applyEdit, log, ...). */
   call: (input: TInput, ctx: AgentContext) => Promise<TOutput> | TOutput;
+  /** Optional small summary of the tool's result for trace events.
+   *  Tools whose results can be large (search, list_wikis, read_file)
+   *  should supply this so traces stay legible. If omitted, the tracer
+   *  records the byte size of the full result instead. */
+  summarize?: (result: TOutput) => unknown;
 }
 
 /** A function that, given a context, returns the AI-SDK tool. */
@@ -41,11 +47,31 @@ export function defineTool<TInput, TOutput>(
       inputSchema: opts.inputSchema,
       execute: async (input: TInput) => {
         ctx.log("info", `tool/${name}`, { input });
+        ctx.trace("tool.call", {
+          tool: name,
+          args: truncateForTrace(input),
+        });
+        const startedAt = Date.now();
         try {
-          return await opts.call(input, ctx);
+          const result = await opts.call(input, ctx);
+          ctx.trace("tool.result", {
+            tool: name,
+            ok: true,
+            duration_ms: Date.now() - startedAt,
+            summary: opts.summarize
+              ? opts.summarize(result)
+              : { result_chars: estimateChars(result) },
+          });
+          return result;
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           ctx.log("error", `tool/${name} failed`, { error: message });
+          ctx.trace("tool.result", {
+            tool: name,
+            ok: false,
+            duration_ms: Date.now() - startedAt,
+            error: message,
+          });
           throw err;
         }
       },
@@ -58,4 +84,13 @@ export function defineTool<TInput, TOutput>(
     // calls, and that's what `definition` provides.
     return definition as unknown as Tool;
   };
+}
+
+function estimateChars(value: unknown): number {
+  if (value == null) return 0;
+  try {
+    return JSON.stringify(value)?.length ?? 0;
+  } catch {
+    return String(value).length;
+  }
 }

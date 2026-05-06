@@ -174,6 +174,23 @@ E2e tests start a real stack in-process — no running instance needed.
 
 Override the state dir with `ARKEON_WIKI_HOME` env var or `--data-dir`.
 
+## Debugging agent runs
+
+Agents emit verbose, human-readable logs to the daemon log unconditionally (`[agent/<role>/<level>] ...`). For *structured* per-event traces — every tool call, every edit, every phase boundary, with timing and token usage — set `ARKEON_WIKI_AGENT_TRACE=1`. Off by default (production).
+
+When enabled, one JSON object per line is appended to `<arkeonHome>/agent-trace.jsonl` (override path with `ARKEON_WIKI_AGENT_TRACE_FILE`). Each event carries `ts`, `run_id`, `role`, `space_id`, `phase`, plus event-specific fields:
+
+- `run.start` — phases planned, idempotency key, trigger path
+- `run.skipped` — when alreadyProcessed short-circuits
+- `phase.start` / `phase.end` — model, tool whitelist, step count, token usage, duration
+- `tool.call` / `tool.result` — args (truncated to 500 chars), per-tool `summary` (e.g. `search` reports `keyword_hits`, `vector_hits`, `vector_model`; `list_wikis` reports `total`/`returned`), `duration_ms`, `ok`
+- `edit` — path, edit_kind (create|append|replace), char counts (no body content)
+- `run.end` / `run.error` — total steps, edits, usage, duration
+
+Tail with `tail -f <path> | jq` or query with `jq -c 'select(.event=="tool.call" and .tool=="search")'`. The schema is unversioned debug-time output; consumers (jq queries, test harnesses) update with the producer.
+
+The writer is append-only — there is no built-in rotation, so the file grows as long as tracing stays on. That's fine for the intended use (turn it on for an investigation, off afterwards). Reset between investigations with `truncate -s 0 <path>` or `rm <path>` (the writer recreates it on next emit).
+
 ## Schema migrations
 
 `src/schema/*.sql`, applied in alphabetical order. Currently `001-foundation.sql` (entities, spaces, relationships, agent runtime), `002-chunks.sql` (`entity_chunks`), and `003-embeddings.sql` (`chunk_vectors` vec0 table, `entity_embeddings` pivot, `embedding_queue`). Must be idempotent (all `IF NOT EXISTS`). Runs on every startup. Note: `003-embeddings.sql` requires the sqlite-vec extension to be loaded; `initDb()` does this automatically before migrations run.
