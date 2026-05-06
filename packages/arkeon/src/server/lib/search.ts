@@ -417,6 +417,13 @@ export async function searchVector(
   // Collapse chunk hits → wiki hits. Rows are already in rank order
   // (distance ascending = similarity descending), so the first row
   // for an entity is its best match.
+  //
+  // Each surviving wiki incurs one disk read for body + frontmatter
+  // (up to `limit`, default 8). On a local filesystem that's
+  // microseconds and dwarfed by the embedder + KNN cost. On a network
+  // mount it could matter — if that ever becomes real, the fix is to
+  // add a `read_body=false` option on VectorSearchOptions for callers
+  // who only want labels and similarities.
   const seen = new Set<string>();
   const hits: VectorSearchHit[] = [];
   for (const r of rows) {
