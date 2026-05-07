@@ -34,9 +34,10 @@ Default base URL: `http://localhost:8000`. No auth. JSON in, JSON out. All non-2
 | `POST` | `/spaces` | Register a directory. Body: `{ name, watch_dir }`. |
 | `GET` | `/spaces` | List spaces with entity counts. |
 | `GET` | `/spaces/:id` | Get a single space. |
-| `GET` | `/wikis?space_id=&subject_type=&status=&label_contains=&sort=&limit=&offset=&include=` | List wikis. Frontmatter-aware filters; `label_contains` is a case-insensitive substring match. `include=relationships` adds an edges array, `include=counts` attaches per-wiki incoming/outgoing link counts. |
-| `GET` | `/wikis/:id?include=content` | Properties + incoming/outgoing relationships. `include=content` reads the file from disk. |
-| `DELETE` | `/wikis/:id` | Remove a wiki from the index. |
+| `GET` | `/entities?space_id=&type=&subject_type=&status=&label_contains=&inbound_min=&inbound_max=&outbound_min=&outbound_max=&has_unresolved_outbound=&updated_since=&edited_by_role=&sort=&limit=&offset=&include=` | List entities — wikis (`type=wiki`), source files (`type=file`), and `[[wikilink]]`-derived stubs (`type=stub`). `type` is a comma-list; omit to include all. `has_unresolved_outbound=true` finds entities pointing at stubs (open threads). `include=counts` attaches `counts.inbound`/`counts.outbound`; `include=relationships` adds the edges. `sort` is `updated_at` \| `label` \| `inbound` \| `outbound`. |
+| `GET` | `/entities/:id?include=content` | Properties + incoming/outgoing relationships for any entity (wiki/file/stub). `include=content` reads the file body from disk. |
+| `GET` | `/entities/:id/history?since=&role=&limit=&offset=` | Audit log of edits to this entity (newest first). |
+| `DELETE` | `/entities/:id` | Remove an entity from the index (cascades to relationships and chunks). |
 | `GET` | `/search?q=&space_id=&limit=&snippets=&regex=` | Ripgrep-backed keyword search. Returns ranked entity hits with line snippets. |
 | `GET` | `/health` | Liveness. Always `200` if the process is up. |
 | `GET` | `/ready` | Readiness. `200` if SQLite responds; `503` otherwise. |
@@ -74,10 +75,10 @@ In a directory bound to a running daemon (i.e. `arkeon-wiki init` has been run t
 curl "$(jq -r .api_url .arkeon/state.json)/search?q=shannon&space_id=$(jq -r .space_id .arkeon/state.json)"
 
 # Pull the full content of a specific wiki
-curl "$(jq -r .api_url .arkeon/state.json)/wikis/<id>?include=content"
+curl "$(jq -r .api_url .arkeon/state.json)/entities/<id>?include=content"
 
 # Walk relationships
-curl "$(jq -r .api_url .arkeon/state.json)/wikis/<id>" | jq '.relationships'
+curl "$(jq -r .api_url .arkeon/state.json)/entities/<id>" | jq '.relationships'
 ```
 
 If the daemon isn't running, start it with `arkeon-wiki up` — it survives the terminal closing.

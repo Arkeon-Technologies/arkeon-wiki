@@ -381,7 +381,7 @@ describe("embedding pipeline (mock embedder)", () => {
     expect(chunksBefore.length).toBeGreaterThan(0);
     expect((await getPivots(entity.id)).length).toBe(chunksBefore.length);
 
-    const res = await fetch(`${baseUrl}/wikis/${entity.id}`, { method: "DELETE" });
+    const res = await fetch(`${baseUrl}/entities/${entity.id}`, { method: "DELETE" });
     expect(((await res.json()) as { deleted: boolean }).deleted).toBe(true);
 
     // Cascades: chunks gone → pivots gone (FK CASCADE). Vec0 cleanup

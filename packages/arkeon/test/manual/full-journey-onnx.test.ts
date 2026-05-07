@@ -437,12 +437,16 @@ beforeAll(async () => {
   // Wait for all wikis to land in entities.
   const wikiDeadline = Date.now() + 60_000;
   while (Date.now() < wikiDeadline) {
-    const wikis = await api(`/wikis?space_id=${spaceId}&limit=100`);
-    if ((wikis.wikis ?? []).length === CORPUS.length) break;
+    const wikis = await api(
+      `/entities?type=wiki&space_id=${spaceId}&limit=100`,
+    );
+    if ((wikis.entities ?? []).length === CORPUS.length) break;
     await new Promise((r) => setTimeout(r, 500));
   }
-  const wikis = await api(`/wikis?space_id=${spaceId}&limit=100`);
-  expect(wikis.wikis).toHaveLength(CORPUS.length);
+  const wikis = await api(
+    `/entities?type=wiki&space_id=${spaceId}&limit=100`,
+  );
+  expect(wikis.entities).toHaveLength(CORPUS.length);
 
   // Wait for the embedder to be ready (model load on cold cache may
   // take 60-90s; warm cache is ~2s).

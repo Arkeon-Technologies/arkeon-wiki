@@ -561,9 +561,9 @@ describe("search edge cases", () => {
   });
 });
 
-// ── list_wikis ────────────────────────────────────────────────────
+// ── list_entities ─────────────────────────────────────────────────
 
-describe("list_wikis edge cases", () => {
+describe("list_entities edge cases", () => {
   // Seed a small corpus the tool can filter against.
   beforeAll(async () => {
     mkdirSync(join(testDir, "wiki/person"), { recursive: true });
@@ -601,32 +601,35 @@ describe("list_wikis edge cases", () => {
   }, 15_000);
 
   it("filters by subject_type", async () => {
-    const result = (await tool("list_wikis").execute({
+    const result = (await tool("list_entities").execute({
+      type: "wiki",
       subject_type: "organization",
-    })) as { wikis: Array<{ label: string }>; total: number };
+    })) as { entities: Array<{ label: string }>; total: number };
 
-    const labels = result.wikis.map((w) => w.label);
+    const labels = result.entities.map((w) => w.label);
     expect(labels).toContain("Bell Labs");
     expect(labels).not.toContain("Charles Babbage");
   });
 
   it("filters by status (placeholder vs published)", async () => {
-    const result = (await tool("list_wikis").execute({
+    const result = (await tool("list_entities").execute({
+      type: "wiki",
       status: "placeholder",
-    })) as { wikis: Array<{ label: string }> };
+    })) as { entities: Array<{ label: string }> };
 
-    expect(result.wikis.map((w) => w.label)).toContain("Babb Noted");
-    expect(result.wikis.map((w) => w.label)).not.toContain("Charles Babbage");
+    expect(result.entities.map((w) => w.label)).toContain("Babb Noted");
+    expect(result.entities.map((w) => w.label)).not.toContain("Charles Babbage");
   });
 
   it("matches label_contains as a case-insensitive substring", async () => {
     // 'BABB' (all caps) should now match BOTH 'Babb Noted' AND
     // 'Charles Babbage' — substring semantics, not prefix.
-    const result = (await tool("list_wikis").execute({
+    const result = (await tool("list_entities").execute({
+      type: "wiki",
       label_contains: "BABB",
-    })) as { wikis: Array<{ label: string }> };
+    })) as { entities: Array<{ label: string }> };
 
-    const labels = result.wikis.map((w) => w.label);
+    const labels = result.entities.map((w) => w.label);
     expect(labels).toContain("Babb Noted");
     expect(labels).toContain("Charles Babbage");
   });
@@ -634,10 +637,11 @@ describe("list_wikis edge cases", () => {
   it("escapes LIKE wildcards in label_contains so '%' matches literally", async () => {
     // No wikis whose label contains a literal '%', so the result must
     // be empty — proves '%' is not interpreted as a wildcard.
-    const result = (await tool("list_wikis").execute({
+    const result = (await tool("list_entities").execute({
+      type: "wiki",
       label_contains: "%",
-    })) as { wikis: unknown[] };
-    expect(result.wikis).toEqual([]);
+    })) as { entities: unknown[] };
+    expect(result.entities).toEqual([]);
   });
 
   it("attaches counts when include_counts is true", async () => {
@@ -657,53 +661,57 @@ describe("list_wikis edge cases", () => {
       await new Promise((r) => setTimeout(r, 200));
     }
 
-    const result = (await tool("list_wikis").execute({
+    const result = (await tool("list_entities").execute({
+      type: "wiki",
       label_contains: "Counts Target",
       include_counts: true,
     })) as {
-      wikis: Array<{
+      entities: Array<{
         label: string;
-        counts?: { incoming_links: number; outgoing_links: number };
+        counts?: { inbound: number; outbound: number };
       }>;
     };
 
-    const w = result.wikis.find((x) => x.label === "Counts Target");
+    const w = result.entities.find((x) => x.label === "Counts Target");
     expect(w).toBeTruthy();
     expect(w!.counts).toBeDefined();
-    expect(typeof w!.counts!.incoming_links).toBe("number");
-    expect(typeof w!.counts!.outgoing_links).toBe("number");
+    expect(typeof w!.counts!.inbound).toBe("number");
+    expect(typeof w!.counts!.outbound).toBe("number");
   });
 
   it("respects limit", async () => {
-    const result = (await tool("list_wikis").execute({
+    const result = (await tool("list_entities").execute({
+      type: "wiki",
       limit: 1,
-    })) as { wikis: unknown[]; total: number };
+    })) as { entities: unknown[]; total: number };
 
-    expect(result.wikis.length).toBeLessThanOrEqual(1);
+    expect(result.entities.length).toBeLessThanOrEqual(1);
     expect(result.total).toBeGreaterThan(1);
   });
 
   it("respects offset for pagination", async () => {
-    const page1 = (await tool("list_wikis").execute({
+    const page1 = (await tool("list_entities").execute({
+      type: "wiki",
       limit: 1,
       offset: 0,
       sort: "label",
-    })) as { wikis: Array<{ id: string }> };
+    })) as { entities: Array<{ id: string }> };
 
-    const page2 = (await tool("list_wikis").execute({
+    const page2 = (await tool("list_entities").execute({
+      type: "wiki",
       limit: 1,
       offset: 1,
       sort: "label",
-    })) as { wikis: Array<{ id: string }> };
+    })) as { entities: Array<{ id: string }> };
 
-    expect(page1.wikis[0].id).not.toBe(page2.wikis[0].id);
+    expect(page1.entities[0].id).not.toBe(page2.entities[0].id);
   });
 
-  it("does not return source files (only wikis)", async () => {
+  it("type='wiki' filter excludes source files", async () => {
     mkdirSync(join(testDir, "sources"), { recursive: true });
     writeFileSync(
       join(testDir, "sources/listwikis-source.txt"),
-      "should never appear in list_wikis",
+      "should never appear when type=wiki",
     );
 
     const sql = createSql();
@@ -714,11 +722,14 @@ describe("list_wikis edge cases", () => {
       await new Promise((r) => setTimeout(r, 200));
     }
 
-    const result = (await tool("list_wikis").execute({
+    const result = (await tool("list_entities").execute({
+      type: "wiki",
       label_contains: "listwikis",
-    })) as { wikis: Array<{ source_path: string }> };
+    })) as { entities: Array<{ source_path: string }> };
 
-    expect(result.wikis.find((w) => w.source_path?.startsWith("sources/"))).toBeUndefined();
+    expect(
+      result.entities.find((w) => w.source_path?.startsWith("sources/")),
+    ).toBeUndefined();
   });
 });
 
@@ -779,16 +790,17 @@ describe("cross-tool composition", () => {
     expect(content).toContain("second paragraph from append.");
   });
 
-  it("create → list_wikis surfaces the new wiki via label_contains", async () => {
+  it("create → list_entities surfaces the new wiki via label_contains", async () => {
     await tool("edit_file").execute({
       path: "wiki/concept/list-after-write.md",
       search: "",
       replace: "---\nlabel: List After Write\nsubject_type: concept\n---\n\nbody\n",
     });
 
-    const result = (await tool("list_wikis").execute({
+    const result = (await tool("list_entities").execute({
+      type: "wiki",
       label_contains: "After Write",
-    })) as { wikis: Array<{ label: string }> };
-    expect(result.wikis.map((w) => w.label)).toContain("List After Write");
+    })) as { entities: Array<{ label: string }> };
+    expect(result.entities.map((w) => w.label)).toContain("List After Write");
   });
 });

@@ -56,13 +56,14 @@ He worked at [Bell Labs](../organization/bell-labs.md).
 - `id` is auto-generated on first sync if missing, written back to the file.
 - `label` is required. Everything else is arbitrary.
 - `short_description` (optional, single-line) is recognized by the chunker and embedded into the per-wiki "card" chunk for semantic search.
-- Standard markdown links (`[text](path.md)`) become relationship edges.
+- Standard markdown links (`[text](path.md)`) must resolve to an existing entity. Unresolved standard links log a warning and are dropped (treated as typos). Use `[[wikilink]]` syntax for explicit "should-exist" intent — see below.
+- `[[Label]]` and `[[Label|subject_type]]` — Obsidian/Roam-style wiki-links. The runtime computes the canonical path via `wikiPathFor(subject_type ?? 'concept', label)` (e.g. `[[Bell Labs|organization]]` → `wiki/organization/bell-labs.md`) and inserts a `type='stub'` entity at that path if nothing's there yet. Stubs hold the slot until a real wiki is written there, at which point the entity is upgraded in place — its `id` is preserved so every inbound relationship survives. Stubs are GC'd at the end of every sync once nothing points at them anymore. The wiki-link form is the right choice when an agent wants to flag "this should exist" without inventing a path; standard markdown links remain for verified cross-references.
 
 YAML is a superset of JSON, so wikis written with the old JSON-style frontmatter (`---\n{ ... }\n---`) still parse correctly. The first sync that writes back a generated `id` will rewrite the file in YAML form — heads-up if you have uncommitted changes to a wiki that was authored with JSON frontmatter.
 
 ## Ingestion
 
-A single agent role — `ingestor` — turns sources into wikis. When a source file is added or updated, the ingestor reads it, looks for related wikis (existing ones via `list_wikis` / `search`, new ones it decides to create), and either edits the relevant wiki body in place (SEARCH/REPLACE) or writes a new wiki file. Provenance is captured as plain markdown links from the wiki body back to the source path — those become relationship edges in SQLite via the same link-resolution path that handles wiki↔wiki links.
+A single agent role — `ingestor` — turns sources into wikis. When a source file is added or updated, the ingestor reads it, looks for related wikis (existing ones via `list_entities` / `search`, new ones it decides to create), and either edits the relevant wiki body in place (SEARCH/REPLACE) or writes a new wiki file. Provenance is captured as plain markdown links from the wiki body back to the source path — those become relationship edges in SQLite via the same link-resolution path that handles wiki↔wiki links.
 
 The trigger is automatic. When the watcher sees a file event under the space's `watch_dir` that is **not** under `wiki/**` or `.arkeon/**`, it enqueues an ingestor run via `agent_queue` (a persistent FIFO). A per-space worker drains the queue, claims one item, calls `runAgent`, and either DELETEs the row on success or resets `started_at = NULL` and records `last_error` on failure. The `wiki/**` exclusion is hardcoded — it's the safety property that prevents the agent's own writes from re-firing the role infinitely. Operator-tunable include/exclude lands later.
 
@@ -75,7 +76,7 @@ The pre-2026-04 `contributions[]` frontmatter inbox and matching SQLite table ha
 Tables in SQLite:
 
 - `spaces` — registered directories (id, name, watch_dir)
-- `entities` — wikis and source files (id, space_id, type, label, source_path, source_hash, properties JSON text)
+- `entities` — wikis (`type='wiki'`), source files (`type='file'`), and `[[wikilink]]`-derived stubs (`type='stub'`). Columns: id, space_id, type, label, source_path, source_hash, properties JSON text.
 - `relationships` — edges between entities (source_id, target_id, predicate, link_text, link_path)
 - `agent_runs` — idempotency tracking for the agent runtime, keyed by `(role, idempotency_key)` with an `input_hash` so re-triggers on the same input skip cleanly.
 - `agent_queue` — persistent FIFO of pending agent work. The watcher inserts on file events; the per-space worker claims, runs, and DELETEs on success. Lease pattern (`started_at + 5min`) makes it crash-safe.
@@ -84,7 +85,7 @@ Tables in SQLite:
 - `chunk_vectors` — `vec0` virtual table holding the actual float[256] vectors (sqlite-vec). Joined to chunks via `chunk_id`.
 - `embedding_queue` — per-entity work queue drained by the in-process embedding worker. Same lease pattern as `agent_queue`.
 
-No actors, no auth, no versioning. Schema across `src/schema/001-foundation.sql`, `002-chunks.sql`, and `003-embeddings.sql`.
+No actors, no auth, no versioning. Schema across `src/schema/001-foundation.sql`, `002-chunks.sql`, `003-embeddings.sql`, `004-edits-and-triggers.sql`, and `005-stubs.sql`.
 
 ## Key modules
 
@@ -95,7 +96,7 @@ No actors, no auth, no versioning. Schema across `src/schema/001-foundation.sql`
 - `src/server/lib/search.ts` — ripgrep adapter: spawns `rg --json` per space, parses match events, joins paths back to entities, ranks by `match_count`.
 - `src/server/lib/wiki-paths.ts` — pure helpers for routing labels to wiki file paths: `slugify`, `normalizeLabel`, `wikiPathFor(subject_type, label)`, `findFreePath`.
 - `src/server/lib/file-edits.ts` — the universal mutation primitive. `applyEdit(space, edit)` is the chokepoint every agent and routing helper uses; runs `syncFile`/`removeByPath` after each change.
-- `src/server/agents/` — the agent runtime: declarative `.arkeon/agents.yaml` config (Zod-validated), built-in `ingestor` role template, role-builder that merges YAML + builtins + env, tool registry (`read_file`, `list_wikis`, `search`, `edit_file`), the runAgent loop (Vercel AI SDK), and the per-space scheduler that drives auto-triggering. `edit_file` is the only mutation tool — three modes (CREATE, APPEND, REPLACE) dispatched on whether `search` is empty and whether the file exists. There's no overwrite path.
+- `src/server/agents/` — the agent runtime: declarative `.arkeon/agents.yaml` config (Zod-validated), built-in `ingestor` role template, role-builder that merges YAML + builtins + env, tool registry (`read_file`, `list_entities`, `search`, `edit_file`), the runAgent loop (Vercel AI SDK), and the per-space scheduler that drives auto-triggering. `edit_file` is the only mutation tool — three modes (CREATE, APPEND, REPLACE) dispatched on whether `search` is empty and whether the file exists. There's no overwrite path.
 - `src/server/lib/agent-queue.ts` — pure SQL helpers around the `agent_queue` table (`enqueue`, `claimNext`, `complete`, `fail`, `reclaimOrphans`).
 - `src/server/agents/path-filter.ts` — `shouldTrigger(path)` — the hardcoded `wiki/**` + `.arkeon/**` filter the scheduler consults before enqueueing. Single source of truth; when user-tunable include/exclude lands, this file is the place.
 - `src/server/lib/chunker.ts` — `chunkWiki(parsed, label)`: pure function that turns a wiki into the chunks the embedder will see. Issue #47. Card chunk (label + subject_type + aliases + short_description + lead paragraph) plus one chunk per non-empty H2 with the heading path prepended. Oversized sections fall back to H3-then-paragraph splits with ~80-token overlap. Runs on every wiki sync (`syncWikiFile()`); set `ARKEON_WIKI_CHUNKING=0` to disable.
@@ -107,9 +108,10 @@ No actors, no auth, no versioning. Schema across `src/schema/001-foundation.sql`
 
 - `POST /spaces` — register a directory
 - `GET /spaces` — list spaces
-- `GET /wikis?space_id=...&subject_type=...&status=...&label_contains=...&sort=...&include=...` — list wikis with frontmatter filters; `label_contains` is a case-insensitive substring match (so "Baker Street" finds "221B Baker Street"); `include=relationships` adds edges, `include=counts` attaches per-wiki incoming/outgoing link counts.
-- `GET /wikis/{id}?include=content` — wiki properties + relationships (and body if requested)
-- `DELETE /wikis/{id}` — remove wiki from the index
+- `GET /entities?space_id=...&type=...&subject_type=...&status=...&label_contains=...&inbound_min=...&inbound_max=...&outbound_min=...&outbound_max=...&has_unresolved_outbound=...&updated_since=...&edited_by_role=...&sort=...&include=...` — generic entity listing across wikis (`type=wiki`), source files (`type=file`), and stubs (`type=stub`). `type` is a comma list; omitting it returns all types. Counts (`include=counts`) attach `counts.inbound`/`counts.outbound` per row. `has_unresolved_outbound=true` filters to entities pointing at stubs (i.e. wikis with open threads). `edited_by_role` filters on the most-recent-edit's `by_role` (via the `entity_latest_edit` view). `sort` is `updated_at` | `label` | `inbound` | `outbound`.
+- `GET /entities/{id}?include=content` — properties + relationships for any entity (wiki / file / stub); `include=content` reads the file body from disk.
+- `GET /entities/{id}/history?limit=&offset=&since=&role=` — chronological audit log of edits to this entity from `entity_edits`.
+- `DELETE /entities/{id}` — remove an entity from the index (cascades through relationships and chunks).
 - `GET /search?q=...&mode=keyword|vector|both&space_id=...&limit=...&snippets=...&regex=...` — search across registered spaces. Default `mode=both` runs keyword (ripgrep) and vector (sqlite-vec KNN) in parallel and returns each result set in its own namespace (`response.keyword`, `response.vector`). No fusion. Both result sets are entity-level (one row per wiki, deduped under the hood); keyword hits carry line snippets ranked by match count, vector hits carry the wiki's full `body` + parsed `frontmatter` sorted by similarity (1 − cosine_distance).
 - `GET /health` / `GET /ready`
 
@@ -183,7 +185,7 @@ When enabled, one JSON object per line is appended to `<arkeonHome>/agent-trace.
 - `run.start` — phases planned, idempotency key, trigger path
 - `run.skipped` — when alreadyProcessed short-circuits
 - `phase.start` / `phase.end` — model, tool whitelist, step count, token usage, duration
-- `tool.call` / `tool.result` — args (truncated to 500 chars), per-tool `summary` (e.g. `search` reports `keyword_hits`, `vector_hits`, `vector_model`; `list_wikis` reports `total`/`returned`), `duration_ms`, `ok`
+- `tool.call` / `tool.result` — args (truncated to 500 chars), per-tool `summary` (e.g. `search` reports `keyword_hits`, `vector_hits`, `vector_model`; `list_entities` reports `total`/`returned`), `duration_ms`, `ok`
 - `edit` — path, edit_kind (create|append|replace), char counts (no body content)
 - `run.end` / `run.error` — total steps, edits, usage, duration
 
@@ -193,7 +195,7 @@ The writer is append-only — there is no built-in rotation, so the file grows a
 
 ## Schema migrations
 
-`src/schema/*.sql`, applied in alphabetical order. Currently `001-foundation.sql` (entities, spaces, relationships, agent runtime), `002-chunks.sql` (`entity_chunks`), and `003-embeddings.sql` (`chunk_vectors` vec0 table, `entity_embeddings` pivot, `embedding_queue`). Must be idempotent (all `IF NOT EXISTS`). Runs on every startup. Note: `003-embeddings.sql` requires the sqlite-vec extension to be loaded; `initDb()` does this automatically before migrations run.
+`src/schema/*.sql`, applied in alphabetical order. Currently `001-foundation.sql` (entities, spaces, relationships, agent runtime), `002-chunks.sql` (`entity_chunks`), `003-embeddings.sql` (`chunk_vectors` vec0 table, `entity_embeddings` pivot, `embedding_queue`), `004-edits-and-triggers.sql` (`entity_edits` audit log, `entity_latest_edit` view, agent triggers), and `005-stubs.sql` (widens the `entities.type` CHECK to allow `'stub'`). Must be idempotent (all `IF NOT EXISTS` / table-rebuild patterns). The runner disables FK enforcement around the migration phase so a CHECK-widening rebuild doesn't cascade-delete relationships, then re-enables FKs and runs `PRAGMA foreign_key_check` afterwards. Note: `003-embeddings.sql` requires the sqlite-vec extension to be loaded; `initDb()` does this automatically before migrations run.
 
 ## What's NOT here (yet)
 

@@ -3,7 +3,7 @@
 
 -- Per-edit audit log. One row per write, regardless of source:
 -- worker via applyEdit, human via filesystem, watcher resync, etc.
--- Powers /wikis/{id}/history and the trigger filter "fire on edits
+-- Powers /entities/{id}/history and the trigger filter "fire on edits
 -- not made by me" (loop safety for cascading workers).
 CREATE TABLE IF NOT EXISTS entity_edits (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS entity_edits (
   ),
 
   -- Optional one-line summary the writer chose to attach. Surfaced
-  -- by /wikis/{id}/history so an operator can see what changed
+  -- by /entities/{id}/history so an operator can see what changed
   -- without diffing.
   edit_note TEXT,
 

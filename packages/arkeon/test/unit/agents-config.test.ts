@@ -39,7 +39,7 @@ describe("AGENT_CONFIG_SCHEMA", () => {
       defaults: { provider: "openai", model: "gpt-5-mini" },
       roles: {
         ingestor: {
-          tools: ["list_wikis", "search"],
+          tools: ["list_entities", "search"],
           max_steps: 5,
           instructions: "be terse",
         },
@@ -671,14 +671,14 @@ describe("buildAgentRole — user-defined role", () => {
       roles: {
         "link-checker": {
           system: "You find broken links.",
-          tools: ["list_wikis", "read_file"],
+          tools: ["list_entities", "read_file"],
           max_steps: 30,
         },
       },
     });
 
     expect(role.name).toBe("link-checker");
-    expect(role.tools).toEqual(["list_wikis", "read_file"]);
+    expect(role.tools).toEqual(["list_entities", "read_file"]);
     expect(role.maxSteps).toBe(30);
   });
 

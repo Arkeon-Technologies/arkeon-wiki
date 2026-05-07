@@ -28,7 +28,7 @@ export interface DefineToolOptions<TInput, TOutput> {
    *  context (space, applyEdit, log, ...). */
   call: (input: TInput, ctx: AgentContext) => Promise<TOutput> | TOutput;
   /** Optional small summary of the tool's result for trace events.
-   *  Tools whose results can be large (search, list_wikis, read_file)
+   *  Tools whose results can be large (search, list_entities, read_file)
    *  should supply this so traces stay legible. If omitted, the tracer
    *  records the byte size of the full result instead. */
   summarize?: (result: TOutput) => unknown;

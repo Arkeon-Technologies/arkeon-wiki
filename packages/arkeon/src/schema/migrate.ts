@@ -37,6 +37,16 @@ export async function runMigrations(opts: MigrateOptions): Promise<void> {
 
   const db = initDb(opts.dbPath);
 
+  // Schema rebuilds (e.g. widening a CHECK constraint) require dropping
+  // and recreating tables. ON DELETE CASCADE on referencing tables would
+  // otherwise wipe their data during the rebuild. SQLite's recommended
+  // pattern (https://sqlite.org/lang_altertable.html, "Making Other Kinds
+  // Of Table Schema Changes") is to disable FKs for the duration of the
+  // migration phase, then re-enable and run an integrity check. PRAGMA
+  // foreign_keys is a no-op inside a transaction, so it has to be set
+  // before each migration's BEGIN.
+  db.pragma("foreign_keys = OFF");
+
   let failed = false;
 
   for (const file of files) {
@@ -69,6 +79,20 @@ export async function runMigrations(opts: MigrateOptions): Promise<void> {
     if (fileOk) {
       console.log("OK");
     }
+  }
+
+  // Re-enable FK enforcement and verify the migrations didn't leave any
+  // dangling references behind (e.g. a row in `relationships` whose
+  // target_id is no longer present in `entities` after a rebuild).
+  db.pragma("foreign_keys = ON");
+  const violations = db
+    .prepare("PRAGMA foreign_key_check")
+    .all() as Array<{ table: string; rowid: number; parent: string; fkid: number }>;
+  if (violations.length > 0) {
+    failed = true;
+    console.log(
+      `FK integrity check failed after migrations: ${JSON.stringify(violations)}`,
+    );
   }
 
   console.log("");

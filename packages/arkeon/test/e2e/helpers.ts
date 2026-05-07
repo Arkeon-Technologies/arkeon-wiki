@@ -4,10 +4,10 @@
 /**
  * Shared e2e test helpers.
  *
- * The HTTP API only exposes `/wikis`. For tests that need to assert on
- * source-file (`type='file'`) entities — typically to verify the watcher
- * indexed a non-wiki file — read SQLite directly via the same in-process
- * connection the server uses.
+ * Direct-SQLite helpers for tests. Pre-/entities, the HTTP API only
+ * surfaced wikis, so these helpers were the only way to assert on source
+ * files. They remain useful for "look at the row directly" assertions
+ * that don't want to go through the route layer.
  */
 
 import { createSql } from "../../src/server/lib/sql.js";
@@ -15,7 +15,7 @@ import { createSql } from "../../src/server/lib/sql.js";
 export interface EntityRow {
   id: string;
   space_id: string;
-  type: "wiki" | "file";
+  type: "wiki" | "file" | "stub";
   label: string;
   source_path: string;
 }
@@ -61,7 +61,7 @@ export async function waitForEntityBySourcePath(
 /** Count rows in the entities table (filterable by type / space). */
 export async function countEntities(opts: {
   spaceId?: string;
-  type?: "wiki" | "file";
+  type?: "wiki" | "file" | "stub";
 } = {}): Promise<number> {
   const sql = createSql();
   const conditions: string[] = [];

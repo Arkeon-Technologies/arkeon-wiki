@@ -2,11 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Extract standard markdown links from content.
+ * Extract links from a wiki body. Two flavors are recognized:
  *
- * Finds [text](path) links where path ends in .md — these are wiki
- * cross-references that become relationship edges in Postgres.
- * Ignores URLs (http://, https://), anchors (#), and non-.md links.
+ *   1. Standard markdown links — [text](path.md). Resolve to existing
+ *      entities. If the target path is unknown, sync logs a warning and
+ *      drops the relationship (treat as a typo, not an intentional stub).
+ *   2. Wiki-link syntax — [[Label]] or [[Label|subject_type]] (Obsidian /
+ *      Roam style). Always resolves through wikiPathFor() and creates a
+ *      stub entity if no entity exists at the computed path. This is the
+ *      explicit "this thing should exist" marker the agent uses when it
+ *      doesn't have a verified path.
+ *
+ * The parsers are independent — sync calls both and processes each list
+ * with the appropriate resolution rules.
  */
 
 export interface MarkdownLink {
@@ -16,12 +24,27 @@ export interface MarkdownLink {
   path: string;
 }
 
+export interface WikiLink {
+  /** The label inside the brackets, with surrounding whitespace trimmed. */
+  label: string;
+  /** Optional subject_type hint after a pipe: [[Label|subject_type]]. */
+  subject_type?: string;
+}
+
 // Matches [text](path) but not ![alt](img) (images)
 const LINK_RE = /(?<!!)\[([^\]]+)\]\(([^)]+)\)/g;
 
+// Matches [[Label]] and [[Label|subject_type]]. Excludes [, ], and | from
+// both captures so malformed forms like [[Foo|a|b]] don't accidentally
+// match — those are agent typos, not deliberate links.
+const WIKILINK_RE = /\[\[([^\[\]|]+)(?:\|([^\[\]|]+))?\]\]/g;
+
 /**
- * Extract all markdown links that point to .md files.
+ * Extract all standard markdown links that point to .md files.
  * Returns the display text and raw path for each.
+ *
+ * Does not match wiki-link syntax `[[Label]]` — use {@link extractWikiLinks}
+ * for that.
  */
 export function extractMarkdownLinks(content: string): MarkdownLink[] {
   const links: MarkdownLink[] = [];
@@ -48,6 +71,31 @@ export function extractMarkdownLinks(content: string): MarkdownLink[] {
     if (!path.endsWith(".md")) continue;
 
     links.push({ text, path });
+  }
+
+  return links;
+}
+
+/**
+ * Extract `[[Label]]` and `[[Label|subject_type]]` wiki-links.
+ *
+ * Whitespace around `label` and `subject_type` is trimmed. An empty or
+ * whitespace-only label is skipped. The captures exclude `|` so malformed
+ * forms like `[[Foo|a|b]]` don't match at all.
+ */
+export function extractWikiLinks(content: string): WikiLink[] {
+  const links: WikiLink[] = [];
+  let match: RegExpExecArray | null;
+
+  WIKILINK_RE.lastIndex = 0;
+
+  while ((match = WIKILINK_RE.exec(content)) !== null) {
+    const label = match[1].trim();
+    if (!label) continue;
+    const rawSubject = match[2]?.trim();
+    const wikilink: WikiLink = { label };
+    if (rawSubject) wikilink.subject_type = rawSubject;
+    links.push(wikilink);
   }
 
   return links;

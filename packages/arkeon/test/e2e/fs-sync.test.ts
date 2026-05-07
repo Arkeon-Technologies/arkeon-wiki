@@ -79,13 +79,15 @@ async function api(path: string, options?: RequestInit): Promise<any> {
 }
 
 async function getWikis(spaceId?: string): Promise<any[]> {
-  const qs = spaceId ? `?space_id=${spaceId}` : "";
-  const data = await api(`/wikis${qs}`);
-  return data.wikis ?? [];
+  const qs = spaceId
+    ? `?space_id=${spaceId}&type=wiki`
+    : `?type=wiki`;
+  const data = await api(`/entities${qs}`);
+  return data.entities ?? [];
 }
 
 async function getWiki(id: string): Promise<any> {
-  return api(`/wikis/${id}`);
+  return api(`/entities/${id}`);
 }
 
 /** Wait for the wiki count for a space to reach `expected`. Returns the wiki list. */
@@ -326,7 +328,9 @@ describe("space registration + auto-sync", () => {
   it("indexes source (non-wiki) files", async () => {
     writeSourceFile("notes/meeting.txt", "Meeting notes from today.");
 
-    // Source files aren't exposed via /wikis — verify via SQLite directly.
+    // Source files have type='file' in the entities table; the watcher
+    // indexes them just like wikis, just without the chunker/embedder
+    // pipeline.
     const meeting = await waitForEntityBySourcePath(spaceId, "notes/meeting.txt");
     expect(meeting.type).toBe("file");
     expect(meeting.label).toBe("meeting");
@@ -431,42 +435,42 @@ describe("space registration + auto-sync", () => {
 
 describe("API read endpoints", () => {
   it("lists wikis", async () => {
-    const all = await api("/wikis");
+    const all = await api("/entities?type=wiki");
     expect(all.total).toBeGreaterThan(0);
-    expect(all.wikis.length).toBeGreaterThan(0);
-    // Source files are not in /wikis output
-    for (const w of all.wikis) {
-      expect(w.type).toBeUndefined();
+    expect(all.entities.length).toBeGreaterThan(0);
+    // type=wiki filter excludes sources and stubs; every row should be 'wiki'.
+    for (const w of all.entities) {
+      expect(w.type).toBe("wiki");
     }
   });
 
   it("supports pagination", async () => {
-    const page1 = await api("/wikis?limit=2&offset=0");
-    const page2 = await api("/wikis?limit=2&offset=2");
+    const page1 = await api("/entities?type=wiki&limit=2&offset=0");
+    const page2 = await api("/entities?type=wiki&limit=2&offset=2");
 
-    expect(page1.wikis).toHaveLength(2);
+    expect(page1.entities).toHaveLength(2);
     expect(page1.limit).toBe(2);
     expect(page1.offset).toBe(0);
 
-    const ids1 = page1.wikis.map((e: any) => e.id);
-    const ids2 = page2.wikis.map((e: any) => e.id);
+    const ids1 = page1.entities.map((e: any) => e.id);
+    const ids2 = page2.entities.map((e: any) => e.id);
     for (const id of ids1) {
       expect(ids2).not.toContain(id);
     }
   });
 
   it("filters by subject_type", async () => {
-    const persons = await api("/wikis?subject_type=person");
-    for (const w of persons.wikis) {
+    const persons = await api("/entities?type=wiki&subject_type=person");
+    for (const w of persons.entities) {
       const props = typeof w.properties === "string" ? JSON.parse(w.properties) : w.properties;
       expect(props.subject_type).toBe("person");
     }
   });
 
   it("filters by label_contains (substring, case-insensitive)", async () => {
-    const matches = await api("/wikis?label_contains=Alan");
-    expect(matches.wikis.length).toBeGreaterThan(0);
-    for (const w of matches.wikis) {
+    const matches = await api("/entities?type=wiki&label_contains=Alan");
+    expect(matches.entities.length).toBeGreaterThan(0);
+    for (const w of matches.entities) {
       expect(w.label.toLowerCase().includes("alan")).toBe(true);
     }
   });
@@ -474,9 +478,9 @@ describe("API read endpoints", () => {
   it("escapes LIKE wildcards in label_contains", async () => {
     // Without escaping, `%` would match everything. With escaping, it
     // matches only labels that literally contain `%` — none of ours.
-    const data = await api("/wikis?label_contains=%25"); // URL-encoded `%`
+    const data = await api("/entities?type=wiki&label_contains=%25"); // URL-encoded `%`
     expect(data.total).toBe(0);
-    const data2 = await api("/wikis?label_contains=_");
+    const data2 = await api("/entities?type=wiki&label_contains=_");
     expect(data2.total).toBe(0);
   });
 
@@ -494,11 +498,11 @@ describe("API read endpoints", () => {
     const deadline = Date.now() + 5000;
     let probe: any;
     while (Date.now() < deadline) {
-      const data = await api(`/wikis?space_id=${spaceId}&status=published`);
-      probe = data.wikis.find((w: any) => w.label === "Status Filter Probe");
+      const data = await api(`/entities?type=wiki&space_id=${spaceId}&status=published`);
+      probe = data.entities.find((w: any) => w.label === "Status Filter Probe");
       if (probe) {
         // Every result must have status=published
-        for (const w of data.wikis) {
+        for (const w of data.entities) {
           const props = typeof w.properties === "string" ? JSON.parse(w.properties) : w.properties;
           expect(props.status).toBe("published");
         }
@@ -510,21 +514,21 @@ describe("API read endpoints", () => {
   });
 
   it("supports sort=label", async () => {
-    const sorted = await api("/wikis?sort=label");
-    const labels = sorted.wikis.map((w: any) => w.label);
+    const sorted = await api("/entities?type=wiki&sort=label");
+    const labels = sorted.entities.map((w: any) => w.label);
     const expected = [...labels].sort((a, b) => a.localeCompare(b));
     expect(labels).toEqual(expected);
   });
 
   it("rejects invalid sort with 400", async () => {
-    const data = await api("/wikis?sort=bogus");
+    const data = await api("/entities?type=wiki&sort=bogus");
     expect(data.error?.code).toBe("validation_error");
   });
 
   it("combines filters (subject_type + label_contains)", async () => {
-    const data = await api("/wikis?subject_type=person&label_contains=Alan");
-    expect(data.wikis.length).toBeGreaterThan(0);
-    for (const w of data.wikis) {
+    const data = await api("/entities?type=wiki&subject_type=person&label_contains=Alan");
+    expect(data.entities.length).toBeGreaterThan(0);
+    for (const w of data.entities) {
       const props = typeof w.properties === "string" ? JSON.parse(w.properties) : w.properties;
       expect(props.subject_type).toBe("person");
       expect(w.label.toLowerCase().includes("alan")).toBe(true);
@@ -532,24 +536,26 @@ describe("API read endpoints", () => {
   });
 
   it("returns total: 0 for filters that match nothing", async () => {
-    const data = await api("/wikis?subject_type=__no_such_type__");
+    const data = await api("/entities?type=wiki&subject_type=__no_such_type__");
     expect(data.total).toBe(0);
-    expect(data.wikis).toHaveLength(0);
+    expect(data.entities).toHaveLength(0);
   });
 
-  it("returns 404 for nonexistent wiki", async () => {
-    const data = await api("/wikis/nonexistent");
+  it("returns 404 for nonexistent entity", async () => {
+    const data = await api("/entities/nonexistent");
     expect(data.error?.code).toBe("not_found");
   });
 
-  it("returns 404 when fetching a source file via /wikis", async () => {
+  it("returns source-file entities through /entities/:id", async () => {
     const meeting = await getEntityBySourcePath(
       (await api("/spaces")).spaces[0].id,
       "notes/meeting.txt",
     );
     expect(meeting).toBeTruthy();
-    const data = await api(`/wikis/${meeting!.id}`);
-    expect(data.error?.code).toBe("not_found");
+    const data = await api(`/entities/${meeting!.id}`);
+    expect(data.error).toBeUndefined();
+    expect(data.type).toBe("file");
+    expect(data.source_path).toBe("notes/meeting.txt");
   });
 
   it("lists spaces with entity counts", async () => {
@@ -570,8 +576,8 @@ describe("API read endpoints", () => {
 
 describe("include=relationships on list endpoint", () => {
   it("returns relationships alongside wikis", async () => {
-    const data = await api("/wikis?include=relationships");
-    expect(data.wikis.length).toBeGreaterThan(0);
+    const data = await api("/entities?type=wiki&include=relationships");
+    expect(data.entities.length).toBeGreaterThan(0);
     expect(data.relationships).toBeDefined();
     expect(Array.isArray(data.relationships)).toBe(true);
 
@@ -584,19 +590,19 @@ describe("include=relationships on list endpoint", () => {
   });
 
   it("does not return relationships without the flag", async () => {
-    const data = await api("/wikis");
+    const data = await api("/entities?type=wiki");
     expect(data.relationships).toBeUndefined();
   });
 
   it("scopes relationships to the space filter", async () => {
     const spaces = await api("/spaces");
     const spaceId = spaces.spaces[0].id;
-    const data = await api(`/wikis?space_id=${spaceId}&include=relationships`);
+    const data = await api(`/entities?type=wiki&space_id=${spaceId}&include=relationships`);
 
-    expect(data.wikis.length).toBeGreaterThan(0);
+    expect(data.entities.length).toBeGreaterThan(0);
     expect(data.relationships).toBeDefined();
 
-    for (const w of data.wikis) {
+    for (const w of data.entities) {
       expect(w.space_id).toBe(spaceId);
     }
   });
@@ -604,19 +610,19 @@ describe("include=relationships on list endpoint", () => {
 
 describe("include=counts on list endpoint", () => {
   it("attaches per-wiki counts when requested", async () => {
-    const data = await api("/wikis?include=counts");
-    expect(data.wikis.length).toBeGreaterThan(0);
+    const data = await api("/entities?type=wiki&include=counts");
+    expect(data.entities.length).toBeGreaterThan(0);
 
-    for (const w of data.wikis) {
+    for (const w of data.entities) {
       expect(w.counts).toBeDefined();
-      expect(typeof w.counts.incoming_links).toBe("number");
-      expect(typeof w.counts.outgoing_links).toBe("number");
+      expect(typeof w.counts.inbound).toBe("number");
+      expect(typeof w.counts.outbound).toBe("number");
     }
 
     // Computability has 1 incoming (CS History) and 1 outgoing (Turing)
-    const computability = data.wikis.find((w: any) => w.label === "Computability");
-    expect(computability.counts.incoming_links).toBe(1);
-    expect(computability.counts.outgoing_links).toBe(1);
+    const computability = data.entities.find((w: any) => w.label === "Computability");
+    expect(computability.counts.inbound).toBe(1);
+    expect(computability.counts.outbound).toBe(1);
   });
 });
 
@@ -626,7 +632,7 @@ describe("include=content on detail endpoint", () => {
     const wiki = wikis.find((w: any) => w.label === "Alan Turing");
     expect(wiki).toBeTruthy();
 
-    const withContent = await api(`/wikis/${wiki.id}?include=content`);
+    const withContent = await api(`/entities/${wiki.id}?include=content`);
     expect(withContent.content).toBeTruthy();
     expect(typeof withContent.content).toBe("string");
     expect(withContent.content).toContain("Alan Turing");
@@ -637,7 +643,7 @@ describe("include=content on detail endpoint", () => {
     const wikis = await getWikis();
     const wiki = wikis[0];
 
-    const withoutContent = await api(`/wikis/${wiki.id}`);
+    const withoutContent = await api(`/entities/${wiki.id}`);
     expect(withoutContent.content).toBeUndefined();
   });
 
@@ -650,7 +656,7 @@ describe("include=content on detail endpoint", () => {
     const absPath = join(testDir, wiki.source_path);
     if (existsSync(absPath)) unlinkSync(absPath);
 
-    const result = await api(`/wikis/${wiki.id}?include=content`);
+    const result = await api(`/entities/${wiki.id}?include=content`);
     expect(result.content).toBeNull();
   });
 });
@@ -661,21 +667,22 @@ describe("wiki deletion via API", () => {
     const toDelete = wikis.find((w: any) => w.label === "Complex Properties Test");
     expect(toDelete).toBeTruthy();
 
-    const result = await api(`/wikis/${toDelete.id}`, { method: "DELETE" });
+    const result = await api(`/entities/${toDelete.id}`, { method: "DELETE" });
     expect(result.deleted).toBe(true);
 
-    const after = await api(`/wikis/${toDelete.id}`);
+    const after = await api(`/entities/${toDelete.id}`);
     expect(after.error?.code).toBe("not_found");
   });
 
-  it("returns 404 when deleting a source file via /wikis", async () => {
+  it("can delete a source-file entity through /entities/:id", async () => {
     const meeting = await getEntityBySourcePath(
       (await api("/spaces")).spaces[0].id,
       "notes/meeting.txt",
     );
     expect(meeting).toBeTruthy();
-    const result = await api(`/wikis/${meeting!.id}`, { method: "DELETE" });
-    expect(result.error?.code).toBe("not_found");
+    const result = await api(`/entities/${meeting!.id}`, { method: "DELETE" });
+    expect(result.deleted).toBe(true);
+    expect(result.type).toBe("file");
   });
 });
 

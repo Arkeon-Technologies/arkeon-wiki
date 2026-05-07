@@ -61,12 +61,12 @@ async function waitForWikiCount(
 ): Promise<any[]> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const data = await api(`/wikis?space_id=${spaceId}`);
-    if ((data.wikis ?? []).length === expected) return data.wikis;
+    const data = await api(`/entities?type=wiki&space_id=${spaceId}`);
+    if ((data.entities ?? []).length === expected) return data.entities;
     await new Promise((r) => setTimeout(r, 200));
   }
-  const data = await api(`/wikis?space_id=${spaceId}`);
-  return data.wikis ?? [];
+  const data = await api(`/entities?type=wiki&space_id=${spaceId}`);
+  return data.entities ?? [];
 }
 
 beforeAll(async () => {
@@ -355,8 +355,8 @@ describe("GET /search — vector edge cases", () => {
 
     const seenDeadline = Date.now() + 8000;
     while (Date.now() < seenDeadline) {
-      const wikis = await api(`/wikis?space_id=${spaceId}`);
-      if ((wikis.wikis ?? []).some((w: any) => w.label === "MultiSectionSubject")) break;
+      const wikis = await api(`/entities?type=wiki&space_id=${spaceId}`);
+      if ((wikis.entities ?? []).some((w: any) => w.label === "MultiSectionSubject")) break;
       await new Promise((r) => setTimeout(r, 200));
     }
     await waitForDrain(15_000);
@@ -387,7 +387,7 @@ describe("GET /search — vector edge cases", () => {
       "Notes about a famous mathematician's letters.",
     );
 
-    // Wait for the watcher to index it. We poll via /wikis to avoid
+    // Wait for the watcher to index it. We poll via /entities to avoid
     // racing with the embedding queue.
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
@@ -435,8 +435,8 @@ describe("GET /search — vector edge cases", () => {
     }
     expect(probeId).not.toBeNull();
 
-    // Delete via the API. /wikis/{id} cascades.
-    const del = await fetch(`${baseUrl}/wikis/${probeId}`, { method: "DELETE" });
+    // Delete via the API. /entities/{id} cascades.
+    const del = await fetch(`${baseUrl}/entities/${probeId}`, { method: "DELETE" });
     expect((await del.json() as { deleted: boolean }).deleted).toBe(true);
 
     // Vector results should no longer surface this entity. The chunk row
