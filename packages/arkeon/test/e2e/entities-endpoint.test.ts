@@ -85,12 +85,17 @@ beforeAll(async () => {
   }).then((r) => r.json());
   spaceId = spaceData.id;
 
-  // Seed the corpus.
+  // Seed the corpus. Write leaf first and wait for it to land so the
+  // hub→leaf standard markdown link resolves on hub's first sync (rather
+  // than getting warned-and-dropped if the watcher happens to process
+  // hub before leaf).
   writeWiki(
     "wiki/concept/leaf.md",
     { label: "Leaf Concept", subject_type: "concept" },
     "An isolated wiki with no links in or out.",
   );
+  await waitForEntityBySourcePath(spaceId, "wiki/concept/leaf.md");
+
   writeWiki(
     "wiki/concept/hub.md",
     { label: "Hub Concept", subject_type: "concept" },
@@ -103,12 +108,21 @@ beforeAll(async () => {
   );
   writeSource("sources/raw-input.txt", "Some plain text source content.");
 
-  // Wait for everything to land.
-  await waitForEntityBySourcePath(spaceId, "wiki/concept/leaf.md");
   await waitForEntityBySourcePath(spaceId, "wiki/concept/hub.md");
   await waitForEntityBySourcePath(spaceId, "wiki/person/seeker.md");
   await waitForEntityBySourcePath(spaceId, "sources/raw-input.txt");
   await waitForEntityBySourcePath(spaceId, "wiki/concept/unknown-topic.md");
+
+  // Wait for the hub→leaf relationship to be in place — without it, the
+  // inbound-count tests are flaky on slow runners.
+  const relDeadline = Date.now() + 5000;
+  while (Date.now() < relDeadline) {
+    const data = await fetch(
+      `${BASE_URL}/entities?space_id=${spaceId}&type=wiki&inbound_min=1`,
+    ).then((r) => r.json());
+    if (data.entities?.some((e: { label: string }) => e.label === "Leaf Concept")) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
 }, 30_000);
 
 afterAll(async () => {
