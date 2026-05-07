@@ -503,11 +503,19 @@ async function rebuildRelationships(
  * may have just disappeared.
  */
 async function gcOrphanedStubs(tx: SqlClient, spaceId: string): Promise<void> {
+  // NOT EXISTS with the correlated lookup against `relationships.target_id`
+  // is index-driven via `idx_relationships_target` and probes once per
+  // stub row, bounded by the stub count in this space (which the partial
+  // index `idx_entities_stubs` narrows further). The earlier
+  // `id NOT IN (SELECT DISTINCT target_id FROM relationships)` form forced
+  // a scan of every relationship row across every space on each pass.
   await tx`
     DELETE FROM entities
     WHERE space_id = ${spaceId}
       AND type = 'stub'
-      AND id NOT IN (SELECT DISTINCT target_id FROM relationships)
+      AND NOT EXISTS (
+        SELECT 1 FROM relationships r WHERE r.target_id = entities.id
+      )
   `;
 }
 
