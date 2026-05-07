@@ -50,9 +50,9 @@ No manual sync commands. Just save files.
 **4. Query the graph**
 
 ```bash
-curl http://localhost:8000/wikis                  # list wikis
-curl http://localhost:8000/wikis/{id}             # get properties + relationships
-curl "http://localhost:8000/wikis?subject_type=person&include=counts"
+curl "http://localhost:8000/entities?type=wiki"   # list wikis
+curl http://localhost:8000/entities/{id}          # get properties + relationships (any type)
+curl "http://localhost:8000/entities?type=wiki&subject_type=person&include=counts"
 curl "http://localhost:8000/search?q=shannon"     # keyword search (ripgrep)
 ```
 

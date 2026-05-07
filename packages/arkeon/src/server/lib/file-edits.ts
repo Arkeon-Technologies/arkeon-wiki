@@ -48,7 +48,7 @@ export type FileEdit =
  * FileEdit kind — e.g. a `kind: "write"` FileEdit can be a CREATE or
  * an APPEND depending on whether the target already existed).
  *
- * `note` is an optional one-line summary surfaced by /wikis/{id}/history.
+ * `note` is an optional one-line summary surfaced by /entities/{id}/history.
  */
 export interface EditOpts {
   role: string;

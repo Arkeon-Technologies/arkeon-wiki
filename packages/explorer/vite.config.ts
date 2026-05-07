@@ -15,7 +15,7 @@ export default defineConfig({
   server: {
     port: 3100,
     proxy: {
-      '/wikis': 'http://localhost:8000',
+      '/entities': 'http://localhost:8000',
       '/spaces': 'http://localhost:8000',
       '/health': 'http://localhost:8000',
     },

@@ -17,7 +17,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { initDb, closeDb, getDb } from "../server/lib/sql.js";
+import { initDb } from "../server/lib/sql.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

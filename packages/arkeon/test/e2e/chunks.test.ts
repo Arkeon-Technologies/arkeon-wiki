@@ -220,7 +220,7 @@ describe("entity_chunks (ARKEON_WIKI_CHUNKING=1)", () => {
     const entity = await waitForEntityBySourcePath(spaceId, "wiki/person/temp.md");
     await waitForChunks(entity.id, (rows) => rows.length > 0);
 
-    const res = await fetch(`${BASE_URL}/wikis/${entity.id}`, { method: "DELETE" });
+    const res = await fetch(`${BASE_URL}/entities/${entity.id}`, { method: "DELETE" });
     expect((await res.json() as { deleted: boolean }).deleted).toBe(true);
 
     const after = await getChunks(entity.id);

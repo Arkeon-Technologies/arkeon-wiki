@@ -264,7 +264,7 @@ describe.skipIf(!HAS_KEY)("real-LLM ingestor agent — Gutenberg corpus", () => 
       // Drop sources one at a time, waiting for each to complete
       // before starting the next. This serializes the ingestor and
       // gives us deterministic ordering: story 2 sees story 1's
-      // wikis on list_wikis, etc.
+      // wikis on list_entities, etc.
       const perSource: Array<{
         source: string;
         completed: boolean;

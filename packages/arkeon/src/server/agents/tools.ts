@@ -19,7 +19,7 @@ import { z } from "zod";
 import { safeResolve } from "../lib/file-edits.js";
 import { parseFrontmatter } from "../lib/frontmatter.js";
 import { searchKeyword, searchVector } from "../lib/search.js";
-import { listWikis } from "../lib/wikis.js";
+import { listEntities, parseEntityTypes, type EntityType } from "../lib/entities.js";
 
 import { defineTool, type ToolFactory } from "./define-tool.js";
 
@@ -163,15 +163,27 @@ const searchTool = defineTool("search", {
   },
 });
 
-// ── list_wikis ────────────────────────────────────────────────────
+// ── list_entities ─────────────────────────────────────────────────
 
-const listWikisTool = defineTool("list_wikis", {
+const listEntitiesTool = defineTool("list_entities", {
   description:
-    "List wikis in the current space, with optional filters. Use this to " +
-    "check whether a subject already has a wiki before creating a new one, " +
-    "or to enumerate wikis of a given subject_type. Returns " +
-    "{wikis, total, limit, offset}.",
+    "List entities in the current space — wikis, source files, and stubs " +
+    "(placeholders left by [[wikilink]] references) — with structural " +
+    "filters. Use this to check whether a subject already has a wiki, " +
+    "find sources you haven't cited yet (type=file inbound_max=0), find " +
+    "stubs that need filling (type=stub), or surface wikis with open " +
+    "threads (has_unresolved_outbound=true). Returns " +
+    "{entities, total, limit, offset}.",
   inputSchema: z.object({
+    type: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated entity types: any of 'wiki', 'file', 'stub'. " +
+          "Omit to include all types. Examples: 'wiki' (just wikis), " +
+          "'wiki,stub' (wikis and the stubs they point to), 'stub' (only " +
+          "things to fill).",
+      ),
     subject_type: z
       .string()
       .optional()
@@ -187,42 +199,110 @@ const listWikisTool = defineTool("list_wikis", {
       .string()
       .optional()
       .describe(
-        "Case-insensitive substring match on the wiki's label. " +
-          "'Baker Street' matches '221B Baker Street', 'Watson' matches " +
-          "'John H. Watson'. Use this to check whether a subject " +
-          "already exists — try a few variants of the name (last name " +
-          "alone, etc.) before deciding to create a new wiki.",
+        "Case-insensitive substring match on the entity's label. " +
+          "'Baker Street' matches '221B Baker Street'. Useful for checking " +
+          "whether a subject already exists under some variant of its name.",
+      ),
+    inbound_min: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe("Inclusive lower bound on inbound relationship count."),
+    inbound_max: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe(
+        "Inclusive upper bound on inbound relationship count. Combine " +
+          "with type='file' inbound_max=0 to find sources nothing has " +
+          "cited yet.",
+      ),
+    outbound_min: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe("Inclusive lower bound on outbound relationship count."),
+    outbound_max: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe("Inclusive upper bound on outbound relationship count."),
+    has_unresolved_outbound: z
+      .boolean()
+      .optional()
+      .describe(
+        "True: only entities with at least one outbound link to a stub " +
+          "(i.e. wikis with open threads). False: only entities whose " +
+          "outbound links all resolve to real entities.",
+      ),
+    updated_since: z
+      .string()
+      .optional()
+      .describe(
+        "ISO timestamp; only entities with updated_at >= this. Useful " +
+          "for 'what changed in the last hour' style queries.",
+      ),
+    edited_by_role: z
+      .string()
+      .optional()
+      .describe(
+        "Filter on the entity's most recent edit's by_role — e.g. " +
+          "'human' for filesystem-driven changes, 'ingestor'/'consolidator' " +
+          "for agent edits.",
       ),
     sort: z
-      .enum(["updated_at", "label"])
+      .enum(["updated_at", "label", "inbound", "outbound"])
       .optional()
-      .describe("Default 'updated_at' (newest first)."),
+      .describe(
+        "Default 'updated_at' (newest first). 'inbound' / 'outbound' " +
+          "rank by relationship count (descending).",
+      ),
     include_counts: z
       .boolean()
       .optional()
       .describe(
-        "Attach incoming/outgoing markdown-link counts per wiki.",
+        "Attach inbound/outbound relationship counts per entity.",
       ),
     limit: z.number().int().positive().optional().describe("Default 100, max 10000."),
     offset: z.number().int().min(0).optional().describe("Pagination offset, default 0."),
   }),
-  call: (input, ctx) =>
-    listWikis({
+  call: (input, ctx) => {
+    let types: EntityType[] | undefined;
+    try {
+      types = parseEntityTypes(input.type);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`list_entities: ${msg}`);
+    }
+    return listEntities({
       space_id: ctx.space.id,
+      types,
       subject_type: input.subject_type,
       status: input.status,
       label_contains: input.label_contains,
+      inbound_min: input.inbound_min,
+      inbound_max: input.inbound_max,
+      outbound_min: input.outbound_min,
+      outbound_max: input.outbound_max,
+      has_unresolved_outbound: input.has_unresolved_outbound,
+      updated_since: input.updated_since,
+      edited_by_role: input.edited_by_role,
       sort: input.sort,
       include_counts: input.include_counts,
       limit: input.limit,
       offset: input.offset,
-    }),
+    });
+  },
   summarize: (r) => {
-    const wikis = (r as { wikis?: unknown[] }).wikis;
+    const entities = (r as { entities?: unknown[] }).entities;
     const total = (r as { total?: number }).total;
     return {
       total,
-      returned: Array.isArray(wikis) ? wikis.length : undefined,
+      returned: Array.isArray(entities) ? entities.length : undefined,
     };
   },
 });
@@ -380,7 +460,7 @@ const deleteWikiTool = defineTool("delete_wiki", {
 export const ALL_TOOLS: Record<string, ToolFactory> = {
   read_file: readFileTool,
   search: searchTool,
-  list_wikis: listWikisTool,
+  list_entities: listEntitiesTool,
   edit_file: editFileTool,
   delete_wiki: deleteWikiTool,
 };

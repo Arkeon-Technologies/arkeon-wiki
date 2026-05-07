@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * End-to-end test for GET /wikis/:id/history.
+ * End-to-end test for GET /entities/:id/history.
  *
  * Builds up a wiki via several applyEdit calls (different roles +
  * edit_kinds), then verifies the audit endpoint returns them
@@ -131,9 +131,9 @@ interface HistoryRow {
   at: string;
 }
 
-describe("GET /wikis/:id/history", () => {
+describe("GET /entities/:id/history", () => {
   it("returns all edits newest-first with the expected shape", async () => {
-    const res = await fetch(`${baseUrl}/wikis/${entityId}/history`);
+    const res = await fetch(`${baseUrl}/entities/${entityId}/history`);
     expect(res.status).toBe(200);
     const json = (await res.json()) as { entity_id: string; edits: HistoryRow[] };
     expect(json.entity_id).toBe(entityId);
@@ -147,7 +147,7 @@ describe("GET /wikis/:id/history", () => {
   });
 
   it("respects ?role= filter", async () => {
-    const res = await fetch(`${baseUrl}/wikis/${entityId}/history?role=synthesizer`);
+    const res = await fetch(`${baseUrl}/entities/${entityId}/history?role=synthesizer`);
     const json = (await res.json()) as { edits: HistoryRow[] };
     expect(json.edits).toHaveLength(2);
     for (const e of json.edits) expect(e.by_role).toBe("synthesizer");
@@ -155,11 +155,11 @@ describe("GET /wikis/:id/history", () => {
 
   it("respects ?since= filter", async () => {
     const all = await (
-      await fetch(`${baseUrl}/wikis/${entityId}/history`)
+      await fetch(`${baseUrl}/entities/${entityId}/history`)
     ).json() as { edits: HistoryRow[] };
     const middle = all.edits[1].at;
     const res = await fetch(
-      `${baseUrl}/wikis/${entityId}/history?since=${encodeURIComponent(middle)}`,
+      `${baseUrl}/entities/${entityId}/history?since=${encodeURIComponent(middle)}`,
     );
     const json = (await res.json()) as { edits: HistoryRow[] };
     // since is at-or-after, so two edits qualify.
@@ -167,12 +167,12 @@ describe("GET /wikis/:id/history", () => {
   });
 
   it("404s on an unknown wiki id", async () => {
-    const res = await fetch(`${baseUrl}/wikis/01NOPE/history`);
+    const res = await fetch(`${baseUrl}/entities/01NOPE/history`);
     expect(res.status).toBe(404);
   });
 
   it("clamps ?limit= to MAX_LIMIT", async () => {
-    const res = await fetch(`${baseUrl}/wikis/${entityId}/history?limit=99999`);
+    const res = await fetch(`${baseUrl}/entities/${entityId}/history?limit=99999`);
     const json = (await res.json()) as { edits: HistoryRow[] };
     // We have 3 edits so this just confirms we get them all without erroring.
     expect(json.edits).toHaveLength(3);

@@ -139,7 +139,7 @@ function scriptModel(steps: LanguageModelV3GenerateResult[]): MockLanguageModelV
 // ── A reusable role for the runtime under test ────────────────────
 
 function makeTestRole(overrides: Partial<AgentRole> = {}): AgentRole {
-  const tools = ["read_file", "edit_file", "search", "list_wikis"];
+  const tools = ["read_file", "edit_file", "search", "list_entities"];
   const model = { provider: "anthropic" as const, id: "claude-test" }; // ignored: modelOverride wins
   // The runtime reads phase.maxSteps; an `overrides.maxSteps` flows
   // through to the synthesized single phase.
@@ -175,7 +175,7 @@ function makeTestRole(overrides: Partial<AgentRole> = {}): AgentRole {
  * that history and makes more. Used by the multi-phase test below.
  */
 function makeTwoPhaseRole(overrides: Partial<AgentRole> = {}): AgentRole {
-  const tools = ["read_file", "edit_file", "search", "list_wikis"];
+  const tools = ["read_file", "edit_file", "search", "list_entities"];
   const model = { provider: "anthropic" as const, id: "claude-test" };
   return {
     name: "mock-two-phase-role",

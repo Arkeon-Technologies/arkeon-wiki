@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, it, expect } from "vitest";
-import { extractMarkdownLinks, resolveRelativeLink } from "../../src/server/lib/markdown-links.js";
+import {
+  extractMarkdownLinks,
+  extractWikiLinks,
+  resolveRelativeLink,
+} from "../../src/server/lib/markdown-links.js";
 
 describe("extractMarkdownLinks", () => {
   it("extracts basic markdown links to .md files", () => {
@@ -71,6 +75,73 @@ He worked at [Bell Labs](../organization/bell-labs.md) on
     const content = "[Claude Elwood Shannon](claude-shannon.md).";
     const links = extractMarkdownLinks(content);
     expect(links[0].text).toBe("Claude Elwood Shannon");
+  });
+
+  it("does not pick up [[wikilink]] syntax", () => {
+    const content =
+      "Here are [[Bell Labs]] and [Shannon](shannon.md) and [[Foo|person]].";
+    const links = extractMarkdownLinks(content);
+    expect(links).toHaveLength(1);
+    expect(links[0].text).toBe("Shannon");
+  });
+});
+
+describe("extractWikiLinks", () => {
+  it("extracts a bare wikilink", () => {
+    const links = extractWikiLinks("See [[Bell Labs]] for context.");
+    expect(links).toEqual([{ label: "Bell Labs" }]);
+  });
+
+  it("extracts a typed wikilink", () => {
+    const links = extractWikiLinks("[[Claude Shannon|person]] worked there.");
+    expect(links).toEqual([{ label: "Claude Shannon", subject_type: "person" }]);
+  });
+
+  it("extracts multiple wikilinks of mixed forms", () => {
+    const content =
+      "[[Information Theory]] grew from [[Claude Shannon|person]]'s work " +
+      "at [[Bell Labs|organization]].";
+    const links = extractWikiLinks(content);
+    expect(links).toEqual([
+      { label: "Information Theory" },
+      { label: "Claude Shannon", subject_type: "person" },
+      { label: "Bell Labs", subject_type: "organization" },
+    ]);
+  });
+
+  it("trims whitespace around label and subject_type", () => {
+    const links = extractWikiLinks("[[  Bell Labs  |  organization  ]]");
+    expect(links).toEqual([
+      { label: "Bell Labs", subject_type: "organization" },
+    ]);
+  });
+
+  it("skips empty labels", () => {
+    const links = extractWikiLinks("[[]] and [[   ]] and [[ |person]]");
+    expect(links).toEqual([]);
+  });
+
+  it("ignores malformed multi-pipe forms", () => {
+    const links = extractWikiLinks("[[Foo|a|b]] and [[Bar]]");
+    expect(links).toEqual([{ label: "Bar" }]);
+  });
+
+  it("does not pick up standard markdown links", () => {
+    const links = extractWikiLinks(
+      "[Shannon](shannon.md) and [Bell Labs](../org/bell.md)",
+    );
+    expect(links).toEqual([]);
+  });
+
+  it("does not match links nested in standard markdown link text", () => {
+    // [[Label] inside [text](path) — the `[` after `[Label` doesn't
+    // satisfy the wikilink regex's `]]` closer.
+    const links = extractWikiLinks("[[Label](path.md)");
+    expect(links).toEqual([]);
+  });
+
+  it("returns empty array for no wikilinks", () => {
+    expect(extractWikiLinks("Just plain text.")).toEqual([]);
   });
 });
 

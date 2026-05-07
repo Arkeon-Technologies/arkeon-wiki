@@ -70,24 +70,34 @@ Single space. Returns `404` if not found.
 
 ---
 
-## Wikis
+## Entities
 
-A wiki is a markdown file under `wiki/` with YAML frontmatter. Source files (everything else the watcher picks up) are indexed too but not exposed over HTTP — they are an internal substrate for the agent runtime to read from. If a use case appears, a parallel `/sources` endpoint will be added then.
+Three kinds live in the `entities` table and are surfaced through one endpoint:
 
-### `GET /wikis`
+- `type='wiki'` — markdown files under `wiki/` with YAML frontmatter.
+- `type='file'` — every other file the watcher picks up (sources, notes, plain text).
+- `type='stub'` — placeholder entities created when a wiki body contains a `[[Label]]` or `[[Label|subject_type]]` reference whose target doesn't yet exist. Stubs hold the slot until a real wiki is written there, at which point the entity is upgraded in place. They're GC'd at the end of every sync once nothing points at them anymore.
 
-List wikis with frontmatter-aware filters and join-in counts.
+### `GET /entities`
+
+Generic listing with structural, frontmatter, link-count, and recency filters.
 
 **Query parameters:**
 
 | Param | Default | Notes |
 |---|---|---|
 | `space_id` | — | Filter to one space. |
-| `subject_type` | — | Match `properties.subject_type` exactly (e.g. `person`, `organization`). |
-| `status` | — | Match `properties.status` exactly. Free-form — whatever values you put in your wikis (e.g. `draft`, `review`, `published`). |
-| `label_contains` | — | Case-insensitive substring match on `label`. "Baker Street" matches "221B Baker Street". |
-| `sort` | `updated_at` | `updated_at` (DESC) or `label` (ASC, case-insensitive). |
-| `include` | — | Comma-separated. `relationships` adds a top-level `relationships` array (every edge touching a matched wiki). `counts` attaches `{ incoming_links, outgoing_links }` to each wiki. |
+| `type` | — | Comma-separated: any of `wiki`, `file`, `stub`. Omit to include all types. |
+| `subject_type` | — | Match `properties.subject_type` exactly (e.g. `person`, `organization`). Wiki-only in practice — files and stubs don't carry frontmatter. |
+| `status` | — | Match `properties.status` exactly. Free-form. |
+| `label_contains` | — | Case-insensitive substring match on `label`. |
+| `inbound_min`, `inbound_max` | — | Inclusive bounds on inbound relationship count. `inbound_max=0` finds entities nothing points at — useful for "uncited sources". |
+| `outbound_min`, `outbound_max` | — | Inclusive bounds on outbound relationship count. |
+| `has_unresolved_outbound` | — | `true` finds entities with at least one outbound edge to a stub (i.e. wikis with open threads). `false` finds entities whose outbound links all resolve. |
+| `updated_since` | — | ISO timestamp; only entities with `updated_at >=` this. |
+| `edited_by_role` | — | Filter on the most-recent-edit's `by_role` (joins the `entity_latest_edit` view). Use `human` for filesystem-driven edits. |
+| `sort` | `updated_at` | `updated_at` (DESC), `label` (ASC), `inbound` (DESC), or `outbound` (DESC). |
+| `include` | — | Comma-separated. `relationships` adds a top-level `relationships` array (every edge touching a matched entity). `counts` attaches `{ inbound, outbound }` to each row. |
 | `limit` | `100` | Max `10000`. |
 | `offset` | `0` | Pagination offset. |
 
@@ -95,18 +105,21 @@ List wikis with frontmatter-aware filters and join-in counts.
 
 ```json
 {
-  "wikis": [
+  "entities": [
     {
       "id": "01JSG...",
       "space_id": "01JSF...",
+      "type": "wiki",
       "label": "Claude Shannon",
       "source_path": "wiki/person/claude-shannon.md",
       "properties": { "subject_type": "person", "birth_year": 1916 },
       "created_at": "2026-04-26T18:00:00.000Z",
       "updated_at": "2026-04-26T18:00:00.000Z",
+      "has_unresolved_outbound": false,
+      "last_edited_by": "human",
       "counts": {
-        "incoming_links": 5,
-        "outgoing_links": 1
+        "inbound": 5,
+        "outbound": 1
       }
     }
   ],
@@ -116,17 +129,17 @@ List wikis with frontmatter-aware filters and join-in counts.
 }
 ```
 
-`properties` is stored as JSON text in SQLite but the API parses it before returning, so callers get an object (or array, or `null`) — not a string. `counts` is only present when `include=counts`.
+`properties` is stored as JSON text in SQLite but the API parses it before returning, so callers get an object (or array, or `null`) — not a string. `counts` is only present when `include=counts`. `has_unresolved_outbound` and `last_edited_by` are always present.
 
-### `GET /wikis/:id`
+### `GET /entities/:id`
 
-Properties plus incoming and outgoing relationships. Returns `404` if `id` doesn't refer to a wiki.
+Properties plus incoming and outgoing relationships for any entity (wiki, file, or stub). Returns `404` if `id` is unknown.
 
 **Query parameters:**
 
 | Param | Notes |
 |---|---|
-| `include` | Comma-separated. `content` reads the file from disk and adds a `content` field. |
+| `include` | Comma-separated. `content` reads the file from disk and adds a `content` field (skipped for stubs, which don't have a file). |
 
 **Response:**
 
@@ -134,6 +147,7 @@ Properties plus incoming and outgoing relationships. Returns `404` if `id` doesn
 {
   "id": "01JSG...",
   "space_id": "01JSF...",
+  "type": "wiki",
   "label": "Claude Shannon",
   "source_path": "wiki/person/claude-shannon.md",
   "properties": { "subject_type": "person" },
@@ -157,14 +171,45 @@ Properties plus incoming and outgoing relationships. Returns `404` if `id` doesn
 }
 ```
 
-With `?include=content`, a `content` field is added with the file's full UTF-8 text (or `null` if the file isn't readable).
+With `?include=content`, a `content` field is added with the file's full UTF-8 text (or `null` if the file isn't readable). Stubs always read back `content: null`.
 
-### `DELETE /wikis/:id`
+### `GET /entities/:id/history`
 
-Remove a wiki from the index. The file on disk is **not** deleted — but if it still exists, the watcher will re-index it on the next change. Returns `404` if `id` doesn't refer to a wiki.
+Chronological audit log of edits to this entity (newest first), sourced from the `entity_edits` table.
+
+**Query parameters:**
+
+| Param | Default | Notes |
+|---|---|---|
+| `limit` | `50` | Max `500`. |
+| `offset` | `0` | Pagination offset. |
+| `since` | — | ISO timestamp; only edits at-or-after this. |
+| `role` | — | Restrict to a single `by_role`. |
+
+**Response:**
 
 ```json
-{ "deleted": true, "id": "01JSG...", "label": "Claude Shannon" }
+{
+  "entity_id": "01JSG...",
+  "edits": [
+    {
+      "id": 42,
+      "by_role": "ingestor",
+      "edit_kind": "append",
+      "edit_note": "added Bell Labs paragraph",
+      "content_hash": "ab12cd...",
+      "at": "2026-04-26T19:30:00.000Z"
+    }
+  ]
+}
+```
+
+### `DELETE /entities/:id`
+
+Remove an entity from the index. The file on disk is **not** deleted — but if it still exists, the watcher will re-index it on the next change. Returns `404` if `id` is unknown. Cascades through relationships and chunks.
+
+```json
+{ "deleted": true, "id": "01JSG...", "label": "Claude Shannon", "type": "wiki" }
 ```
 
 ---

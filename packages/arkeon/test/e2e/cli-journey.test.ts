@@ -146,9 +146,11 @@ beforeAll(async () => {
   // Wait for the watcher to sync all three wikis.
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
-    const res = await fetch(`${apiUrl}/wikis?space_id=${spaceId}&limit=10`);
-    const data = (await res.json()) as { wikis: unknown[] };
-    if ((data.wikis ?? []).length === 3) break;
+    const res = await fetch(
+      `${apiUrl}/entities?type=wiki&space_id=${spaceId}&limit=10`,
+    );
+    const data = (await res.json()) as { entities: unknown[] };
+    if ((data.entities ?? []).length === 3) break;
     await new Promise((r) => setTimeout(r, 200));
   }
 }, 60_000);
@@ -169,13 +171,15 @@ afterAll(async () => {
 }, 30_000);
 
 describe("CLI search journey through detached daemon", () => {
-  it("daemon is healthy and reports the three seeded wikis via /wikis", async () => {
+  it("daemon is healthy and reports the three seeded wikis via /entities", async () => {
     const health = await fetch(`${apiUrl}/health`);
     expect(health.ok).toBe(true);
 
-    const wikis = await fetch(`${apiUrl}/wikis?space_id=${spaceId}&limit=10`);
-    const data = (await wikis.json()) as { wikis: { label: string }[] };
-    const labels = data.wikis.map((w) => w.label).sort();
+    const wikis = await fetch(
+      `${apiUrl}/entities?type=wiki&space_id=${spaceId}&limit=10`,
+    );
+    const data = (await wikis.json()) as { entities: { label: string }[] };
+    const labels = data.entities.map((w) => w.label).sort();
     expect(labels).toEqual(["Alan Turing", "Marie Curie", "Photosynthesis"]);
   });
 

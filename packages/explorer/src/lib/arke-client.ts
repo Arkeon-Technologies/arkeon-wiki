@@ -33,15 +33,16 @@ export function createArkeClient(baseUrl = ''): ArkeClient {
   return {
     async fetchWikis(spaceId?: string) {
       const params = new URLSearchParams({
+        type: 'wiki',
         include: 'relationships',
         limit: '10000',
       })
       if (spaceId) params.set('space_id', spaceId)
-      return apiFetch(`/wikis?${params.toString()}`)
+      return apiFetch(`/entities?${params.toString()}`)
     },
 
     async fetchWiki(id: string) {
-      return apiFetch(`/wikis/${id}?include=content`)
+      return apiFetch(`/entities/${id}?include=content`)
     },
 
     async fetchSpaces() {

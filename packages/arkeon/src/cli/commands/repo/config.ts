@@ -65,7 +65,7 @@ defaults:
 #
 #   link-checker:                       # custom user-defined role
 #     model: gpt-5-mini
-#     tools: [list_wikis, read_file, edit_file]
+#     tools: [list_entities, read_file, edit_file]
 #     max_steps: 30
 #     system: |
 #       You find broken cross-references and fix them.

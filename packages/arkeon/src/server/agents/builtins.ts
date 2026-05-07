@@ -180,13 +180,13 @@ const INGESTOR_GATHER_PROMPT = [
   "   read_file. If the top hits are merely topically adjacent (related",
   "   concept, same field), it's [NEW].",
   "",
-  "   list_wikis is for STRUCTURAL queries (filter by subject_type, sort",
+  "   list_entities is for STRUCTURAL queries (filter by subject_type, sort",
   "   by recency, enumerate everything of a type) — not per-subject",
   "   discovery. Reach for it when you need the shape of the existing",
   "   graph, not when you're checking whether \"Claude Shannon\" already",
   "   has a wiki.",
   "",
-  "   Only fall through to a list_wikis label_contains check if vector",
+  "   Only fall through to a list_entities label_contains check if vector",
   "   search returned nothing relevant AND the subject is a proper noun",
   "   you'd expect to match literally (a person's name, an organization's",
   "   official name). Try the most distinctive form first — \"Shannon\"",
@@ -563,7 +563,7 @@ export const BUILTIN_ROLES: Record<string, RoleConfig> = {
   // Both phases run in one conversation — phase 2 sees every tool
   // call and result from phase 1.
   ingestor: {
-    tools: ["read_file", "list_wikis", "search", "edit_file"],
+    tools: ["read_file", "list_entities", "search", "edit_file"],
     max_steps: 30,
     system: INGESTOR_SYSTEM,
     // Default triggers: fire on any file change outside `wiki/**` and
@@ -588,7 +588,7 @@ export const BUILTIN_ROLES: Record<string, RoleConfig> = {
         prompt: INGESTOR_GATHER_PROMPT,
         // Phase 1 cannot edit. Operators can override per-phase model
         // in agents.yaml (cheap model for gather, strong for write).
-        tools: ["read_file", "list_wikis", "search"],
+        tools: ["read_file", "list_entities", "search"],
       },
       {
         name: "write",
@@ -596,7 +596,7 @@ export const BUILTIN_ROLES: Record<string, RoleConfig> = {
         // Phase 2 can edit. The gather tools stay available in case
         // the writer needs to look something up it didn't fetch in
         // phase 1.
-        tools: ["read_file", "list_wikis", "search", "edit_file"],
+        tools: ["read_file", "list_entities", "search", "edit_file"],
       },
     ],
   },
@@ -613,7 +613,7 @@ export const BUILTIN_ROLES: Record<string, RoleConfig> = {
   // cascade (a human knows what they're doing), and the consolidator's
   // own writes can't loop back via by_role_not.
   consolidator: {
-    tools: ["read_file", "list_wikis", "search", "edit_file", "delete_wiki"],
+    tools: ["read_file", "list_entities", "search", "edit_file", "delete_wiki"],
     max_steps: 30,
     system: CONSOLIDATOR_SYSTEM,
     triggers: [
@@ -631,7 +631,7 @@ export const BUILTIN_ROLES: Record<string, RoleConfig> = {
         // Phase 1 surveys the corpus; no mutations. delete_wiki and
         // edit_file are off the menu here so the agent literally
         // cannot edit before the plan is written.
-        tools: ["read_file", "list_wikis", "search"],
+        tools: ["read_file", "list_entities", "search"],
       },
       {
         name: "edit",
@@ -639,7 +639,7 @@ export const BUILTIN_ROLES: Record<string, RoleConfig> = {
         // Phase 2 executes. Gather tools stay available for last-
         // minute lookups (e.g. confirming a wiki's exact body before
         // deciding the REPLACE span).
-        tools: ["read_file", "list_wikis", "search", "edit_file", "delete_wiki"],
+        tools: ["read_file", "list_entities", "search", "edit_file", "delete_wiki"],
       },
     ],
   },

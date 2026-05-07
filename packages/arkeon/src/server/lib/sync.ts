@@ -14,11 +14,16 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join, basename, extname } from "node:path";
 import { createHash } from "node:crypto";
 
-import { createSql, withTransaction } from "./sql.js";
+import { createSql, withTransaction, type SqlClient } from "./sql.js";
 import { generateUlid } from "./ids.js";
 import { getEditContext, type EditKind } from "./edit-context.js";
 import { parseFrontmatter, serializeFrontmatter } from "./frontmatter.js";
-import { extractMarkdownLinks, resolveRelativeLink } from "./markdown-links.js";
+import {
+  extractMarkdownLinks,
+  extractWikiLinks,
+  resolveRelativeLink,
+} from "./markdown-links.js";
+import { wikiPathFor } from "./wiki-paths.js";
 import { chunkWiki } from "./chunker.js";
 import { enqueueEntity } from "./embedding-queue.js";
 
@@ -161,10 +166,15 @@ async function syncWikiFile(
 
   const result = await withTransaction(async (tx) => {
     if (existing) {
-      // Update existing entity
+      // Update existing entity. Set type='wiki' too: the existing row may
+      // be a stub created from a [[wikilink]] in another wiki, and writing
+      // a real wiki at this path upgrades it in place. The entity id is
+      // preserved so any inbound relationships (the wikilinks that made
+      // the stub) still resolve to this row.
       await tx`
         UPDATE entities
-        SET label = ${label},
+        SET type = 'wiki',
+            label = ${label},
             source_hash = ${hash},
             properties = ${JSON.stringify(storedProps)},
             updated_at = datetime('now')
@@ -178,37 +188,10 @@ async function syncWikiFile(
       `;
     }
 
-    // Resolve markdown links → relationship edges
-    const links = extractMarkdownLinks(parsed.body);
-
-    // Delete existing relationships from this entity (we'll re-create them)
-    await tx`DELETE FROM relationships WHERE source_id = ${entityId}`;
-
-    let linksResolved = 0;
-    let linksDangling = 0;
-
-    for (const link of links) {
-      const targetPath = resolveRelativeLink(relativePath, link.path);
-
-      // Look up target entity by source_path
-      const target = await tx`
-        SELECT id FROM entities
-        WHERE space_id = ${space.id} AND source_path = ${targetPath}
-      `;
-
-      if (target.length > 0) {
-        const relId = generateUlid();
-        await tx`
-          INSERT INTO relationships (id, source_id, target_id, predicate, link_text, link_path)
-          VALUES (${relId}, ${entityId}, ${target[0].id}, 'references', ${link.text}, ${link.path})
-          ON CONFLICT (source_id, target_id, predicate) DO UPDATE
-          SET link_text = EXCLUDED.link_text, link_path = EXCLUDED.link_path
-        `;
-        linksResolved++;
-      } else {
-        linksDangling++;
-      }
-    }
+    // Resolve markdown links + [[wikilinks]] → relationship edges. Wikilinks
+    // create stub entities on miss; standard markdown links must resolve.
+    const { resolved: linksResolved, dangling: linksDangling } =
+      await rebuildRelationships(tx, space, relativePath, entityId, parsed.body);
 
     if (chunkingEnabled()) {
       const chunks = chunkWiki(parsed, label);
@@ -298,6 +281,8 @@ async function syncWikiFile(
     return { linksResolved, linksDangling };
   });
 
+
+
   // Hand off to the embedding worker (issue #47). Outside the
   // transaction so a slow embedder can't hold the write lock. The
   // worker re-checks each chunk's content_hash against the pivot
@@ -377,34 +362,176 @@ async function syncSourceFile(
 }
 
 /**
- * Remove an entity and its relationships by source_path.
- * Used when a file is deleted from disk.
+ * Remove an entity and its relationships by source_path. Used when a file
+ * is deleted from disk. Runs the orphaned-stub GC after the cascade so
+ * stubs that were only kept alive by inbound links from the deleted wiki
+ * disappear too.
  */
 export async function removeByPath(spaceId: string, relativePath: string): Promise<string | null> {
-  const sql = createSql();
-  const rows = await sql`
+  return withTransaction(async (tx) => {
+    const rows = await tx`
+      DELETE FROM entities
+      WHERE space_id = ${spaceId} AND source_path = ${relativePath}
+      RETURNING id
+    `;
+    if (rows.length === 0) return null;
+    await gcOrphanedStubs(tx, spaceId);
+    return rows[0].id as string;
+  });
+}
+
+/**
+ * Rebuild a wiki's outbound relationships from its body. Wipes existing
+ * relationships, then walks both standard markdown links and `[[wikilink]]`
+ * forms:
+ *
+ *   - Standard `[text](path.md)` MUST resolve to an existing entity. If
+ *     the target path doesn't exist, the relationship is dropped and a
+ *     warning is logged. We do not auto-create stubs for standard links —
+ *     they're treated as typos rather than deliberate placeholders, since
+ *     the agent can use `[[Label]]` syntax for explicit "should-exist" intent.
+ *
+ *   - `[[Label]]` and `[[Label|subject_type]]` always produce an edge. The
+ *     target path is computed by `wikiPathFor()`; if no entity is at that
+ *     path, a `type='stub'` entity is inserted there. Stubs created this
+ *     way live until nothing points to them — see `gcOrphanedStubs()`,
+ *     which runs at the end of this function.
+ *
+ *   - When a wikilink resolves to an existing stub, the stub's label is
+ *     overwritten with the most recent link text (last-writer-wins). The
+ *     inbound relationships still carry their own `link_text` so the
+ *     pre-overwrite phrasings aren't lost — they're just not the canonical
+ *     name anymore.
+ */
+async function rebuildRelationships(
+  tx: SqlClient,
+  space: Space,
+  fromPath: string,
+  sourceEntityId: string,
+  body: string,
+): Promise<{ resolved: number; dangling: number; stubsCreated: number }> {
+  await tx`DELETE FROM relationships WHERE source_id = ${sourceEntityId}`;
+
+  let resolved = 0;
+  let dangling = 0;
+  let stubsCreated = 0;
+
+  // Standard markdown links — resolve or warn-and-drop.
+  const stdLinks = extractMarkdownLinks(body);
+  for (const link of stdLinks) {
+    const targetPath = resolveRelativeLink(fromPath, link.path);
+    const target = await tx`
+      SELECT id FROM entities
+      WHERE space_id = ${space.id} AND source_path = ${targetPath}
+    `;
+    if (target.length > 0) {
+      const relId = generateUlid();
+      await tx`
+        INSERT INTO relationships (id, source_id, target_id, predicate, link_text, link_path)
+        VALUES (${relId}, ${sourceEntityId}, ${target[0].id}, 'references', ${link.text}, ${link.path})
+        ON CONFLICT (source_id, target_id, predicate) DO UPDATE
+        SET link_text = EXCLUDED.link_text, link_path = EXCLUDED.link_path
+      `;
+      resolved++;
+    } else {
+      console.warn(
+        `[sync] dangling link in ${fromPath}: [${link.text}](${link.path}) → ${targetPath} not found. ` +
+          `Use [[${link.text}]] if you intend to create a stub for it.`,
+      );
+      dangling++;
+    }
+  }
+
+  // [[wikilinks]] — resolve or create stub.
+  const wikilinks = extractWikiLinks(body);
+  for (const wl of wikilinks) {
+    const targetPath = wikiPathFor(wl.subject_type ?? "concept", wl.label);
+    const found = await tx`
+      SELECT id, type FROM entities
+      WHERE space_id = ${space.id} AND source_path = ${targetPath}
+    `;
+
+    let targetId: string;
+    if (found.length > 0) {
+      targetId = found[0].id as string;
+      if (found[0].type === "stub") {
+        // Last-writer-wins for stub label. Real entities (type='wiki' or
+        // 'file') are not touched — their label is set by their own
+        // frontmatter, not by what other wikis call them.
+        await tx`
+          UPDATE entities
+          SET label = ${wl.label}, updated_at = datetime('now')
+          WHERE id = ${targetId}
+        `;
+      }
+    } else {
+      targetId = generateUlid();
+      await tx`
+        INSERT INTO entities
+          (id, space_id, type, label, source_path, source_hash, properties)
+        VALUES
+          (${targetId}, ${space.id}, 'stub', ${wl.label}, ${targetPath}, NULL, '{}')
+      `;
+      stubsCreated++;
+    }
+
+    // Preserve the original `[[Label|type]]` form in `link_path` so
+    // downstream consumers can tell a wikilink-derived edge apart from a
+    // standard markdown one.
+    const linkPath = wl.subject_type
+      ? `[[${wl.label}|${wl.subject_type}]]`
+      : `[[${wl.label}]]`;
+    const relId = generateUlid();
+    await tx`
+      INSERT INTO relationships (id, source_id, target_id, predicate, link_text, link_path)
+      VALUES (${relId}, ${sourceEntityId}, ${targetId}, 'references', ${wl.label}, ${linkPath})
+      ON CONFLICT (source_id, target_id, predicate) DO UPDATE
+      SET link_text = EXCLUDED.link_text, link_path = EXCLUDED.link_path
+    `;
+    resolved++;
+  }
+
+  await gcOrphanedStubs(tx, space.id);
+
+  return { resolved, dangling, stubsCreated };
+}
+
+/**
+ * Delete every stub entity in this space whose inbound relationship count
+ * has dropped to zero. Runs at the end of `rebuildRelationships()` and
+ * after `removeByPath()` deletes — both moments where a relationship row
+ * may have just disappeared.
+ */
+async function gcOrphanedStubs(tx: SqlClient, spaceId: string): Promise<void> {
+  // NOT EXISTS with the correlated lookup against `relationships.target_id`
+  // is index-driven via `idx_relationships_target` and probes once per
+  // stub row, bounded by the stub count in this space (which the partial
+  // index `idx_entities_stubs` narrows further). The earlier
+  // `id NOT IN (SELECT DISTINCT target_id FROM relationships)` form forced
+  // a scan of every relationship row across every space on each pass.
+  await tx`
     DELETE FROM entities
-    WHERE space_id = ${spaceId} AND source_path = ${relativePath}
-    RETURNING id
+    WHERE space_id = ${spaceId}
+      AND type = 'stub'
+      AND NOT EXISTS (
+        SELECT 1 FROM relationships r WHERE r.target_id = entities.id
+      )
   `;
-  return rows.length > 0 ? (rows[0].id as string) : null;
 }
 
 /**
  * Resolve links for a single wiki entity. Called during the second pass
- * of syncDirectory() after all entities have been created.
+ * of syncDirectory() after all entities have been created — this catches
+ * standard markdown links whose target was synced after the source. With
+ * `[[wikilinks]]`, every link resolves on first pass (stub-or-real), so
+ * pass two is functionally a re-run for cross-reference catch-up.
  */
 async function resolveLinks(space: Space, relativePath: string): Promise<{ resolved: number; dangling: number }> {
   const absPath = join(space.watch_dir, relativePath);
   const content = readFileSync(absPath, "utf-8");
   const parsed = parseFrontmatter(content);
-  const links = extractMarkdownLinks(parsed.body);
-
-  if (links.length === 0) return { resolved: 0, dangling: 0 };
 
   const sql = createSql();
-
-  // Look up the entity ID for this file
   const rows = await sql`
     SELECT id FROM entities WHERE space_id = ${space.id} AND source_path = ${relativePath}
   `;
@@ -412,32 +539,13 @@ async function resolveLinks(space: Space, relativePath: string): Promise<{ resol
   const entityId = rows[0].id as string;
 
   return withTransaction(async (tx) => {
-    // Clear existing relationships and re-resolve
-    await tx`DELETE FROM relationships WHERE source_id = ${entityId}`;
-
-    let resolved = 0;
-    let dangling = 0;
-
-    for (const link of links) {
-      const targetPath = resolveRelativeLink(relativePath, link.path);
-      const target = await tx`
-        SELECT id FROM entities WHERE space_id = ${space.id} AND source_path = ${targetPath}
-      `;
-
-      if (target.length > 0) {
-        const relId = generateUlid();
-        await tx`
-          INSERT INTO relationships (id, source_id, target_id, predicate, link_text, link_path)
-          VALUES (${relId}, ${entityId}, ${target[0].id}, 'references', ${link.text}, ${link.path})
-          ON CONFLICT (source_id, target_id, predicate) DO UPDATE
-          SET link_text = EXCLUDED.link_text, link_path = EXCLUDED.link_path
-        `;
-        resolved++;
-      } else {
-        dangling++;
-      }
-    }
-
+    const { resolved, dangling } = await rebuildRelationships(
+      tx,
+      space,
+      relativePath,
+      entityId,
+      parsed.body,
+    );
     return { resolved, dangling };
   });
 }
