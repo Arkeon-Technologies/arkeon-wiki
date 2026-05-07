@@ -58,6 +58,7 @@ He worked at [Bell Labs](../organization/bell-labs.md).
 - `short_description` (optional, single-line) is recognized by the chunker and embedded into the per-wiki "card" chunk for semantic search.
 - Standard markdown links (`[text](path.md)`) must resolve to an existing entity. Unresolved standard links log a warning and are dropped (treated as typos). Use `[[wikilink]]` syntax for explicit "should-exist" intent — see below.
 - `[[Label]]` and `[[Label|subject_type]]` — Obsidian/Roam-style wiki-links. The runtime computes the canonical path via `wikiPathFor(subject_type ?? 'concept', label)` (e.g. `[[Bell Labs|organization]]` → `wiki/organization/bell-labs.md`) and inserts a `type='stub'` entity at that path if nothing's there yet. Stubs hold the slot until a real wiki is written there, at which point the entity is upgraded in place — its `id` is preserved so every inbound relationship survives. Stubs are GC'd at the end of every sync once nothing points at them anymore. The wiki-link form is the right choice when an agent wants to flag "this should exist" without inventing a path; standard markdown links remain for verified cross-references.
+- **The slug is whitespace-sensitive.** `slugify()` lowercases, drops punctuation, and replaces runs of whitespace with `-`. `[[Quantum Computing]]` becomes `wiki/concept/quantum-computing.md`; `[[QuantumComputing]]` (no space) becomes `wiki/concept/quantumcomputing.md` — a different path, a different stub. If two agents disagree on capitalization or word boundaries you can end up with two entities for the same subject. For now, normalize on the writing side; a fuzzy-match in `wikiPathFor` is a future-issue option if this becomes a real problem.
 
 YAML is a superset of JSON, so wikis written with the old JSON-style frontmatter (`---\n{ ... }\n---`) still parse correctly. The first sync that writes back a generated `id` will rewrite the file in YAML form — heads-up if you have uncommitted changes to a wiki that was authored with JSON frontmatter.
 
@@ -85,7 +86,7 @@ Tables in SQLite:
 - `chunk_vectors` — `vec0` virtual table holding the actual float[256] vectors (sqlite-vec). Joined to chunks via `chunk_id`.
 - `embedding_queue` — per-entity work queue drained by the in-process embedding worker. Same lease pattern as `agent_queue`.
 
-No actors, no auth, no versioning. Schema across `src/schema/001-foundation.sql`, `002-chunks.sql`, `003-embeddings.sql`, `004-edits-and-triggers.sql`, and `005-stubs.sql`.
+No actors, no auth, no versioning. Schema across `src/schema/001-foundation.sql`, `002-chunks.sql`, `003-embeddings.sql`, and `004-edits-and-triggers.sql`.
 
 ## Key modules
 
@@ -195,7 +196,7 @@ The writer is append-only — there is no built-in rotation, so the file grows a
 
 ## Schema migrations
 
-`src/schema/*.sql`, applied in alphabetical order. Currently `001-foundation.sql` (entities, spaces, relationships, agent runtime), `002-chunks.sql` (`entity_chunks`), `003-embeddings.sql` (`chunk_vectors` vec0 table, `entity_embeddings` pivot, `embedding_queue`), `004-edits-and-triggers.sql` (`entity_edits` audit log, `entity_latest_edit` view, agent triggers), and `005-stubs.sql` (widens the `entities.type` CHECK to allow `'stub'`). Must be idempotent (all `IF NOT EXISTS` / table-rebuild patterns). The runner disables FK enforcement around the migration phase so a CHECK-widening rebuild doesn't cascade-delete relationships, then re-enables FKs and runs `PRAGMA foreign_key_check` afterwards. Note: `003-embeddings.sql` requires the sqlite-vec extension to be loaded; `initDb()` does this automatically before migrations run.
+`src/schema/*.sql`, applied in alphabetical order. Currently `001-foundation.sql` (spaces, entities — `type IN ('wiki','file','stub')` — relationships, agent runtime), `002-chunks.sql` (`entity_chunks`), `003-embeddings.sql` (`chunk_vectors` vec0 table, `entity_embeddings` pivot, `embedding_queue`), and `004-edits-and-triggers.sql` (`entity_edits` audit log, `entity_latest_edit` view, agent triggers). Must be idempotent (all `IF NOT EXISTS`). Runs on every startup. Note: `003-embeddings.sql` requires the sqlite-vec extension to be loaded; `initDb()` does this automatically before migrations run.
 
 ## What's NOT here (yet)
 
