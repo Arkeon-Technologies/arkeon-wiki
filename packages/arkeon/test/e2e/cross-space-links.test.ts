@@ -39,10 +39,15 @@ const BASE_URL = `http://localhost:${API_PORT}`;
 let baseDir: string;
 let dirA: string;
 let dirB: string;
+let dirDup: string;
 let stateDir: string;
 let serverHandle: { stop: () => Promise<void> } | null = null;
 let spaceAId: string;
 let spaceBId: string;
+// Second space registered under the same `name='space-b'` so the
+// resolver's ambiguity branch has something to trip over. Different
+// watch_dir (the schema's UNIQUE constraint is on watch_dir, not name).
+let spaceDupId: string;
 
 let prevChunkingEnv: string | undefined;
 let prevEmbeddingsEnv: string | undefined;
@@ -97,8 +102,9 @@ beforeAll(async () => {
   baseDir = join(tmpdir(), `arkeon-cross-space-${randomBytes(4).toString("hex")}`);
   dirA = join(baseDir, "space-a");
   dirB = join(baseDir, "space-b");
+  dirDup = join(baseDir, "space-b-duplicate");
   stateDir = join(baseDir, "state");
-  for (const d of [dirA, dirB, join(stateDir, "data")]) {
+  for (const d of [dirA, dirB, dirDup, join(stateDir, "data")]) {
     mkdirSync(d, { recursive: true });
   }
 
@@ -304,5 +310,91 @@ describe("cross-space [[wikilink|space:NAME]]", () => {
     expect(edge!.target_space_id).toBe(spaceBId);
     expect(edge!.target_source_path).toBe("wiki/concept/quanta.md");
     expect(edge!.link_path).toBe("[[Quanta|space:space-b]]");
+  });
+
+  it("resolves space: by id (the disambiguation fallback the warning promises)", async () => {
+    writeWiki(
+      dirA,
+      "wiki/concept/by-id-caller.md",
+      "label: By-ID Caller\nsubject_type: concept\n",
+      // The space hint is the literal ULID — the resolver tries id
+      // first, then name. Ids are 26-char alnum so they're disjoint
+      // from any human space name in practice.
+      `References [[Bell Labs|organization|space:${spaceBId}]] across spaces.`,
+    );
+
+    const sourceA = await waitForEntityBySourcePath(
+      spaceAId,
+      "wiki/concept/by-id-caller.md",
+    );
+
+    const deadline = Date.now() + 5000;
+    let edge: Awaited<ReturnType<typeof getOutgoingByLinkText>> = null;
+    while (Date.now() < deadline) {
+      edge = await getOutgoingByLinkText(sourceA.id, "Bell Labs");
+      if (edge) break;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    expect(edge).not.toBeNull();
+    expect(edge!.target_space_id).toBe(spaceBId);
+    expect(edge!.link_path).toBe(
+      `[[Bell Labs|organization|space:${spaceBId}]]`,
+    );
+  });
+
+  // ── ambiguity ───────────────────────────────────────────────────
+  // This test taints the registry — it registers a second space with
+  // name 'space-b'. Keep it last in the file so subsequent tests
+  // wouldn't be affected (vitest runs tests in file order).
+  it("warns and drops a cross-space wikilink whose name is ambiguous; id still resolves", async () => {
+    // Register a second space sharing 'space-b' as its name. Different
+    // watch_dir, so the schema's UNIQUE(watch_dir) doesn't reject.
+    const resDup = await fetch(`${BASE_URL}/spaces`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "space-b", watch_dir: dirDup }),
+    });
+    spaceDupId = ((await resDup.json()) as { id: string }).id;
+    expect(spaceDupId).not.toBe(spaceBId);
+
+    // Name-based: ambiguous → warn-and-drop. No relationship.
+    writeWiki(
+      dirA,
+      "wiki/concept/ambiguous-caller.md",
+      "label: Ambiguous Caller\nsubject_type: concept\n",
+      "Tries [[Bell Labs|organization|space:space-b]] under an ambiguous name.",
+    );
+    const sourceA = await waitForEntityBySourcePath(
+      spaceAId,
+      "wiki/concept/ambiguous-caller.md",
+    );
+    await new Promise((r) => setTimeout(r, 800));
+
+    const wiki = await api(`/entities/${sourceA.id}`);
+    const out = (wiki.relationships?.outgoing ?? []) as Array<{ link_text: string }>;
+    expect(out.find((r) => r.link_text === "Bell Labs")).toBeUndefined();
+
+    // Id-based: still resolves to the original space-b. The
+    // disambiguation message in the warn-and-drop above promises this
+    // works; this assertion is what makes the promise testable.
+    writeWiki(
+      dirA,
+      "wiki/concept/disambiguated-caller.md",
+      "label: Disambiguated Caller\nsubject_type: concept\n",
+      `Falls back to id [[Bell Labs|organization|space:${spaceBId}]].`,
+    );
+    const sourceB = await waitForEntityBySourcePath(
+      spaceAId,
+      "wiki/concept/disambiguated-caller.md",
+    );
+    const deadline = Date.now() + 5000;
+    let edge: Awaited<ReturnType<typeof getOutgoingByLinkText>> = null;
+    while (Date.now() < deadline) {
+      edge = await getOutgoingByLinkText(sourceB.id, "Bell Labs");
+      if (edge) break;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    expect(edge).not.toBeNull();
+    expect(edge!.target_space_id).toBe(spaceBId);
   });
 });

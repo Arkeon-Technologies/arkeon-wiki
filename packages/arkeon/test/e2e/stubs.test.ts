@@ -36,6 +36,7 @@ import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import yaml from "js-yaml";
 import { getEntityBySourcePath, waitForEntityBySourcePath } from "./helpers.js";
+import { createSql } from "../../src/server/lib/sql.js";
 
 const API_PORT = 18793;
 const BASE_URL = `http://localhost:${API_PORT}`;
@@ -166,6 +167,18 @@ describe("[[wikilink]] → placeholder wiki", () => {
     expect(placeholder.type).toBe("wiki");
     expect(placeholder.unresolved).toBe(true);
     expect(placeholder.label).toBe("Information Theory");
+
+    // Nail down that source_hash is literally null (not "" or 0 or
+    // undefined) — the placeholder predicate everywhere downstream
+    // (gcOrphanedPlaceholders, the unresolved derived field, the
+    // last-writer-wins guard in rebuildRelationships) gates on
+    // `source_hash IS NULL` / `=== null`. A driver-side coercion to
+    // empty string would silently break all of them.
+    const sql = createSql();
+    const raw = await sql`
+      SELECT source_hash FROM entities WHERE id = ${placeholder.id}
+    `;
+    expect(raw[0].source_hash).toBeNull();
 
     // The wiki that referenced it should have an outbound relationship.
     const sourceA = await waitForEntityBySourcePath(

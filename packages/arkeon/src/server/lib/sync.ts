@@ -463,30 +463,44 @@ async function rebuildRelationships(
 
     let targetSpaceId: string;
     if (wl.space) {
-      const matches = await tx`
-        SELECT id FROM spaces WHERE name = ${wl.space}
+      // Try id match first (mirrors space-scope.ts:111-121, which is
+      // what the agent's `space` tool argument uses). Ids are ULIDs (26
+      // alnum chars) — effectively disjoint from human space names, so
+      // a string that matches both is a non-issue in practice. The
+      // ambiguous-name warning below promises ids work as a fallback;
+      // this is what makes that promise true.
+      const idMatch = await tx`
+        SELECT id FROM spaces WHERE id = ${wl.space}
       `;
-      if (matches.length === 0) {
-        console.warn(
-          `[sync] cross-space wikilink in ${fromPath}: ` +
-            `[[${wl.label}|...|space:${wl.space}]] — space '${wl.space}' is ` +
-            `not registered. Run 'arkeon-wiki ls' to see registered spaces.`,
-        );
-        dangling++;
-        continue;
+      if (idMatch.length === 1) {
+        targetSpaceId = idMatch[0].id as string;
+      } else {
+        const matches = await tx`
+          SELECT id FROM spaces WHERE name = ${wl.space}
+        `;
+        if (matches.length === 0) {
+          console.warn(
+            `[sync] cross-space wikilink in ${fromPath}: ` +
+              `[[${wl.label}|...|space:${wl.space}]] — '${wl.space}' is ` +
+              `not registered (neither id nor name). Run 'arkeon-wiki ls' ` +
+              `to see registered spaces.`,
+          );
+          dangling++;
+          continue;
+        }
+        if (matches.length > 1) {
+          const ids = matches.map((r) => r.id as string).join(", ");
+          console.warn(
+            `[sync] cross-space wikilink in ${fromPath}: ` +
+              `[[${wl.label}|...|space:${wl.space}]] — name '${wl.space}' is ` +
+              `ambiguous (${matches.length} registered spaces share it: ${ids}). ` +
+              `Use one of those ids in place of the name.`,
+          );
+          dangling++;
+          continue;
+        }
+        targetSpaceId = matches[0].id as string;
       }
-      if (matches.length > 1) {
-        const ids = matches.map((r) => r.id as string).join(", ");
-        console.warn(
-          `[sync] cross-space wikilink in ${fromPath}: ` +
-            `[[${wl.label}|...|space:${wl.space}]] — name '${wl.space}' is ` +
-            `ambiguous (${matches.length} registered spaces share it: ${ids}). ` +
-            `Use a space id instead.`,
-        );
-        dangling++;
-        continue;
-      }
-      targetSpaceId = matches[0].id as string;
     } else {
       targetSpaceId = space.id;
     }
@@ -568,6 +582,15 @@ function formatWikilinkPath(wl: { label: string; subject_type?: string; space?: 
  * relationship count has dropped to zero. Runs at the end of
  * `rebuildRelationships()` and after `removeByPath()` deletes — both
  * moments where a relationship row may have just disappeared.
+ *
+ * **Invariant:** the predicate `(type='wiki' AND source_hash IS NULL)`
+ * is the placeholder signal. The only path that produces it today is
+ * the [[wikilink]] miss in `rebuildRelationships()` (search the file
+ * for the `placeholdersCreated++` site). If a future feature ever
+ * nulls `source_hash` for a different reason (e.g. "lock the entity
+ * but keep the file"), it MUST add an exclusion clause here so its
+ * rows aren't silently GC'd. Pair-with-properties-marker is the
+ * obvious next step if that situation arises.
  */
 async function gcOrphanedPlaceholders(tx: SqlClient, spaceId: string): Promise<void> {
   // NOT EXISTS with the correlated lookup against `relationships.target_id`
