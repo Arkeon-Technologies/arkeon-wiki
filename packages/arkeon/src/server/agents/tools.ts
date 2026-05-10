@@ -22,20 +22,83 @@ import { searchKeyword, searchVector } from "../lib/search.js";
 import { listEntities, parseEntityTypes, type EntityType } from "../lib/entities.js";
 
 import { defineTool, type ToolFactory } from "./define-tool.js";
+import { describeAllowed, resolveSpaceArg } from "./space-scope.js";
+import type { AgentContext } from "./runtime.js";
+
+// ── space-scope helpers ──────────────────────────────────────────
+
+interface ToolSpace {
+  id: string;
+  name: string;
+  watch_dir: string;
+}
+
+/**
+ * Resolve which space(s) a tool call should target. The shared
+ * decision matrix for `read_file`, `search`, `list_entities`:
+ *
+ *   - explicit `space` arg → single space (validated; throws if not
+ *     in the allowed set, or if a name is ambiguous within it)
+ *   - omitted, single-space role → the triggering space (no change
+ *     from pre-#99 behaviour)
+ *   - omitted, multi-space role → the full allowed set (fan-out)
+ *
+ * Returns the list of spaces to query. The caller maps to ids for
+ * the SQL/ripgrep backend and keeps the returned objects to tag
+ * result rows with `space` (name) for the LLM.
+ */
+function resolveToolScope(
+  ctx: AgentContext,
+  spaceArg: string | undefined,
+): ToolSpace[] {
+  if (spaceArg !== undefined && spaceArg !== "") {
+    return [resolveSpaceArg(spaceArg, ctx.allowedSpaces)];
+  }
+  if (ctx.allowedSpaces.length <= 1) {
+    return [ctx.space];
+  }
+  return [...ctx.allowedSpaces];
+}
+
+const SPACE_PARAM_DESC =
+  "Optional space name or id to scope this call to. Omit on a single-space " +
+  "role (the only behaviour before #99) for the triggering space; omit on a " +
+  "multi-space role to fan out across every allowed space (results are " +
+  "tagged with `space_id` and `space` so you can tell them apart).";
 
 // ── read_file ─────────────────────────────────────────────────────
 
 const readFileTool = defineTool("read_file", {
   description:
-    "Read a file from the current space. Path is relative to the space's watch_dir. " +
-    "For markdown files, parsed YAML frontmatter is returned alongside the body.",
+    "Read a file from one of the role's allowed spaces. Path is relative " +
+    "to that space's watch_dir. For markdown files, parsed YAML " +
+    "frontmatter is returned alongside the body. Multi-space roles " +
+    "must specify `space` because a path is ambiguous across spaces; " +
+    "single-space roles can omit it.",
   inputSchema: z.object({
     path: z.string().describe("Relative path inside the space's watch_dir."),
+    space: z.string().optional().describe(SPACE_PARAM_DESC),
   }),
-  call: ({ path }, ctx) => {
-    const absPath = safeResolve(ctx.space.watch_dir, path);
+  call: ({ path, space }, ctx) => {
+    // read_file points at one file. Fan-out doesn't make sense — if
+    // a multi-space agent omits `space`, demand they pick one. Better
+    // a clear error than silently reading from the triggering space
+    // when the agent meant another.
+    let target: ToolSpace;
+    if (space !== undefined && space !== "") {
+      target = resolveSpaceArg(space, ctx.allowedSpaces);
+    } else if (ctx.allowedSpaces.length <= 1) {
+      target = ctx.space;
+    } else {
+      throw new Error(
+        `read_file: this role can read from multiple spaces, so the ` +
+          `\`space\` argument is required. Allowed: ${describeAllowed(ctx.allowedSpaces)}.`,
+      );
+    }
+
+    const absPath = safeResolve(target.watch_dir, path);
     if (!existsSync(absPath)) {
-      throw new Error(`read_file: ${path} does not exist`);
+      throw new Error(`read_file: ${path} does not exist in space '${target.name}'`);
     }
     if (statSync(absPath).isDirectory()) {
       throw new Error(`read_file: ${path} is a directory`);
@@ -45,16 +108,20 @@ const readFileTool = defineTool("read_file", {
       const parsed = parseFrontmatter(content);
       return {
         path,
+        space_id: target.id,
+        space: target.name,
         frontmatter: parsed.properties,
         body: parsed.body,
       };
     }
-    return { path, content };
+    return { path, space_id: target.id, space: target.name, content };
   },
   summarize: (r) => {
     const text = "body" in r ? r.body : r.content;
     return {
       path: r.path,
+      space_id: r.space_id,
+      space: r.space,
       body_chars: text?.length ?? 0,
       has_frontmatter: "frontmatter" in r,
     };
@@ -65,7 +132,7 @@ const readFileTool = defineTool("read_file", {
 
 const searchTool = defineTool("search", {
   description:
-    "Search the current space. Two strategies, no fusion:\n" +
+    "Search the role's allowed spaces. Two strategies, no fusion:\n" +
     "  - keyword (ripgrep): exact substring (or regex) over file contents. " +
     "Best for proper nouns, code identifiers, ULIDs, exact phrases.\n" +
     "  - vector (sqlite-vec): semantic similarity. Returns a ranked list " +
@@ -78,7 +145,10 @@ const searchTool = defineTool("search", {
     "set in its own namespace ({keyword, vector}). Pass `mode=keyword` " +
     "or `mode=vector` to scope to one. Vector results carry similarity " +
     "scores in [-1, 1] (higher = more similar); keyword hits are " +
-    "ranked by match count with line snippets.",
+    "ranked by match count with line snippets.\n" +
+    "Multi-space roles can pass `space` to scope to one space, or omit " +
+    "it to search every allowed space (each hit carries `space_id` and " +
+    "`space` so you can tell them apart).",
   inputSchema: z.object({
     query: z.string().describe("The query string."),
     mode: z
@@ -109,51 +179,80 @@ const searchTool = defineTool("search", {
       .min(0)
       .optional()
       .describe("Max line snippets per keyword hit (default 3)."),
+    space: z.string().optional().describe(SPACE_PARAM_DESC),
   }),
-  call: async ({ query, mode, regex, limit, max_snippets_per_file }, ctx) => {
+  call: async (
+    { query, mode, regex, limit, max_snippets_per_file, space },
+    ctx,
+  ) => {
     const m = mode ?? "both";
     const wantKeyword = m === "keyword" || m === "both";
     const wantVector = m === "vector" || m === "both";
 
+    const targets = resolveToolScope(ctx, space);
+    const targetIds = targets.map((s) => s.id);
+    const indexById = new Map(targets.map((s) => [s.id, s.name]));
+
     // Run requested strategies in parallel, fail-soft per strategy:
     // if vector throws (e.g. embedder still warming up), the agent
-    // still sees keyword results.
+    // still sees keyword results. Both backends accept `spaceIds` and
+    // restrict to the supplied set in a single roundtrip.
     const [keywordSettled, vectorSettled] = await Promise.allSettled([
       wantKeyword
         ? searchKeyword({
             query,
-            spaceId: ctx.space.id,
+            spaceIds: targetIds,
             regex,
             limit,
             maxSnippetsPerFile: max_snippets_per_file,
           })
         : Promise.resolve(null),
       wantVector
-        ? searchVector({ query, spaceId: ctx.space.id, limit })
+        ? searchVector({ query, spaceIds: targetIds, limit })
         : Promise.resolve(null),
     ]);
 
-    const out: Record<string, unknown> = { query, mode: m };
+    const out: Record<string, unknown> = {
+      query,
+      mode: m,
+      spaces: targets.map((s) => ({ id: s.id, name: s.name })),
+    };
     if (wantKeyword) {
-      out.keyword =
+      const raw =
         keywordSettled.status === "fulfilled" && keywordSettled.value
           ? keywordSettled.value
           : { hits: [], total: 0, unmatched_files: 0 };
+      out.keyword = {
+        ...raw,
+        hits: raw.hits.map((h) => ({
+          ...h,
+          space: indexById.get(h.space_id) ?? "",
+        })),
+      };
     }
     if (wantVector) {
-      out.vector =
+      const raw =
         vectorSettled.status === "fulfilled" && vectorSettled.value
           ? vectorSettled.value
           : { hits: [], total: 0, model: "unavailable" };
+      out.vector = {
+        ...raw,
+        hits: raw.hits.map((h) => ({
+          ...h,
+          space: indexById.get(h.space_id) ?? "",
+        })),
+      };
     }
     return out;
   },
   summarize: (r) => {
     const k = r.keyword as { hits?: unknown[]; total?: number } | undefined;
     const v = r.vector as { hits?: unknown[]; total?: number; model?: string } | undefined;
+    const spaces = r.spaces as { id: string }[] | undefined;
     return {
       query: r.query,
       mode: r.mode,
+      target_space_ids: spaces?.map((s) => s.id),
       keyword_hits: k?.hits?.length,
       keyword_total: k?.total,
       vector_hits: v?.hits?.length,
@@ -167,13 +266,16 @@ const searchTool = defineTool("search", {
 
 const listEntitiesTool = defineTool("list_entities", {
   description:
-    "List entities in the current space — wikis, source files, and stubs " +
-    "(placeholders left by [[wikilink]] references) — with structural " +
-    "filters. Use this to check whether a subject already has a wiki, " +
-    "find sources you haven't cited yet (type=file inbound_max=0), find " +
-    "stubs that need filling (type=stub), or surface wikis with open " +
+    "List entities in the role's allowed spaces — wikis, source files, " +
+    "and stubs (placeholders left by [[wikilink]] references) — with " +
+    "structural filters. Use this to check whether a subject already has " +
+    "a wiki, find sources you haven't cited yet (type=file inbound_max=0), " +
+    "find stubs that need filling (type=stub), or surface wikis with open " +
     "threads (has_unresolved_outbound=true). Returns " +
-    "{entities, total, limit, offset}.",
+    "{entities, total, limit, offset, spaces}. Each entity row carries " +
+    "`space_id` and `space` so multi-space roles can tell them apart. " +
+    "Pass `space` to scope to one space; omit on a multi-space role to " +
+    "fan out across the whole allowed set.",
   inputSchema: z.object({
     type: z
       .string()
@@ -269,8 +371,9 @@ const listEntitiesTool = defineTool("list_entities", {
       ),
     limit: z.number().int().positive().optional().describe("Default 100, max 10000."),
     offset: z.number().int().min(0).optional().describe("Pagination offset, default 0."),
+    space: z.string().optional().describe(SPACE_PARAM_DESC),
   }),
-  call: (input, ctx) => {
+  call: async (input, ctx) => {
     let types: EntityType[] | undefined;
     try {
       types = parseEntityTypes(input.type);
@@ -278,8 +381,10 @@ const listEntitiesTool = defineTool("list_entities", {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(`list_entities: ${msg}`);
     }
-    return listEntities({
-      space_id: ctx.space.id,
+    const targets = resolveToolScope(ctx, input.space);
+    const indexById = new Map(targets.map((s) => [s.id, s.name]));
+    const result = await listEntities({
+      space_ids: targets.map((s) => s.id),
       types,
       subject_type: input.subject_type,
       status: input.status,
@@ -296,13 +401,23 @@ const listEntitiesTool = defineTool("list_entities", {
       limit: input.limit,
       offset: input.offset,
     });
+    return {
+      ...result,
+      entities: result.entities.map((e) => ({
+        ...e,
+        space: indexById.get(e.space_id) ?? "",
+      })),
+      spaces: targets.map((s) => ({ id: s.id, name: s.name })),
+    };
   },
   summarize: (r) => {
     const entities = (r as { entities?: unknown[] }).entities;
     const total = (r as { total?: number }).total;
+    const spaces = (r as { spaces?: { id: string }[] }).spaces;
     return {
       total,
       returned: Array.isArray(entities) ? entities.length : undefined,
+      target_space_ids: spaces?.map((s) => s.id),
     };
   },
 });

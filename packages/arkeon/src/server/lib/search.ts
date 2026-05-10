@@ -37,7 +37,13 @@ const DEFAULT_SNIPPETS_PER_FILE = 3;
 
 export interface KeywordSearchOptions {
   query: string;
+  /** Single-space convenience filter. Equivalent to passing
+   *  `spaceIds: [spaceId]`. If both are set, `spaceIds` wins. */
   spaceId?: string;
+  /** Restrict the search to a specific set of registered spaces.
+   *  Empty/undefined = every registered space. Used by the agent
+   *  runtime to fan out across a role's allowed-space scope. */
+  spaceIds?: string[];
   limit?: number;
   maxSnippetsPerFile?: number;
   regex?: boolean;
@@ -68,7 +74,12 @@ export interface KeywordSearchResult {
 
 export interface VectorSearchOptions {
   query: string;
+  /** Single-space convenience filter. Equivalent to passing
+   *  `spaceIds: [spaceId]`. If both are set, `spaceIds` wins. */
   spaceId?: string;
+  /** Restrict the search to a specific set of registered spaces.
+   *  Empty/undefined = every registered space. */
+  spaceIds?: string[];
   limit?: number;
 }
 
@@ -258,8 +269,18 @@ export async function searchKeyword(
   const maxSnippets = Math.max(0, opts.maxSnippetsPerFile ?? DEFAULT_SNIPPETS_PER_FILE);
 
   const sql = createSql();
-  const spaces = await (opts.spaceId
-    ? sql`SELECT id, watch_dir FROM spaces WHERE id = ${opts.spaceId}`
+  const requestedIds =
+    opts.spaceIds && opts.spaceIds.length > 0
+      ? opts.spaceIds
+      : opts.spaceId
+        ? [opts.spaceId]
+        : null;
+
+  const spaces = await (requestedIds
+    ? sql.query(
+        `SELECT id, watch_dir FROM spaces WHERE id IN (${requestedIds.map(() => "?").join(",")})`,
+        requestedIds,
+      )
     : sql`SELECT id, watch_dir FROM spaces`);
 
   if (spaces.length === 0) {
@@ -389,10 +410,23 @@ export async function searchVector(
     return { hits: [], total: 0, model: embedder.modelId };
   }
 
+  // Normalise the space filter once: explicit `spaceIds` array wins,
+  // single `spaceId` is treated as a 1-element list, omitted = no
+  // filter.
+  const filterIds =
+    opts.spaceIds && opts.spaceIds.length > 0
+      ? opts.spaceIds
+      : opts.spaceId
+        ? [opts.spaceId]
+        : null;
+
   // We don't LIMIT here — we collapse chunks → wikis client-side and
   // slice to `limit` after. SQL-side dedup via window functions would
   // require wrapping the vec0 MATCH, which vec0 doesn't compose well
   // with. The chunk row count is bounded by `k` already.
+  const spaceFilterClause = filterIds
+    ? `AND e.space_id IN (${filterIds.map(() => "?").join(",")})`
+    : "";
   const baseSql = `
     SELECT
       cv.distance AS distance,
@@ -407,11 +441,13 @@ export async function searchVector(
     JOIN spaces sp ON sp.id = e.space_id
     WHERE cv.embedding MATCH ?
       AND cv.k = ${k}
-      ${opts.spaceId ? "AND e.space_id = ?" : ""}
+      ${spaceFilterClause}
     ORDER BY cv.distance
   `;
 
-  const params = opts.spaceId ? [vecBuf, opts.spaceId] : [vecBuf];
+  const params: unknown[] = filterIds
+    ? [vecBuf, ...filterIds]
+    : [vecBuf];
   const rows = await sql.query(baseSql, params);
 
   // Collapse chunk hits → wiki hits. Rows are already in rank order

@@ -138,6 +138,23 @@ export const ROLE_CONFIG_SCHEMA = z.object({
    *  out of automatic triggers — useful for roles that are only run
    *  manually or by external schedulers. */
   triggers: z.array(TRIGGER_CONDITION_SCHEMA).optional(),
+
+  /** Spaces this role is allowed to read from. Each entry is either a
+   *  space name, a space id (ULID), the literal `"self"` (= the space
+   *  the run was triggered in), or the literal `"*"` (= every
+   *  registered space).
+   *
+   *  Examples:
+   *    spaces: [self]                       # default — own space only
+   *    spaces: [self, "data-mining"]        # own space + a sibling
+   *    spaces: ["*"]                        # global — see everything
+   *
+   *  Omitted = `[self]`. Names are resolved at run-start; if a name
+   *  matches multiple registered spaces the runtime errors out and
+   *  asks the operator to disambiguate by id. Read-only across spaces:
+   *  writes (`edit_file`, `delete_wiki`) always target the triggering
+   *  space regardless of this setting. */
+  spaces: z.array(z.string().min(1)).optional(),
 });
 
 export const AGENT_CONFIG_SCHEMA = z.object({
