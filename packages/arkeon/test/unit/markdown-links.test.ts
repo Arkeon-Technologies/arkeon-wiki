@@ -121,8 +121,58 @@ describe("extractWikiLinks", () => {
     expect(links).toEqual([]);
   });
 
-  it("ignores malformed multi-pipe forms", () => {
+  it("ignores malformed multi-pipe forms (two non-space segments)", () => {
+    // `a` and `b` both look like subject_type — no `space:` marker on
+    // either. The parser rejects to avoid silently picking one.
     const links = extractWikiLinks("[[Foo|a|b]] and [[Bar]]");
+    expect(links).toEqual([{ label: "Bar" }]);
+  });
+
+  it("rejects four-segment forms outright (regex doesn't match)", () => {
+    const links = extractWikiLinks("[[Foo|a|b|c]] and [[Bar]]");
+    expect(links).toEqual([{ label: "Bar" }]);
+  });
+
+  // ── cross-space syntax (issue #101) ────────────────────────────
+  it("extracts a cross-space wikilink with space: marker only", () => {
+    const links = extractWikiLinks("See [[Bell Labs|space:research-notes]].");
+    expect(links).toEqual([
+      { label: "Bell Labs", space: "research-notes" },
+    ]);
+  });
+
+  it("extracts a cross-space wikilink with subject_type and space:", () => {
+    const links = extractWikiLinks(
+      "See [[Bell Labs|organization|space:research-notes]].",
+    );
+    expect(links).toEqual([
+      {
+        label: "Bell Labs",
+        subject_type: "organization",
+        space: "research-notes",
+      },
+    ]);
+  });
+
+  it("accepts segments in either order — space sniffed by prefix", () => {
+    const a = extractWikiLinks("[[X|t|space:Y]]");
+    const b = extractWikiLinks("[[X|space:Y|t]]");
+    expect(a).toEqual([{ label: "X", subject_type: "t", space: "Y" }]);
+    expect(b).toEqual([{ label: "X", subject_type: "t", space: "Y" }]);
+  });
+
+  it("trims whitespace around the space name", () => {
+    const links = extractWikiLinks("[[Foo|  space:  research-notes  ]]");
+    expect(links).toEqual([{ label: "Foo", space: "research-notes" }]);
+  });
+
+  it("rejects empty space:", () => {
+    const links = extractWikiLinks("[[Foo|space:]] and [[Bar]]");
+    expect(links).toEqual([{ label: "Bar" }]);
+  });
+
+  it("rejects two space: segments", () => {
+    const links = extractWikiLinks("[[Foo|space:a|space:b]] and [[Bar]]");
     expect(links).toEqual([{ label: "Bar" }]);
   });
 

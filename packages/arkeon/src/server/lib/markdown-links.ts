@@ -31,15 +31,30 @@ export interface WikiLink {
   label: string;
   /** Optional subject_type hint after a pipe: [[Label|subject_type]]. */
   subject_type?: string;
+  /**
+   * Optional target-space hint via the `space:NAME` marker:
+   *   [[Label|space:research-notes]]
+   *   [[Label|subject_type|space:research-notes]]
+   * Cross-space wikilinks must resolve to an existing wiki — they never
+   * create placeholders in the target space (writes always stay scoped
+   * to the source wiki's own space; #99 read-only-across-spaces holds
+   * for placeholder allocation too). Resolver logic lives in
+   * `sync.ts:rebuildRelationships`.
+   */
+  space?: string;
 }
 
 // Matches [text](path) but not ![alt](img) (images)
 const LINK_RE = /(?<!!)\[([^\]]+)\]\(([^)]+)\)/g;
 
-// Matches [[Label]] and [[Label|subject_type]]. Excludes [, ], and | from
-// both captures so malformed forms like [[Foo|a|b]] don't accidentally
-// match — those are agent typos, not deliberate links.
-const WIKILINK_RE = /\[\[([^\[\]|]+)(?:\|([^\[\]|]+))?\]\]/g;
+// Matches [[Label]], [[Label|seg]], and [[Label|seg|seg]]. Each segment
+// excludes [, ], and | so malformed forms like [[Foo|a|b|c]] don't match
+// — those are agent typos, not deliberate links. The two optional
+// segments are sniffed by extractWikiLinks: a `space:` prefix marks the
+// target-space hint, anything else is treated as the subject_type.
+const WIKILINK_RE = /\[\[([^\[\]|]+)(?:\|([^\[\]|]+))?(?:\|([^\[\]|]+))?\]\]/g;
+
+const SPACE_PREFIX = "space:";
 
 /**
  * Extract all standard markdown links that point to .md files.
@@ -79,11 +94,18 @@ export function extractMarkdownLinks(content: string): MarkdownLink[] {
 }
 
 /**
- * Extract `[[Label]]` and `[[Label|subject_type]]` wiki-links.
+ * Extract `[[Label]]`, `[[Label|subject_type]]`, and the cross-space
+ * variants `[[Label|space:NAME]]` and `[[Label|subject_type|space:NAME]]`.
  *
- * Whitespace around `label` and `subject_type` is trimmed. An empty or
- * whitespace-only label is skipped. The captures exclude `|` so malformed
- * forms like `[[Foo|a|b]]` don't match at all.
+ * Each pipe segment is sniffed by prefix: `space:NAME` becomes the target
+ * space hint, anything else becomes the `subject_type`. Position doesn't
+ * matter — `[[X|space:Y|t]]` parses the same as `[[X|t|space:Y]]`. A
+ * second `space:` segment, or a second non-space segment, is rejected as
+ * malformed (silently dropped — agent typos, not deliberate links).
+ *
+ * Whitespace around `label`, `subject_type`, and the space name is
+ * trimmed. An empty or whitespace-only label is skipped. The captures
+ * exclude `|`, `[`, `]` so a four-segment `[[Foo|a|b|c]]` doesn't match.
  */
 export function extractWikiLinks(content: string): WikiLink[] {
   const links: WikiLink[] = [];
@@ -94,9 +116,39 @@ export function extractWikiLinks(content: string): WikiLink[] {
   while ((match = WIKILINK_RE.exec(content)) !== null) {
     const label = match[1].trim();
     if (!label) continue;
-    const rawSubject = match[2]?.trim();
+
+    let subjectType: string | undefined;
+    let space: string | undefined;
+    let malformed = false;
+
+    for (const raw of [match[2], match[3]]) {
+      const seg = raw?.trim();
+      if (!seg) continue;
+      if (seg.startsWith(SPACE_PREFIX)) {
+        const name = seg.slice(SPACE_PREFIX.length).trim();
+        if (!name || space !== undefined) {
+          // Empty `space:`, or two `space:` segments. Either way the
+          // intent is unclear; treat as a typo and skip the whole link.
+          malformed = true;
+          break;
+        }
+        space = name;
+      } else {
+        if (subjectType !== undefined) {
+          // Two non-space segments — `[[Foo|a|b]]` with no space marker.
+          // Same treatment as the legacy malformed-multi-pipe case.
+          malformed = true;
+          break;
+        }
+        subjectType = seg;
+      }
+    }
+
+    if (malformed) continue;
+
     const wikilink: WikiLink = { label };
-    if (rawSubject) wikilink.subject_type = rawSubject;
+    if (subjectType) wikilink.subject_type = subjectType;
+    if (space) wikilink.space = space;
     links.push(wikilink);
   }
 

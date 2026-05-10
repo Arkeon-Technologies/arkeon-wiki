@@ -444,31 +444,81 @@ async function rebuildRelationships(
     }
   }
 
-  // [[wikilinks]] — resolve or create placeholder. A placeholder is a
-  // wiki row with source_hash=NULL (no file on disk yet); when a real
-  // file is later written at the same path, syncWikiFile upgrades the
-  // row in place, preserving the id so inbound edges survive.
+  // [[wikilinks]] — resolve or create placeholder.
+  //
+  // Same-space (no `space:` segment): on miss, insert a placeholder
+  // (type='wiki', source_hash IS NULL). syncWikiFile later upgrades the
+  // row in place when a real file is written at the same path; the id
+  // is preserved so inbound edges survive.
+  //
+  // Cross-space (`[[Label|t|space:NAME]]`): resolve the named space, then
+  // look up `(target_space_id, target_path)`. Cross-space links MUST
+  // resolve to an existing wiki — they never create placeholders in the
+  // peer space (writes stay scoped to the source's own space; cross-
+  // space writes are out of scope, see #99). Unknown space, ambiguous
+  // space, or missing target = warn-and-drop, count as dangling.
   const wikilinks = extractWikiLinks(body);
   for (const wl of wikilinks) {
     const targetPath = wikiPathFor(wl.subject_type ?? "concept", wl.label);
+
+    let targetSpaceId: string;
+    if (wl.space) {
+      const matches = await tx`
+        SELECT id FROM spaces WHERE name = ${wl.space}
+      `;
+      if (matches.length === 0) {
+        console.warn(
+          `[sync] cross-space wikilink in ${fromPath}: ` +
+            `[[${wl.label}|...|space:${wl.space}]] — space '${wl.space}' is ` +
+            `not registered. Run 'arkeon-wiki ls' to see registered spaces.`,
+        );
+        dangling++;
+        continue;
+      }
+      if (matches.length > 1) {
+        const ids = matches.map((r) => r.id as string).join(", ");
+        console.warn(
+          `[sync] cross-space wikilink in ${fromPath}: ` +
+            `[[${wl.label}|...|space:${wl.space}]] — name '${wl.space}' is ` +
+            `ambiguous (${matches.length} registered spaces share it: ${ids}). ` +
+            `Use a space id instead.`,
+        );
+        dangling++;
+        continue;
+      }
+      targetSpaceId = matches[0].id as string;
+    } else {
+      targetSpaceId = space.id;
+    }
+
     const found = await tx`
       SELECT id, source_hash FROM entities
-      WHERE space_id = ${space.id} AND source_path = ${targetPath}
+      WHERE space_id = ${targetSpaceId} AND source_path = ${targetPath}
     `;
 
     let targetId: string;
     if (found.length > 0) {
       targetId = found[0].id as string;
-      if (found[0].source_hash === null) {
-        // Last-writer-wins for placeholder label. Realized wikis (file
-        // on disk) are not touched — their label is set by their own
-        // frontmatter, not by what other wikis call them.
+      // Cross-space wikilinks never rewrite a peer-space row's label —
+      // the target lives in another space and is none of our business.
+      // Same-space: last-writer-wins on placeholder labels only.
+      if (!wl.space && found[0].source_hash === null) {
         await tx`
           UPDATE entities
           SET label = ${wl.label}, updated_at = datetime('now')
           WHERE id = ${targetId}
         `;
       }
+    } else if (wl.space) {
+      // Cross-space miss: never create a placeholder in the peer space.
+      console.warn(
+        `[sync] cross-space wikilink in ${fromPath}: ` +
+          `[[${wl.label}|...|space:${wl.space}]] — no wiki at ${targetPath} ` +
+          `in space '${wl.space}'. Cross-space links must resolve; they ` +
+          `do not create placeholders in peer spaces.`,
+      );
+      dangling++;
+      continue;
     } else {
       targetId = generateUlid();
       await tx`
@@ -480,12 +530,11 @@ async function rebuildRelationships(
       placeholdersCreated++;
     }
 
-    // Preserve the original `[[Label|type]]` form in `link_path` so
-    // downstream consumers can tell a wikilink-derived edge apart from a
-    // standard markdown one.
-    const linkPath = wl.subject_type
-      ? `[[${wl.label}|${wl.subject_type}]]`
-      : `[[${wl.label}]]`;
+    // Preserve the original `[[Label|type]]` (or `[[Label|t|space:NAME]]`)
+    // form in `link_path` so downstream consumers can tell a wikilink-
+    // derived edge apart from a standard markdown one — and detect
+    // cross-space edges via the `space:` substring without re-parsing.
+    const linkPath = formatWikilinkPath(wl);
     const relId = generateUlid();
     await tx`
       INSERT INTO relationships (id, source_id, target_id, predicate, link_text, link_path)
@@ -499,6 +548,18 @@ async function rebuildRelationships(
   await gcOrphanedPlaceholders(tx, space.id);
 
   return { resolved, dangling, placeholdersCreated };
+}
+
+/**
+ * Round-trip a parsed wikilink back to its source form for `link_path`.
+ * Stable ordering — subject_type before space — so consumers searching
+ * for `space:` always find it as a suffix.
+ */
+function formatWikilinkPath(wl: { label: string; subject_type?: string; space?: string }): string {
+  const parts = [wl.label];
+  if (wl.subject_type) parts.push(wl.subject_type);
+  if (wl.space) parts.push(`space:${wl.space}`);
+  return `[[${parts.join("|")}]]`;
 }
 
 /**
