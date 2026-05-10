@@ -149,12 +149,18 @@ export const ROLE_CONFIG_SCHEMA = z.object({
    *    spaces: [self, "data-mining"]        # own space + a sibling
    *    spaces: ["*"]                        # global — see everything
    *
-   *  Omitted = `[self]`. Names are resolved at run-start; if a name
-   *  matches multiple registered spaces the runtime errors out and
-   *  asks the operator to disambiguate by id. Read-only across spaces:
-   *  writes (`edit_file`, `delete_wiki`) always target the triggering
-   *  space regardless of this setting. */
-  spaces: z.array(z.string().min(1)).optional(),
+   *  Omitted = `[self]`. Empty array is rejected (write `[self]`
+   *  explicitly if you want to be explicit about no other spaces;
+   *  `[]` is almost always a config typo). Names are resolved at
+   *  run-start; if a name matches multiple registered spaces the
+   *  runtime errors out and asks the operator to disambiguate by id.
+   *  `"*"` cannot be mixed with named entries — an operator who
+   *  wrote `["*", "data-mining"]` thinking they were narrowing scope
+   *  would instead get every space, so the runtime errors at
+   *  resolution time. Read-only across spaces: writes (`edit_file`,
+   *  `delete_wiki`) always target the triggering space regardless
+   *  of this setting. */
+  spaces: z.array(z.string().min(1)).min(1).optional(),
 });
 
 export const AGENT_CONFIG_SCHEMA = z.object({

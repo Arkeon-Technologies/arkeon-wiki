@@ -199,14 +199,22 @@ export async function runAgent(
 
     // Multi-space roles get an explicit list of their allowed spaces
     // appended to the system prompt so the LLM knows what to pass for
-    // `space` arguments. Single-space roles see the original prompt
-    // verbatim — the legacy contract.
+    // `space` arguments. The read_file caveat leads the section because
+    // it's the one tool whose default behaviour changes on multi-space
+    // roles (every other tool fans out; read_file errors). Burying the
+    // exception in a parenthetical caused unnecessary tool retries when
+    // the model defaulted to fan-out semantics for read_file too.
+    // Single-space roles see the original prompt verbatim — the legacy
+    // contract.
     const system =
       allowedSpaces.length > 1
         ? `${rawSystem}\n\n--- Allowed spaces (read-only) ---\n` +
+          `read_file requires an explicit \`space\` argument on this role. ` +
+          `search and list_entities default to fanning out across every space below; ` +
+          `pass \`space\` (name or id) to scope to one. Edits target the triggering space only.\n\n` +
           allowedSpaces
             .map((s, i) =>
-              `${i + 1}. ${s.name} (id: ${s.id})${s.id === input.space.id ? " — triggering space; default for omitted `space` args except in read_file" : ""}`,
+              `${i + 1}. ${s.name} (id: ${s.id})${s.id === input.space.id ? " — triggering space (writes go here)" : ""}`,
             )
             .join("\n")
         : rawSystem;

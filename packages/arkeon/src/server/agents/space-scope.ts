@@ -61,9 +61,21 @@ export async function resolveAllowedSpaces(
   const sql = options.sql ?? createSql();
   const requested = scope && scope.length > 0 ? scope : DEFAULT_SCOPE;
 
-  // "*" wins. Trim every other entry except a redundant "self" since the
-  // result already includes every space.
+  // "*" wins, but only when it's *unambiguous*. Mixing `*` with named
+  // entries silently inverts operator intent: an operator who wrote
+  // `["*", "data-mining"]` thinking they were narrowing scope would
+  // instead get every space. Reject the mixed form so a typo at config
+  // time is loud instead of silent. `self` is the one allowed
+  // companion since it doesn't change the result set.
   if (requested.includes("*")) {
+    const noisy = requested.filter((e) => e !== "*" && e !== "self");
+    if (noisy.length > 0) {
+      throw new Error(
+        `agents.yaml spaces: "*" cannot be combined with named entries ` +
+          `(${noisy.map((s) => `'${s}'`).join(", ")}). ` +
+          `Use ["*"] alone for global scope, or list the spaces explicitly without "*".`,
+      );
+    }
     const rows = (await sql`
       SELECT id, name, watch_dir FROM spaces
       WHERE watch_dir IS NOT NULL

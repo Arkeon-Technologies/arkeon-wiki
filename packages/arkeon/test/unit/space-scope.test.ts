@@ -97,6 +97,30 @@ describe("resolveAllowedSpaces", () => {
     );
   });
 
+  it("accepts [self, *] (redundant but unambiguous)", async () => {
+    const result = await resolveAllowedSpaces(["self", "*"], own, {
+      sql: fakeSql([ownRow, sibling]),
+    });
+    expect(result.map((s) => s.id)).toContain(own.id);
+    expect(result.map((s) => s.id)).toContain(sibling.id);
+  });
+
+  it("rejects `*` mixed with a named entry — silent inversion guard", async () => {
+    await expect(
+      resolveAllowedSpaces(["*", "data-mining"], own, {
+        sql: fakeSql([ownRow, sibling]),
+      }),
+    ).rejects.toThrow(/cannot be combined/);
+  });
+
+  it("rejects `*` mixed with an id", async () => {
+    await expect(
+      resolveAllowedSpaces(["*", sibling.id], own, {
+        sql: fakeSql([ownRow, sibling]),
+      }),
+    ).rejects.toThrow(/cannot be combined/);
+  });
+
   it("always includes the triggering space even when scope omits it", async () => {
     // Operator wrote `spaces: ["data-mining"]` — a role can still see
     // its own space.

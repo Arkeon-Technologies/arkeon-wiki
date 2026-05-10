@@ -123,6 +123,14 @@ describe("AGENT_CONFIG_SCHEMA", () => {
       }),
     ).toThrow();
   });
+
+  it("rejects an empty `spaces: []` array (omit the field for default)", () => {
+    expect(() =>
+      AGENT_CONFIG_SCHEMA.parse({
+        roles: { bridge: { spaces: [] } },
+      }),
+    ).toThrow();
+  });
 });
 
 // ── mergeConfigs ─────────────────────────────────────────────────
