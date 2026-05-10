@@ -105,10 +105,9 @@ export async function startWatching(space: Space): Promise<void> {
     `${summary.unchanged} unchanged, ${summary.removed} removed`,
   );
 
-  // Start the per-space agent scheduler. It reclaims any orphaned
-  // agent_queue rows from a previous crashed daemon and starts a
-  // worker that drains the ingestor queue. The watcher notifies it
-  // on every live file event (handleFileEvent below).
+  // Start the per-space cron scheduler. Agents fire on their declared
+  // cron expressions; the watcher no longer notifies it on file events
+  // (the watcher's only job is keeping the SQLite mirror live).
   try {
     const scheduler = await startScheduler({ space });
     schedulers.set(space.id, scheduler);
@@ -158,17 +157,13 @@ async function handleFileEvent(space: Space, relativePath: string): Promise<void
   const absPath = join(space.watch_dir, relativePath);
 
   if (existsSync(absPath)) {
-    // File added or modified
+    // File added or modified. The watcher's job ends at the SQLite
+    // mirror — agents are cron-paced and pick up new files at their
+    // next tick by querying entities directly.
     try {
       const result = await syncFile(space, relativePath);
       if (result.action !== "unchanged") {
         console.log(`[watcher] ${result.action}: ${result.label} (${relativePath})`);
-        // Notify the scheduler — it'll filter out wiki/** and .arkeon/**
-        // and enqueue an ingestor run for everything else.
-        const scheduler = schedulers.get(space.id);
-        if (scheduler) {
-          await scheduler.notify(relativePath, result.entityId);
-        }
       }
     } catch (err) {
       console.error(`[watcher] Error syncing ${relativePath}:`, (err as Error).message);

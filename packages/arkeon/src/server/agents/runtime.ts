@@ -172,7 +172,13 @@ export async function runAgent(
   options: RunAgentOptions = {},
 ): Promise<AgentRunResult> {
   return withPathLock(role.concurrencyKey(input), async () => {
-    const idem = role.idempotencyKey(input);
+    // "Cron mode" = no triggering file/entity. Each tick is a fresh
+    // "look at state and decide" — there's nothing meaningful to
+    // dedupe against, and (more importantly) consecutive ticks would
+    // generate the same default idempotency key, causing the second
+    // tick to short-circuit as already_processed forever.
+    const cronMode = !input.triggerPath && !input.triggerEntityId;
+    const idem = cronMode ? null : role.idempotencyKey(input);
     // Resolve allowed-space scope before the context is built so the
     // first thing tools see is a consistent view. Resolution errors
     // (unknown name, ambiguous name, "*" with a missing watch_dir
@@ -182,7 +188,7 @@ export async function runAgent(
     const ctx = makeContext(input.space, role.name, { allowedSpaces });
     const runStartedAt = Date.now();
 
-    if (await alreadyProcessed(role.name, idem)) {
+    if (idem && (await alreadyProcessed(role.name, idem))) {
       ctx.trace("run.skipped", {
         reason: "already_processed",
         idempotency_key: idem.key,
@@ -221,8 +227,9 @@ export async function runAgent(
 
     ctx.trace("run.start", {
       space_name: input.space.name,
-      idempotency_key: idem.key,
-      input_hash: idem.hash,
+      idempotency_key: idem?.key ?? null,
+      input_hash: idem?.hash ?? null,
+      cron_mode: cronMode,
       trigger_path: input.triggerPath,
       trigger_entity_id: input.triggerEntityId,
       phases: phases.map((p) => p.name),
@@ -313,7 +320,7 @@ export async function runAgent(
         ctx.currentPhase = null;
       }
 
-      await markProcessed(role.name, idem, "completed", null);
+      if (idem) await markProcessed(role.name, idem, "completed", null);
 
       ctx.trace("run.end", {
         ok: true,
@@ -332,7 +339,7 @@ export async function runAgent(
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      await markProcessed(role.name, idem, "failed", msg);
+      if (idem) await markProcessed(role.name, idem, "failed", msg);
       ctx.trace("run.error", {
         error: msg,
         total_steps: totalSteps,

@@ -40,6 +40,7 @@
     "better-sqlite3": "^12.9.0",
     "commander": "^14.0.1",
     "conf": "^13.0.1",
+    "cron-parser": "^5.5.0",
     "dotenv": "^17.3.1",
     "hono": "^4.12.9",
     "js-yaml": "^4.1.1",

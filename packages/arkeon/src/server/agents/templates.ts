@@ -4,13 +4,13 @@
 /**
  * Bundled agent role templates.
  *
- * The runtime ships a handful of ready-to-use roles (ingestor,
- * consolidator) as YAML files under templates/. The loader is on the
- * agent-claim hot path (every queue claim calls buildAgentRole, which
- * calls loadBundledTemplates), so we mtime-cache parsed configs:
- * readdir + stat each call (kernel-cached, sub-microsecond), reload +
- * Zod-parse only on mtime change. Editing a template still picks up
- * on the next call — the dev loop stays a one-step edit-and-re-run.
+ * The runtime ships ready-to-use roles (currently `writer`) as YAML
+ * files under templates/. The loader is on the scheduler hot path
+ * (every cron tick calls buildAgentRole, which calls
+ * loadBundledTemplates), so we mtime-cache parsed configs: readdir +
+ * stat each call (kernel-cached, sub-microsecond), reload + Zod-parse
+ * only on mtime change. Editing a template still picks up on the next
+ * call — the dev loop stays a one-step edit-and-re-run.
  *
  * Resolution layers (lowest to highest precedence) in buildAgentRole:
  *   1. config.defaults              ← agents.yaml `defaults:`
@@ -18,7 +18,7 @@
  *   3. config.roles[name]           ← agents.yaml `roles:`
  *
  * Bundled templates supply the workflow defaults (system prompt,
- * tools, phases, triggers). Users override individual fields in
+ * tools, phases, cron). Users override individual fields in
  * `.arkeon/agents.yaml` without re-stating the prompts.
  *
  * To add a template: drop a YAML file in templates/ named after the

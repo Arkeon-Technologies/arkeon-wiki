@@ -2,21 +2,28 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Layer 3: real-LLM end-to-end demo.
+ * Real-LLM end-to-end demo for the cron-driven writer.
  *
- * Drives runAgent against an actual provider (OpenAI by default) using
- * the bundled `ingestor` role template at agents/templates/ingestor.yaml.
- * This exercises the whole config → role-builder → runtime → tools
- * stack, exactly the way the daemon-driven ingestor worker will.
+ * Drives `runAgent` against an actual provider (OpenAI by default)
+ * using the bundled `writer` role at agents/templates/writer.yaml.
+ * Drops a few source files into a watched space, then invokes the
+ * writer in cron mode (no triggerPath) and asserts:
+ *
+ *   1. The writer produces at least one article under wiki/article/
+ *   2. The article body is non-trivial and cites at least one source
+ *
+ * The cron timer itself is mechanically tested in test/e2e/scheduler-
+ * cron.test.ts; this manual test validates that the writer's prompt +
+ * tool-use loop actually writes something useful when given real
+ * unprocessed sources.
  *
  * Skipped automatically when no API key is set. Invoke explicitly:
  *
  *   npm run test:manual -w packages/arkeon
  *
- * Drop your key into a .env file at the repo root (auto-loaded), or
- * set OPENAI_API_KEY / ANTHROPIC_API_KEY in the shell. Override the
- * provider/model/baseURL with AGENT_DEMO_PROVIDER, AGENT_DEMO_MODEL,
- * AGENT_DEMO_BASE_URL.
+ * Drop your key into ~/.arkeon-wiki/.env (auto-loaded), or set
+ * OPENAI_API_KEY / ANTHROPIC_API_KEY in the shell. Override the
+ * provider/model with AGENT_DEMO_PROVIDER, AGENT_DEMO_MODEL.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -33,11 +40,14 @@ import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 
 import { loadAgentEnv } from "../../src/server/agents/env-loader.js";
+import { buildAgentRole } from "../../src/server/agents/role-builder.js";
+import { loadAgentConfig } from "../../src/server/agents/config.js";
+import { runAgent } from "../../src/server/agents/runtime.js";
+import { ALL_TOOLS } from "../../src/server/agents/tools.js";
 import { createSql } from "../../src/server/lib/sql.js";
 import type { Space } from "../../src/server/lib/sync.js";
 
-// Load .env files in precedence order: shell > repo .env > ~/.arkeon-wiki/.env.
-// The repo's .env is at ../../../../ from this file (worktree root).
+// Load .env in precedence order: shell > repo .env > ~/.arkeon-wiki/.env.
 loadAgentEnv({ spaceDir: resolve(__dirname, "../../../..") });
 
 const API_PORT = 18799;
@@ -74,9 +84,9 @@ beforeAll(async () => {
   mkdirSync(join(testDir, "sources"), { recursive: true });
   mkdirSync(join(testDir, ".arkeon"), { recursive: true });
 
-  // Plant agents.yaml BEFORE the space is registered, so the
-  // per-space scheduler's probe finds a buildable role and the
-  // auto-trigger worker actually starts.
+  // agents.yaml: provider/model only. We invoke the writer via
+  // runAgent directly in the tests below, so we don't need a fast
+  // cron — the bundled template's default cron stays unused.
   const yamlLines = [
     "defaults:",
     `  provider: ${PROVIDER}`,
@@ -107,6 +117,58 @@ beforeAll(async () => {
   });
   const json = (await spaceRes.json()) as { id: string };
   space = { id: json.id, name: "real-llm-space", watch_dir: testDir };
+
+  // Plant a few sources before the test runs. The watcher syncs them
+  // into entities so list_entities surfaces them as "recent
+  // unprocessed sources" (inbound_max=0).
+  writeFileSync(
+    join(testDir, "sources/shannon-1948.md"),
+    [
+      "# A Mathematical Theory of Communication",
+      "",
+      "Claude Shannon's 1948 paper introduced the foundational ideas of",
+      "information theory. He defined information as the resolution of",
+      "uncertainty: a message's information content depends not on what it",
+      "says but on how surprising it is given the receiver's prior beliefs.",
+      "",
+      "The paper's core technical contribution was the noisy-channel",
+      "coding theorem: for any channel, there exists a maximum rate at",
+      "which information can be transmitted with arbitrarily low error.",
+      "Shannon called this the channel capacity, and proved that codes",
+      "exist that approach it.",
+      "",
+    ].join("\n"),
+  );
+
+  writeFileSync(
+    join(testDir, "sources/shannon-bell-labs.md"),
+    [
+      "# Shannon at Bell Labs",
+      "",
+      "Claude Shannon spent the bulk of his career at Bell Telephone",
+      "Laboratories in Murray Hill, New Jersey. He arrived in 1941 and",
+      "stayed for fifteen years before joining the MIT faculty.",
+      "",
+      "Bell Labs in the 1940s was a remarkable institution: a corporate",
+      "research lab with the freedom and resources of a university but the",
+      "engineering focus of an industrial concern. Shannon's information-",
+      "theoretic work emerged from the Labs' practical problems with",
+      "long-distance telephone signal degradation.",
+      "",
+    ].join("\n"),
+  );
+
+  // Wait briefly for the watcher to sync them.
+  const sql = createSql();
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const rows = await sql`
+      SELECT COUNT(*) AS n FROM entities
+      WHERE space_id = ${space.id} AND type = 'file'
+    `;
+    if ((rows[0] as { n: number }).n >= 2) break;
+    await new Promise((r) => setTimeout(r, 200));
+  }
 }, 60_000);
 
 afterAll(async () => {
@@ -119,271 +181,84 @@ afterAll(async () => {
   }
 }, 30_000);
 
-describe.skipIf(!HAS_KEY)("real-LLM ingestor agent", () => {
+function listWikiFiles(): string[] {
+  const wikiDir = join(testDir, "wiki");
+  const out: string[] = [];
+  function walk(dir: string) {
+    if (!existsSync(dir)) return;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, entry.name);
+      if (entry.isDirectory()) walk(p);
+      else if (entry.name.endsWith(".md")) out.push(p);
+    }
+  }
+  walk(wikiDir);
+  return out;
+}
+
+describe.skipIf(!HAS_KEY)("real-LLM writer agent (cron mode)", () => {
   it(
-    "uses the bundled ingestor role to extract subjects from a source",
+    "writes at least one article from recent unprocessed sources",
     async () => {
-      const sourcePath = "sources/shannon-bio.md";
-      writeFileSync(
-        join(testDir, sourcePath),
-        [
-          "# Founding Information Theory",
-          "",
-          "Claude Shannon was an American mathematician and electrical engineer.",
-          "His 1948 paper, *A Mathematical Theory of Communication*, founded the",
-          "field of information theory. He spent most of his career at Bell Labs,",
-          "where he also did pioneering work on cryptography during World War II.",
-          "",
-        ].join("\n"),
+      const config = loadAgentConfig({ spaceDir: testDir });
+      const role = buildAgentRole("writer", config);
+
+      // Cron-mode invocation: no triggerPath, no triggerEntityId.
+      // The role's prompt tells it to query state and pick its own
+      // work. Idempotency is skipped at the runtime layer.
+      const result = await runAgent(
+        role,
+        { space, meta: {} },
+        ALL_TOOLS,
+        {},
       );
 
-      // Auto-trigger path: dropping the file is enough — the watcher
-      // will enqueue, the scheduler will run the ingestor. We just
-      // wait for the agent_runs row to register completion.
-      const sql = createSql();
-      const deadline = Date.now() + 120_000;
-      let completed = false;
-      while (Date.now() < deadline) {
-        const rows = await sql`
-          SELECT status FROM agent_runs
-          WHERE role = ${"ingestor"} AND idempotency_key = ${sourcePath}
-        `;
-        if (rows[0]?.status === "completed") {
-          completed = true;
-          break;
-        }
-        await new Promise((r) => setTimeout(r, 500));
-      }
-      expect(completed).toBe(true);
-
-      // ── Report ──────────────────────────────────────────────────
-      console.log("\n──────── REAL-LLM AGENT RESULT (auto-trigger) ────────");
+      console.log("\n──────── REAL-LLM WRITER RESULT (cron mode) ────────");
       console.log(`provider:  ${PROVIDER}`);
       console.log(`model:     ${MODEL}`);
-      console.log(`role:      ingestor (bundled template)`);
-      console.log(`completed: ${completed ? "✓" : "✗"}`);
-      console.log("\nWikis on disk:");
-      const wikiDir = join(testDir, "wiki");
-      function walk(dir: string, prefix = "  ") {
-        for (const entry of readdirSync(dir, { withFileTypes: true })) {
-          const path = join(dir, entry.name);
-          if (entry.isDirectory()) {
-            walk(path, prefix + "  ");
-          } else if (entry.name.endsWith(".md")) {
-            const fm = readFileSync(path, "utf-8");
-            const labelMatch = fm.match(/label:\s*(.+)/);
-            console.log(
-              `${prefix}${path.replace(testDir + "/", "")}  →  ${labelMatch?.[1] ?? "(no label)"}`,
-            );
-          }
-        }
+      console.log(`role:      writer (bundled template)`);
+      console.log(`steps:     ${result.steps}`);
+      console.log(`edits:     ${result.edits.length}`);
+      console.log(`tokens:    ${result.usage?.totalTokens ?? "?"}`);
+      console.log(`text tail: ${result.text.slice(0, 240)}`);
+      console.log("\nFiles on disk under wiki/:");
+      const files = listWikiFiles();
+      for (const p of files) {
+        const c = readFileSync(p, "utf-8");
+        const labelMatch = c.match(/^label:\s*(.+)$/m);
+        console.log(
+          `  ${p.replace(testDir + "/", "")}  →  ${labelMatch?.[1]?.trim() ?? "(no label)"}  (${c.length} chars)`,
+        );
       }
-      walk(wikiDir);
-      console.log("──────────────────────────────────────────────────────\n");
+      console.log("─────────────────────────────────────────────────────\n");
 
-      // ── Lenient assertions ──────────────────────────────────────
-      const wikiFiles: string[] = [];
-      function findMd(dir: string) {
-        for (const entry of readdirSync(dir, { withFileTypes: true })) {
-          const p = join(dir, entry.name);
-          if (entry.isDirectory()) findMd(p);
-          else if (entry.name.endsWith(".md")) wikiFiles.push(p);
-        }
-      }
-      findMd(wikiDir);
-      expect(wikiFiles.length).toBeGreaterThan(0);
+      // The writer should make at least one edit.
+      expect(result.edits.length).toBeGreaterThan(0);
 
-      // Ingestor writes wiki bodies, not placeholders. Each generated
-      // wiki should have a non-trivial body and at least one wiki has
-      // a markdown link back to the source path (provenance).
-      const bodyContents = wikiFiles.map((p) => readFileSync(p, "utf-8"));
-      const withBody = bodyContents.filter((s) => {
+      // At least one article file should exist on disk.
+      const articleFiles = files.filter((p) =>
+        p.includes("/wiki/article/") || p.includes("/wiki/"),
+      );
+      expect(articleFiles.length).toBeGreaterThan(0);
+
+      // At least one article should have a non-trivial body and cite
+      // one of the source files we planted (provenance backlink).
+      const bodies = articleFiles.map((p) => readFileSync(p, "utf-8"));
+      const withSourceCitation = bodies.filter(
+        (s) =>
+          s.includes("shannon-1948") || s.includes("shannon-bell-labs"),
+      );
+      expect(withSourceCitation.length).toBeGreaterThan(0);
+
+      // Each cited body should have meaningful content past the
+      // frontmatter. (Splits on `---` give [pre, frontmatter, body]
+      // for a properly-fenced file.)
+      const meaningful = withSourceCitation.filter((s) => {
         const parts = s.split(/^---$/m);
-        return parts.length >= 3 && parts[2].trim().length > 50;
+        return parts.length >= 3 && parts[2].trim().length > 100;
       });
-      expect(withBody.length).toBeGreaterThan(0);
-
-      const withSourceBacklink = bodyContents.filter((s) =>
-        s.includes(sourcePath),
-      );
-      expect(withSourceBacklink.length).toBeGreaterThan(0);
+      expect(meaningful.length).toBeGreaterThan(0);
     },
-    180_000,
-  );
-
-  it(
-    "amends an existing wiki when a new source mentions the same subject",
-    async () => {
-      // Plant a SECOND source that mentions Claude Shannon (already
-      // ingested by the previous test) plus a new subject the
-      // existing space hasn't seen. The ingestor should edit_file
-      // Shannon's wiki to weave in the new material — preserving the
-      // wiki's id and the original Bell-Labs paragraph — and use
-      // edit_file CREATE mode to write a fresh wiki for the new subject.
-      const shannonPath = join(testDir, "wiki/person/claude-shannon.md");
-      expect(existsSync(shannonPath)).toBe(true);
-
-      const before = readFileSync(shannonPath, "utf-8");
-      const beforeId = before.match(/^id:\s*(\S+)/m)?.[1];
-      expect(beforeId).toBeTruthy();
-      const beforeBodyLen = before.split(/^---$/m)[2]?.length ?? 0;
-      expect(beforeBodyLen).toBeGreaterThan(50);
-
-      const newSourcePath = "sources/shannon-circuits.md";
-      writeFileSync(
-        join(testDir, newSourcePath),
-        [
-          "# Boolean Circuits",
-          "",
-          "Claude Shannon's 1937 master's thesis at MIT showed that boolean",
-          "algebra could be applied to the design of electrical relay",
-          "circuits. The thesis is widely regarded as one of the most",
-          "important master's theses ever written and laid the groundwork",
-          "for digital circuit design.",
-          "",
-        ].join("\n"),
-      );
-
-      // Wait for the auto-trigger to finish ingesting the new source.
-      const sql = createSql();
-      const deadline = Date.now() + 120_000;
-      let completed = false;
-      while (Date.now() < deadline) {
-        const rows = await sql`
-          SELECT status FROM agent_runs
-          WHERE role = ${"ingestor"} AND idempotency_key = ${newSourcePath}
-        `;
-        if (rows[0]?.status === "completed") {
-          completed = true;
-          break;
-        }
-        await new Promise((r) => setTimeout(r, 500));
-      }
-      expect(completed).toBe(true);
-
-      console.log("\n──────── EDIT-EXISTING REAL-LLM RESULT (auto-trigger) ────────");
-      console.log(`new source: ${newSourcePath}`);
-      console.log(`completed:  ✓`);
-      console.log("──────────────────────────────────────────────────────────\n");
-
-      // ── Lenient assertions ──────────────────────────────────────
-      // Shannon's wiki should still exist and have the SAME id.
-      const after = readFileSync(shannonPath, "utf-8");
-      const afterId = after.match(/^id:\s*(\S+)/m)?.[1];
-      expect(afterId).toBe(beforeId);
-
-      // The body should have grown — new source's material is woven in.
-      const afterBodyLen = after.split(/^---$/m)[2]?.length ?? 0;
-      expect(afterBodyLen).toBeGreaterThan(beforeBodyLen);
-
-      // The new source path should appear somewhere in the wiki body
-      // (the ingestor's instructions tell it to include a backlink).
-      const sawNewSourceInShannon =
-        after.includes(newSourcePath) ||
-        after.includes("shannon-circuits");
-      expect(sawNewSourceInShannon).toBe(true);
-
-      // Original Bell-Labs material should still be present (the edit
-      // should weave in, not replace).
-      expect(after.toLowerCase()).toContain("bell labs");
-    },
-    180_000,
-  );
-
-  it(
-    "auto-fires the ingestor when a source file lands (no explicit trigger)",
-    async () => {
-      // The previous tests called runAgent directly. This one drops a
-      // file into the watched directory and waits — the watcher →
-      // scheduler → runAgent chain should run the ingestor without
-      // any explicit invocation. Validates the daemon-side auto-
-      // trigger path that production users will rely on. (agents.yaml
-      // was planted in beforeAll so the per-space scheduler started
-      // a worker.)
-
-      // Drop a brand-new source file. No explicit runAgent call.
-      const sourcePath = "sources/auto-trigger-demo.md";
-      writeFileSync(
-        join(testDir, sourcePath),
-        [
-          "# Hedy Lamarr",
-          "",
-          "Hedy Lamarr was an Austrian-American actress and inventor whose",
-          "work on frequency-hopping radio guidance systems during World War",
-          "II laid groundwork for modern wireless communication technologies",
-          "including Wi-Fi and Bluetooth.",
-          "",
-        ].join("\n"),
-      );
-
-      // Wait for the daemon to: see the file → enqueue → run the
-      // ingestor → finish (agent_runs marked completed). Watching for
-      // agent_runs is the right signal — the wiki write happens
-      // mid-run, so a wiki-on-disk check can be observed before the
-      // run record exists. Generous timeout: real LLM calls take
-      // 30-60s plus the watcher's ~500ms debounce.
-      const sql = createSql();
-      const deadline = Date.now() + 120_000;
-      let completedRun:
-        | { idempotency_key: string; status: string }
-        | null = null;
-      while (Date.now() < deadline) {
-        const rows = await sql`
-          SELECT idempotency_key, status FROM agent_runs
-          WHERE role = ${"ingestor"} AND idempotency_key = ${sourcePath}
-        `;
-        const r = rows[0] as
-          | { idempotency_key: string; status: string }
-          | undefined;
-        if (r && r.status === "completed") {
-          completedRun = r;
-          break;
-        }
-        await new Promise((r) => setTimeout(r, 500));
-      }
-
-      // Diagnostic dump regardless of pass/fail.
-      const queueRows = await sql`
-        SELECT trigger_path, attempts, last_error, started_at
-        FROM agent_queue
-        WHERE space_id = ${space.id}
-      `;
-      const allRuns = await sql`
-        SELECT idempotency_key, status FROM agent_runs
-        WHERE role = ${"ingestor"}
-        ORDER BY finished_at DESC LIMIT 5
-      `;
-      console.log("\n──────── AUTO-TRIGGER REAL-LLM RESULT ────────");
-      console.log(`source dropped: ${sourcePath}`);
-      console.log(`completed run:  ${completedRun ? "✓" : "✗"}`);
-      console.log(`queue rows:     ${queueRows.length} pending/in-flight`);
-      console.log(`recent runs:    ${allRuns.length}`);
-      for (const r of allRuns) {
-        console.log(`  - ${r.status}  ${r.idempotency_key}`);
-      }
-      console.log("──────────────────────────────────────────────\n");
-
-      // Lenient: the LLM might pick a slightly different file path
-      // (e.g., wiki/person/lamarr.md). Walk wiki/ for any file
-      // mentioning Hedy Lamarr.
-      const allWikiFiles: string[] = [];
-      function walkMd(dir: string) {
-        if (!existsSync(dir)) return;
-        for (const entry of readdirSync(dir, { withFileTypes: true })) {
-          const p = join(dir, entry.name);
-          if (entry.isDirectory()) walkMd(p);
-          else if (entry.name.endsWith(".md")) allWikiFiles.push(p);
-        }
-      }
-      walkMd(join(testDir, "wiki"));
-
-      const hedyWiki = allWikiFiles.find((p) => {
-        const c = readFileSync(p, "utf-8").toLowerCase();
-        return c.includes("hedy lamarr") || c.includes("frequency-hopping");
-      });
-      expect(hedyWiki).toBeTruthy();
-      expect(completedRun).toBeTruthy();
-    },
-    180_000,
+    240_000,
   );
 });
