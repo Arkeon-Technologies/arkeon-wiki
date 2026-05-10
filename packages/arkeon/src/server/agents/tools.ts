@@ -310,79 +310,165 @@ const listEntitiesTool = defineTool("list_entities", {
 // ── edit_file ─────────────────────────────────────────────────────
 
 /**
- * One file-mutation tool covers three operations, dispatched on the
- * presence/absence of `search` and whether the file already exists:
+ * One mutation tool, five modes — explicit `mode` discriminator. Each
+ * mode carries its own params:
  *
- *   - file does NOT exist + search="" → CREATE the file with `replace`
- *     as the full content (frontmatter + body).
- *   - file EXISTS + search=""        → APPEND `replace` to the end of
- *     the file. New material is added; nothing existing is touched.
- *   - file EXISTS + search!=""       → SEARCH/REPLACE: substitute
- *     the span (must match exactly once). Aider-style.
+ *   - create          { path, content }                 — new file
+ *   - append          { path, content }                 — add to end of existing file
+ *   - replace         { path, search, replace }         — Aider-style surgical edit
+ *   - annotate        { path, insert_after_phrase, insert_text }
+ *                       — splice text after a unique anchor phrase,
+ *                         leaving everything else verbatim. Phrase-only
+ *                         contract is load-bearing: the model points,
+ *                         the runtime inserts. There is no field in
+ *                         which the model could express "and tidy the
+ *                         neighbouring sentence too." Prefer this over
+ *                         REPLACE for additive edits.
+ *   - delete_section  { path, heading }
+ *                       — remove an ATX heading and its body, up to
+ *                         (but not including) the next same-or-higher
+ *                         heading.
  *
- * No way to overwrite an existing file. If you need to "rename" a
- * wiki's label, use the SEARCH/REPLACE form on the `label:` line in
- * frontmatter — the file path stays the same.
+ * Whole-file deletion lives in `delete_wiki` (different tool: guarded
+ * `wiki/` prefix, required `reason`).
  */
 const editFileTool = defineTool("edit_file", {
   description:
-    "Mutate a wiki file. Three modes:\n" +
-    "  1. CREATE — pass an empty `search` and full file content as `replace` " +
-    "when the file doesn't exist yet. Used when you've decided to add a new wiki.\n" +
-    "  2. APPEND — pass an empty `search` and the new material as `replace` " +
-    "when the file DOES exist. The text gets added at the end of the body.\n" +
-    "  3. REPLACE — pass a non-empty `search` (must match exactly once) and " +
-    "the substitution as `replace`. Aider-style SEARCH/REPLACE for surgical " +
-    "in-place edits, e.g. updating the `label:` frontmatter line. Copy " +
-    "whitespace verbatim.\n" +
-    "There is no way to overwrite a whole existing file — if you want to " +
-    "change a wiki's label, REPLACE just the `label:` line.",
-  inputSchema: z.object({
-    path: z.string().describe("Relative path inside the space's watch_dir."),
-    search: z
-      .string()
-      .describe(
-        "Empty string for CREATE/APPEND, or the exact span to substitute " +
-          "for REPLACE. Must match exactly once when non-empty.",
-      ),
-    replace: z
-      .string()
-      .describe(
-        "The new content: full file body for CREATE, appended text for " +
-          "APPEND, or the substitution for REPLACE.",
-      ),
-  }),
-  call: async ({ path, search, replace }, ctx) => {
-    if (search === "") {
-      const absPath = safeResolve(ctx.space.watch_dir, path);
+    "Mutate a file in the current space. Five modes (set `mode` explicitly):\n" +
+    "  - create: write a new file. Provide full file content as `content`. Fails if the file already exists.\n" +
+    "  - append: add to the end of an existing file. Provide the new material as `content`.\n" +
+    "  - replace: Aider-style SEARCH/REPLACE. `search` must match exactly once. Use for surgical in-place edits like updating a frontmatter line.\n" +
+    "  - annotate: splice `insert_text` immediately after a unique `insert_after_phrase`. Everything else stays byte-for-byte identical. Prefer this over `replace` when you are adding an observation to an existing wiki — the schema makes it impossible to accidentally rewrite surrounding prose.\n" +
+    "  - delete_section: remove an ATX heading line and its body, up to the next same-or-higher heading. Pass the literal heading line as `heading` (e.g. '## Open threads'). Heading must match exactly once.\n" +
+    "Whole-file deletion is a separate tool (`delete_wiki`).",
+  inputSchema: z.discriminatedUnion("mode", [
+    z.object({
+      mode: z.literal("create"),
+      path: z.string().describe("Relative path inside the space's watch_dir."),
+      content: z.string().describe("Full file content (frontmatter + body)."),
+    }),
+    z.object({
+      mode: z.literal("append"),
+      path: z.string().describe("Relative path inside the space's watch_dir."),
+      content: z.string().describe("Material to append at the end of the file."),
+    }),
+    z.object({
+      mode: z.literal("replace"),
+      path: z.string().describe("Relative path inside the space's watch_dir."),
+      search: z
+        .string()
+        .min(1)
+        .describe("Exact span to substitute. Must match exactly once."),
+      replace: z.string().describe("Substitute content."),
+    }),
+    z.object({
+      mode: z.literal("annotate"),
+      path: z.string().describe("Relative path inside the space's watch_dir."),
+      insert_after_phrase: z
+        .string()
+        .min(1)
+        .describe(
+          "Anchor phrase already in the file (must match exactly once). " +
+            "The runtime inserts `insert_text` immediately after this phrase " +
+            "and preserves everything else byte-for-byte.",
+        ),
+      insert_text: z
+        .string()
+        .describe("Text to splice in directly after the anchor phrase."),
+    }),
+    z.object({
+      mode: z.literal("delete_section"),
+      path: z.string().describe("Relative path inside the space's watch_dir."),
+      heading: z
+        .string()
+        .min(1)
+        .describe(
+          "ATX heading line to delete (e.g. '## Open threads'). The runtime " +
+            "removes this heading and its body up to (but not including) the " +
+            "next heading at the same or higher level. Must match exactly once.",
+        ),
+    }),
+  ]),
+  call: async (input, ctx) => {
+    if (input.mode === "create") {
+      const absPath = safeResolve(ctx.space.watch_dir, input.path);
       if (existsSync(absPath)) {
-        // APPEND: read current content, concat, write back via the
-        // 'write' primitive. We use applyEdit's write here because
-        // it's the deterministic "set this file's full content"
-        // operation; the LLM-facing tool never has access to it.
-        const current = readFileSync(absPath, "utf-8");
-        const joined = current.endsWith("\n") || current.length === 0
-          ? current + replace
-          : current + "\n" + replace;
-        const result = await ctx.applyEdit(
-          { kind: "write", path, content: joined },
-          { edit_kind: "append" },
+        throw new Error(
+          `edit_file: ${input.path} already exists — use mode 'append', 'annotate', 'replace', or 'delete_section' to modify it`,
         );
-        return { path: result.path, mode: "append" };
       }
-      // CREATE: write the new file.
       const result = await ctx.applyEdit(
-        { kind: "write", path, content: replace },
+        { kind: "write", path: input.path, content: input.content },
         { edit_kind: "create" },
       );
-      return { path: result.path, mode: "create" };
+      return { path: result.path, mode: "create" as const };
     }
-    // REPLACE: surgical edit.
-    const result = await ctx.applyEdit(
-      { kind: "edit", path, search, replace },
-      { edit_kind: "replace" },
+
+    if (input.mode === "append") {
+      const absPath = safeResolve(ctx.space.watch_dir, input.path);
+      if (!existsSync(absPath)) {
+        throw new Error(
+          `edit_file: ${input.path} does not exist — use mode 'create' to write a new file`,
+        );
+      }
+      const current = readFileSync(absPath, "utf-8");
+      const joined =
+        current.endsWith("\n") || current.length === 0
+          ? current + input.content
+          : current + "\n" + input.content;
+      const result = await ctx.applyEdit(
+        { kind: "write", path: input.path, content: joined },
+        { edit_kind: "append" },
+      );
+      return { path: result.path, mode: "append" as const };
+    }
+
+    if (input.mode === "replace") {
+      const result = await ctx.applyEdit(
+        {
+          kind: "edit",
+          path: input.path,
+          search: input.search,
+          replace: input.replace,
+        },
+        { edit_kind: "replace" },
+      );
+      return { path: result.path, mode: "replace" as const };
+    }
+
+    if (input.mode === "annotate") {
+      const result = await ctx.applyEdit(
+        {
+          kind: "annotate",
+          path: input.path,
+          insert_after_phrase: input.insert_after_phrase,
+          insert_text: input.insert_text,
+        },
+        { edit_kind: "annotate" },
+      );
+      return { path: result.path, mode: "annotate" as const };
+    }
+
+    if (input.mode === "delete_section") {
+      const result = await ctx.applyEdit(
+        {
+          kind: "delete_section",
+          path: input.path,
+          heading: input.heading,
+        },
+        { edit_kind: "delete_section" },
+      );
+      return { path: result.path, mode: "delete_section" as const };
+    }
+
+    // Discriminated union exhaustiveness check. The Zod schema rejects
+    // unknown mode values upstream when the AI SDK validates; this is
+    // a defensive guard for callers that bypass validation (e.g. tests
+    // calling tool.execute directly).
+    const _exhaustive: never = input;
+    throw new Error(
+      `edit_file: unknown mode '${(_exhaustive as { mode?: string }).mode}'`,
     );
-    return { path: result.path, mode: "replace" };
   },
   summarize: (r) => ({ path: r.path, mode: r.mode }),
 });

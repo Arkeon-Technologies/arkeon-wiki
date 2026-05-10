@@ -9,10 +9,17 @@
  * to wire post-mutation indexing, future audit logging, and the rule
  * that the SQLite mirror is rebuilt from disk after every change.
  *
- * Three kinds:
- *   - write   create or overwrite a file with full content
- *   - edit    SEARCH/REPLACE a unique span in an existing file (Aider-style)
- *   - delete  remove a file from disk and the index
+ * Five kinds:
+ *   - write           create or overwrite a file with full content
+ *   - edit            SEARCH/REPLACE a unique span (Aider-style)
+ *   - annotate        splice text after a unique anchor phrase, leaving
+ *                     all other bytes verbatim. The phrase-only contract
+ *                     is load-bearing — it forces the model to point
+ *                     rather than rewrite.
+ *   - delete_section  remove an ATX heading and the body underneath it,
+ *                     up to (but not including) the next same-or-higher
+ *                     heading
+ *   - delete          remove a file from disk and the index
  */
 
 import {
@@ -35,6 +42,13 @@ import { removeByPath, syncFile, type Space, type SyncResult } from "./sync.js";
 export type FileEdit =
   | { kind: "write"; path: string; content: string }
   | { kind: "edit"; path: string; search: string; replace: string }
+  | {
+      kind: "annotate";
+      path: string;
+      insert_after_phrase: string;
+      insert_text: string;
+    }
+  | { kind: "delete_section"; path: string; heading: string }
   | { kind: "delete"; path: string };
 
 /**
@@ -79,7 +93,11 @@ export function safeResolve(watchDir: string, relativePath: string): string {
 }
 
 export type ApplyEditResult =
-  | { path: string; kind: "write" | "edit"; sync: SyncResult }
+  | {
+      path: string;
+      kind: "write" | "edit" | "annotate" | "delete_section";
+      sync: SyncResult;
+    }
   | { path: string; kind: "delete"; removedEntityId: string | null };
 
 /**
@@ -146,6 +164,63 @@ export async function applyEdit(
       return { path: edit.path, kind: "edit", sync };
     }
 
+    if (edit.kind === "annotate") {
+      if (!existsSync(absPath)) {
+        throw new Error(`edit_file: ${edit.path} does not exist`);
+      }
+      if (edit.insert_after_phrase.length === 0) {
+        throw new Error(`edit_file: insert_after_phrase must be non-empty`);
+      }
+      const original = readFileSync(absPath, "utf-8");
+      const matches = countOccurrences(original, edit.insert_after_phrase);
+      if (matches === 0) {
+        throw new Error(
+          `edit_file: insert_after_phrase did not match in ${edit.path}`,
+        );
+      }
+      if (matches > 1) {
+        throw new Error(
+          `edit_file: insert_after_phrase matched ${matches} times in ${edit.path} (must be unique)`,
+        );
+      }
+      const idx = original.indexOf(edit.insert_after_phrase);
+      const splice = idx + edit.insert_after_phrase.length;
+      // Annotate writes to the body only. If the anchor phrase falls
+      // inside the YAML frontmatter block, splicing arbitrary text into
+      // it produces malformed YAML on the next sync. Refuse loudly —
+      // frontmatter edits go through mode='replace' on the specific line.
+      if (isMarkdown) {
+        const bodyStart = frontmatterEndOffset(original);
+        if (bodyStart > 0 && idx < bodyStart) {
+          throw new Error(
+            `edit_file: annotate splice point falls inside YAML frontmatter at ${edit.path} — annotate writes to the body only. Use mode='replace' to edit a frontmatter line.`,
+          );
+        }
+      }
+      let updated =
+        original.slice(0, splice) + edit.insert_text + original.slice(splice);
+      if (isMarkdown) {
+        updated = stampFrontmatter(updated, opts.role, opts.note);
+      }
+      writeFileSync(absPath, updated, "utf-8");
+      const sync = await syncFile(space, edit.path);
+      return { path: edit.path, kind: "annotate", sync };
+    }
+
+    if (edit.kind === "delete_section") {
+      if (!existsSync(absPath)) {
+        throw new Error(`edit_file: ${edit.path} does not exist`);
+      }
+      const original = readFileSync(absPath, "utf-8");
+      const updated = removeSection(original, edit.heading, edit.path);
+      const stamped = isMarkdown
+        ? stampFrontmatter(updated, opts.role, opts.note)
+        : updated;
+      writeFileSync(absPath, stamped, "utf-8");
+      const sync = await syncFile(space, edit.path);
+      return { path: edit.path, kind: "delete_section", sync };
+    }
+
     if (!existsSync(absPath)) {
       throw new Error(`delete_file: ${edit.path} does not exist`);
     }
@@ -189,4 +264,131 @@ function countOccurrences(haystack: string, needle: string): number {
     pos += needle.length;
   }
   return count;
+}
+
+/**
+ * Byte offset where the markdown body begins (the line after the
+ * closing `---` of the YAML frontmatter). Returns 0 if the file has
+ * no frontmatter — caller treats that as "no boundary, the whole file
+ * is body."
+ *
+ * CRLF tolerated: a `---\r` line still matches the closing fence.
+ */
+function frontmatterEndOffset(content: string): number {
+  if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) return 0;
+  // Skip the opening fence line. The next line is the first frontmatter line.
+  const afterOpen = content.indexOf("\n", 3) + 1;
+  let i = afterOpen;
+  while (i < content.length) {
+    const lineEnd = content.indexOf("\n", i);
+    const endIdx = lineEnd === -1 ? content.length : lineEnd;
+    const raw = content.slice(i, endIdx);
+    const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+    if (line === "---") {
+      return lineEnd === -1 ? content.length : lineEnd + 1;
+    }
+    if (lineEnd === -1) break;
+    i = lineEnd + 1;
+  }
+  // Unterminated frontmatter — treat as no frontmatter and let
+  // downstream parsers fail loudly when they're handed the file.
+  return 0;
+}
+
+const HEADING_RE = /^(#{1,6})\s+(.+?)\s*#*\s*$/;
+
+interface HeadingHit {
+  level: number;
+  text: string;
+  /** Byte offset of the start of the heading line. */
+  start: number;
+  /** Byte offset of the start of the line *after* the heading line. */
+  endOfLine: number;
+}
+
+/**
+ * Locate every ATX heading line in `content` outside of fenced code
+ * blocks. Returns one record per heading with its level, cleaned text,
+ * and byte offsets. Mirrors chunker.ts's parser: setext headings and
+ * `#` lines inside ``` fences are not treated as headings.
+ */
+function findHeadings(content: string): HeadingHit[] {
+  const hits: HeadingHit[] = [];
+  let inFence = false;
+  let lineStart = 0;
+  for (let i = 0; i <= content.length; i++) {
+    const isEnd = i === content.length;
+    const ch = isEnd ? "\n" : content[i];
+    if (ch !== "\n") continue;
+
+    const line = content.slice(lineStart, i);
+    const fenceOpen = /^\s*```/.test(line);
+    if (fenceOpen) {
+      inFence = !inFence;
+    } else if (!inFence) {
+      const m = HEADING_RE.exec(line);
+      if (m) {
+        hits.push({
+          level: m[1].length,
+          text: m[2].trim(),
+          start: lineStart,
+          endOfLine: i + 1, // include the newline
+        });
+      }
+    }
+    lineStart = i + 1;
+  }
+  return hits;
+}
+
+/**
+ * Remove an ATX heading and the body underneath it. Removes from the
+ * start of the heading line through (but not including) the next
+ * heading at the same level or a higher level (lower number). If no
+ * such follower exists, removes through end of file.
+ *
+ * `headingSpec` is the literal heading line — `## Open threads`. We
+ * match on `<level marker> + text` (not just text) so a delete for
+ * `## Foo` doesn't accidentally remove a subsection `### Foo`.
+ *
+ * Loud-fail on 0 or 2+ matches, same discipline as REPLACE / ANNOTATE.
+ *
+ * Exported so it can be unit-tested without a database / filesystem.
+ */
+export function removeSection(
+  content: string,
+  headingSpec: string,
+  pathForError: string,
+): string {
+  const specMatch = HEADING_RE.exec(headingSpec.trim());
+  if (!specMatch) {
+    throw new Error(
+      `edit_file: delete_section heading must be an ATX heading like '## Open threads', got '${headingSpec}'`,
+    );
+  }
+  const targetLevel = specMatch[1].length;
+  const targetText = specMatch[2].trim();
+
+  const all = findHeadings(content);
+  const matches = all.filter(
+    (h) => h.level === targetLevel && h.text === targetText,
+  );
+  if (matches.length === 0) {
+    throw new Error(
+      `edit_file: delete_section heading '${headingSpec}' did not match in ${pathForError}`,
+    );
+  }
+  if (matches.length > 1) {
+    throw new Error(
+      `edit_file: delete_section heading '${headingSpec}' matched ${matches.length} times in ${pathForError} (must be unique)`,
+    );
+  }
+
+  const target = matches[0];
+  const successor = all.find(
+    (h) => h.start > target.start && h.level <= target.level,
+  );
+  const sliceEnd = successor ? successor.start : content.length;
+
+  return content.slice(0, target.start) + content.slice(sliceEnd);
 }

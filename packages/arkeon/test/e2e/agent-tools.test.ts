@@ -108,19 +108,20 @@ describe("path safety", () => {
 
   it("edit_file CREATE rejects path that escapes the watch dir", async () => {
     await expect(
-      tool("edit_file").execute({ path: "../leak.txt", search: "", replace: "x" }),
+      tool("edit_file").execute({ mode: "create", path: "../leak.txt", content: "x" }),
     ).rejects.toThrow(/escapes/);
   });
 
   it("edit_file CREATE rejects absolute path", async () => {
     await expect(
-      tool("edit_file").execute({ path: "/tmp/leak.txt", search: "", replace: "x" }),
+      tool("edit_file").execute({ mode: "create", path: "/tmp/leak.txt", content: "x" }),
     ).rejects.toThrow(/absolute/);
   });
 
   it("edit_file REPLACE rejects path that escapes the watch dir", async () => {
     await expect(
       tool("edit_file").execute({
+        mode: "replace",
         path: "../leak.txt",
         search: "x",
         replace: "y",
@@ -201,11 +202,11 @@ describe("read_file edge cases", () => {
 // ── edit_file CREATE/APPEND modes ────────────────────────────────
 
 describe("edit_file CREATE mode", () => {
-  it("creates a new file when search is empty and path doesn't exist", async () => {
+  it("creates a new file at a path that doesn't exist yet", async () => {
     const result = (await tool("edit_file").execute({
+      mode: "create",
       path: "wiki/concept/created.md",
-      search: "",
-      replace: "---\nlabel: Created\nsubject_type: concept\n---\n\nbody\n",
+      content: "---\nlabel: Created\nsubject_type: concept\n---\n\nbody\n",
     })) as { mode: string };
 
     expect(result.mode).toBe("create");
@@ -214,9 +215,9 @@ describe("edit_file CREATE mode", () => {
 
   it("creates intermediate directories", async () => {
     await tool("edit_file").execute({
+      mode: "create",
       path: "wiki/deep/nested/new.md",
-      search: "",
-      replace: "---\nlabel: Deep\n---\n\nbody\n",
+      content: "---\nlabel: Deep\n---\n\nbody\n",
     });
     expect(existsSync(join(testDir, "wiki/deep/nested/new.md"))).toBe(true);
   });
@@ -224,14 +225,14 @@ describe("edit_file CREATE mode", () => {
   it("accumulates edits on the context across multiple creates", async () => {
     const { tool: t, ctx } = toolWithCtx("edit_file");
     await t.execute({
+      mode: "create",
       path: "wiki/concept/a.md",
-      search: "",
-      replace: "---\nlabel: A\n---\n",
+      content: "---\nlabel: A\n---\n",
     });
     await t.execute({
+      mode: "create",
       path: "wiki/concept/b.md",
-      search: "",
-      replace: "---\nlabel: B\n---\n",
+      content: "---\nlabel: B\n---\n",
     });
     expect(ctx.edits).toHaveLength(2);
     expect(ctx.edits.map((e) => e.path)).toEqual([
@@ -242,7 +243,7 @@ describe("edit_file CREATE mode", () => {
 });
 
 describe("edit_file APPEND mode", () => {
-  it("appends to an existing file when search is empty", async () => {
+  it("appends to an existing file", async () => {
     mkdirSync(join(testDir, "wiki/concept"), { recursive: true });
     writeFileSync(
       join(testDir, "wiki/concept/append-target.md"),
@@ -250,9 +251,9 @@ describe("edit_file APPEND mode", () => {
     );
 
     const result = (await tool("edit_file").execute({
+      mode: "append",
       path: "wiki/concept/append-target.md",
-      search: "",
-      replace: "Added by APPEND.",
+      content: "Added by APPEND.",
     })) as { mode: string };
 
     expect(result.mode).toBe("append");
@@ -277,9 +278,9 @@ describe("edit_file APPEND mode", () => {
       "---\nid: 01TESTAPPENDNEWLINE\nlabel: NL\n---\n\nfirst line.\n",
     );
     await tool("edit_file").execute({
+      mode: "append",
       path: "wiki/concept/append-newline.md",
-      search: "",
-      replace: "second line.",
+      content: "second line.",
     });
     const content = readFileSync(
       join(testDir, "wiki/concept/append-newline.md"),
@@ -295,9 +296,9 @@ describe("edit_file APPEND mode", () => {
       "---\nid: 01TESTAPPENDNONL\nlabel: NoNL\n---\n\nno-trailing-newline",
     );
     await tool("edit_file").execute({
+      mode: "append",
       path: "wiki/concept/append-no-nl.md",
-      search: "",
-      replace: "appended",
+      content: "appended",
     });
     const content = readFileSync(
       join(testDir, "wiki/concept/append-no-nl.md"),
@@ -318,6 +319,7 @@ describe("edit_file edge cases", () => {
     );
 
     await tool("edit_file").execute({
+      mode: "replace",
       path: "wiki/person/multi.md",
       search: "Line one.\nLine two.",
       replace: "Lines one and two, merged.",
@@ -339,6 +341,7 @@ describe("edit_file edge cases", () => {
     );
 
     await tool("edit_file").execute({
+      mode: "replace",
       path: "wiki/concept/special.md",
       search: "a.+regex? pattern",
       replace: "a literal phrase",
@@ -357,6 +360,7 @@ describe("edit_file edge cases", () => {
     );
 
     await tool("edit_file").execute({
+      mode: "replace",
       path: "wiki/concept/del.md",
       search: " DELETE THIS.",
       replace: "",
@@ -367,13 +371,10 @@ describe("edit_file edge cases", () => {
     expect(updated).toContain("Keep this. Keep this too.");
   });
 
-  // Note: empty SEARCH is no longer an error — it's CREATE (new file)
-  // or APPEND (existing file). Covered in the dedicated CREATE/APPEND
-  // describe blocks above.
-
   it("REPLACE throws when the file does not exist", async () => {
     await expect(
       tool("edit_file").execute({
+        mode: "replace",
         path: "wiki/missing.md",
         search: "x",
         replace: "y",
@@ -390,11 +391,13 @@ describe("edit_file edge cases", () => {
 
     const { tool: t } = toolWithCtx("edit_file");
     await t.execute({
+      mode: "replace",
       path: "wiki/concept/two-edits.md",
       search: "first",
       replace: "FIRST",
     });
     await t.execute({
+      mode: "replace",
       path: "wiki/concept/two-edits.md",
       search: "third",
       replace: "THIRD",
@@ -414,9 +417,9 @@ describe("delete_wiki edge cases", () => {
     mkdirSync(join(testDir, "wiki/concept"), { recursive: true });
     const path = "wiki/concept/to-delete.md";
     await tool("edit_file").execute({
+      mode: "create",
       path,
-      search: "",
-      replace: "---\nlabel: ToDelete\nsubject_type: concept\n---\n\nbody\n",
+      content: "---\nlabel: ToDelete\nsubject_type: concept\n---\n\nbody\n",
     });
     expect(existsSync(join(testDir, path))).toBe(true);
 
@@ -465,9 +468,9 @@ describe("delete_wiki edge cases", () => {
     const path = "wiki/concept/ctx-record.md";
     const { tool: w } = toolWithCtx("edit_file");
     await w.execute({
+      mode: "create",
       path,
-      search: "",
-      replace: "---\nlabel: CtxRecord\nsubject_type: concept\n---\n\nbody\n",
+      content: "---\nlabel: CtxRecord\nsubject_type: concept\n---\n\nbody\n",
     });
 
     const { tool: d, ctx } = toolWithCtx("delete_wiki");
@@ -739,9 +742,9 @@ describe("cross-tool composition", () => {
   it("create → read returns the content we just created", async () => {
     const { tool: w } = toolWithCtx("edit_file");
     await w.execute({
+      mode: "create",
       path: "wiki/concept/wr-read.md",
-      search: "",
-      replace: "---\nlabel: WR-Read\n---\n\nbody from compose test\n",
+      content: "---\nlabel: WR-Read\n---\n\nbody from compose test\n",
     });
 
     const r = tool("read_file");
@@ -755,11 +758,12 @@ describe("cross-tool composition", () => {
 
   it("create → replace modifies what we just created", async () => {
     await tool("edit_file").execute({
+      mode: "create",
       path: "wiki/concept/wr-edit.md",
-      search: "",
-      replace: "---\nlabel: WR-Edit\n---\n\noriginal phrase here\n",
+      content: "---\nlabel: WR-Edit\n---\n\noriginal phrase here\n",
     });
     await tool("edit_file").execute({
+      mode: "replace",
       path: "wiki/concept/wr-edit.md",
       search: "original phrase",
       replace: "amended phrase",
@@ -772,14 +776,14 @@ describe("cross-tool composition", () => {
 
   it("create → append weaves new material onto an existing wiki", async () => {
     await tool("edit_file").execute({
+      mode: "create",
       path: "wiki/concept/wr-append.md",
-      search: "",
-      replace: "---\nlabel: WR-Append\n---\n\nfirst paragraph.\n",
+      content: "---\nlabel: WR-Append\n---\n\nfirst paragraph.\n",
     });
     await tool("edit_file").execute({
+      mode: "append",
       path: "wiki/concept/wr-append.md",
-      search: "",
-      replace: "second paragraph from append.",
+      content: "second paragraph from append.",
     });
 
     const content = readFileSync(
@@ -792,9 +796,9 @@ describe("cross-tool composition", () => {
 
   it("create → list_entities surfaces the new wiki via label_contains", async () => {
     await tool("edit_file").execute({
+      mode: "create",
       path: "wiki/concept/list-after-write.md",
-      search: "",
-      replace: "---\nlabel: List After Write\nsubject_type: concept\n---\n\nbody\n",
+      content: "---\nlabel: List After Write\nsubject_type: concept\n---\n\nbody\n",
     });
 
     const result = (await tool("list_entities").execute({

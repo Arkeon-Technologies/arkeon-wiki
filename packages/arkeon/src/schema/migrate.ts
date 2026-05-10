@@ -37,12 +37,42 @@ export async function runMigrations(opts: MigrateOptions): Promise<void> {
 
   const db = initDb(opts.dbPath);
 
+  // Bootstrap the migration ledger so subsequent runs can skip applied
+  // files. Without this, every migration must be naturally idempotent
+  // (CREATE TABLE IF NOT EXISTS); with it, non-idempotent recreates
+  // (e.g. dropping a CHECK constraint via the SQLite 12-step) are safe.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      name TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  const applied = new Set(
+    (db.prepare("SELECT name FROM schema_migrations").all() as { name: string }[])
+      .map((r) => r.name),
+  );
+
+  // Bootstrap mode: the ledger is empty, so this is the first run on
+  // either a fresh DB or a pre-ledger DB whose 001-N migrations were
+  // already applied via the old IF-NOT-EXISTS pattern. Only in this
+  // mode is it safe to auto-record an "already exists" failure as
+  // applied — outside of bootstrap, "already exists" indicates a real
+  // failure (a partially-applied non-idempotent migration, manual DB
+  // tampering, or a logic bug) and must surface, not get swallowed.
+  const isBootstrap = applied.size === 0;
+
   let failed = false;
 
   for (const file of files) {
+    process.stdout.write(`  ${file} ... `);
+
+    if (applied.has(file)) {
+      console.log("SKIP (already applied)");
+      continue;
+    }
+
     const content = await readFile(join(schemaDir, file), "utf-8");
     const statements = splitStatements(content);
-    process.stdout.write(`  ${file} ... `);
 
     let fileOk = true;
 
@@ -53,12 +83,20 @@ export async function runMigrations(opts: MigrateOptions): Promise<void> {
         if (stmt.replace(/--[^\n]*/g, "").trim() === "") continue;
         db.exec(stmt);
       }
+      db.prepare("INSERT INTO schema_migrations(name) VALUES (?)").run(file);
       db.exec("COMMIT");
     } catch (err: unknown) {
       try { db.exec("ROLLBACK"); } catch { /* ignore */ }
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("already exists")) {
-        // Table/index already exists — idempotent, that's fine
+      if (msg.includes("already exists") && isBootstrap) {
+        // Pre-ledger DB: the file's CREATE TABLE IF NOT EXISTS already
+        // matched. Record it as applied so the next run skips cleanly.
+        // Gated on isBootstrap so a future non-idempotent migration that
+        // partial-applied (or hits "already exists" for any other reason)
+        // surfaces loudly instead of being silently marked applied.
+        try {
+          db.prepare("INSERT OR IGNORE INTO schema_migrations(name) VALUES (?)").run(file);
+        } catch { /* ignore */ }
       } else {
         console.log(`ERROR: ${msg}`);
         fileOk = false;

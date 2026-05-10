@@ -148,14 +148,14 @@ describe("read_file tool", () => {
   });
 });
 
-describe("edit_file tool — CREATE mode (empty search, file does not exist)", () => {
+describe("edit_file tool — CREATE mode", () => {
   it("creates a new file and accumulates the edit on the context", async () => {
     const ctx = makeContext(space, "test");
     const tool = ALL_TOOLS.edit_file(ctx) as ExecutableTool;
     const result = (await tool.execute({
+      mode: "create",
       path: "wiki/concept/note.md",
-      search: "",
-      replace: "---\nlabel: Note\nsubject_type: concept\n---\n\nbody\n",
+      content: "---\nlabel: Note\nsubject_type: concept\n---\n\nbody\n",
     })) as { path: string; mode: string };
 
     expect(result.mode).toBe("create");
@@ -176,6 +176,7 @@ describe("edit_file tool", () => {
     const ctx = makeContext(space, "test");
     const tool = ALL_TOOLS.edit_file(ctx) as ExecutableTool;
     await tool.execute({
+      mode: "replace",
       path: "wiki/person/lovelace.md",
       search: "A mathematician.",
       replace: "A mathematician who wrote the first algorithm.",
@@ -195,7 +196,7 @@ describe("edit_file tool", () => {
     const ctx = makeContext(space, "test");
     const tool = ALL_TOOLS.edit_file(ctx) as ExecutableTool;
     await expect(
-      tool.execute({ path: "wiki/concept/dup.md", search: "foo", replace: "bar" }),
+      tool.execute({ mode: "replace", path: "wiki/concept/dup.md", search: "foo", replace: "bar" }),
     ).rejects.toThrow(/matched 2 times/);
   });
 
@@ -209,7 +210,7 @@ describe("edit_file tool", () => {
     const ctx = makeContext(space, "test");
     const tool = ALL_TOOLS.edit_file(ctx) as ExecutableTool;
     await expect(
-      tool.execute({ path: "wiki/concept/miss.md", search: "absent", replace: "x" }),
+      tool.execute({ mode: "replace", path: "wiki/concept/miss.md", search: "absent", replace: "x" }),
     ).rejects.toThrow(/did not match/);
   });
 });
