@@ -52,6 +52,15 @@ export async function runMigrations(opts: MigrateOptions): Promise<void> {
       .map((r) => r.name),
   );
 
+  // Bootstrap mode: the ledger is empty, so this is the first run on
+  // either a fresh DB or a pre-ledger DB whose 001-N migrations were
+  // already applied via the old IF-NOT-EXISTS pattern. Only in this
+  // mode is it safe to auto-record an "already exists" failure as
+  // applied — outside of bootstrap, "already exists" indicates a real
+  // failure (a partially-applied non-idempotent migration, manual DB
+  // tampering, or a logic bug) and must surface, not get swallowed.
+  const isBootstrap = applied.size === 0;
+
   let failed = false;
 
   for (const file of files) {
@@ -79,9 +88,12 @@ export async function runMigrations(opts: MigrateOptions): Promise<void> {
     } catch (err: unknown) {
       try { db.exec("ROLLBACK"); } catch { /* ignore */ }
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("already exists")) {
+      if (msg.includes("already exists") && isBootstrap) {
         // Pre-ledger DB: the file's CREATE TABLE IF NOT EXISTS already
         // matched. Record it as applied so the next run skips cleanly.
+        // Gated on isBootstrap so a future non-idempotent migration that
+        // partial-applied (or hits "already exists" for any other reason)
+        // surfaces loudly instead of being silently marked applied.
         try {
           db.prepare("INSERT OR IGNORE INTO schema_migrations(name) VALUES (?)").run(file);
         } catch { /* ignore */ }

@@ -394,7 +394,7 @@ const editFileTool = defineTool("edit_file", {
       const absPath = safeResolve(ctx.space.watch_dir, input.path);
       if (existsSync(absPath)) {
         throw new Error(
-          `edit_file: ${input.path} already exists — use mode 'append' or 'replace' to modify it`,
+          `edit_file: ${input.path} already exists — use mode 'append', 'annotate', 'replace', or 'delete_section' to modify it`,
         );
       }
       const result = await ctx.applyEdit(

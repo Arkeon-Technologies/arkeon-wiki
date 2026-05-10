@@ -200,4 +200,25 @@ describe("removeSection", () => {
       removeSection("## A\n", "Open threads", "wiki/x.md"),
     ).toThrow(/ATX heading/);
   });
+
+  it("recognises ATX-closed heading form (`## Title ##`)", () => {
+    // The regex strips trailing `#`s from the matched text. Asking to
+    // delete `## Title` should match a `## Title ##` line, since both
+    // forms describe the same heading.
+    const input = [
+      "## Title ##",
+      "",
+      "body line.",
+      "",
+      "## Other",
+      "",
+      "other body.",
+      "",
+    ].join("\n");
+    const out = removeSection(input, "## Title", "wiki/x.md");
+    expect(out).not.toContain("Title");
+    expect(out).not.toContain("body line.");
+    expect(out).toContain("## Other");
+    expect(out).toContain("other body.");
+  });
 });

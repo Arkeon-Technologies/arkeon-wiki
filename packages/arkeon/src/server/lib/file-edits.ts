@@ -185,6 +185,18 @@ export async function applyEdit(
       }
       const idx = original.indexOf(edit.insert_after_phrase);
       const splice = idx + edit.insert_after_phrase.length;
+      // Annotate writes to the body only. If the anchor phrase falls
+      // inside the YAML frontmatter block, splicing arbitrary text into
+      // it produces malformed YAML on the next sync. Refuse loudly —
+      // frontmatter edits go through mode='replace' on the specific line.
+      if (isMarkdown) {
+        const bodyStart = frontmatterEndOffset(original);
+        if (bodyStart > 0 && idx < bodyStart) {
+          throw new Error(
+            `edit_file: annotate splice point falls inside YAML frontmatter at ${edit.path} — annotate writes to the body only. Use mode='replace' to edit a frontmatter line.`,
+          );
+        }
+      }
       let updated =
         original.slice(0, splice) + edit.insert_text + original.slice(splice);
       if (isMarkdown) {
@@ -252,6 +264,35 @@ function countOccurrences(haystack: string, needle: string): number {
     pos += needle.length;
   }
   return count;
+}
+
+/**
+ * Byte offset where the markdown body begins (the line after the
+ * closing `---` of the YAML frontmatter). Returns 0 if the file has
+ * no frontmatter — caller treats that as "no boundary, the whole file
+ * is body."
+ *
+ * CRLF tolerated: a `---\r` line still matches the closing fence.
+ */
+function frontmatterEndOffset(content: string): number {
+  if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) return 0;
+  // Skip the opening fence line. The next line is the first frontmatter line.
+  const afterOpen = content.indexOf("\n", 3) + 1;
+  let i = afterOpen;
+  while (i < content.length) {
+    const lineEnd = content.indexOf("\n", i);
+    const endIdx = lineEnd === -1 ? content.length : lineEnd;
+    const raw = content.slice(i, endIdx);
+    const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+    if (line === "---") {
+      return lineEnd === -1 ? content.length : lineEnd + 1;
+    }
+    if (lineEnd === -1) break;
+    i = lineEnd + 1;
+  }
+  // Unterminated frontmatter — treat as no frontmatter and let
+  // downstream parsers fail loudly when they're handed the file.
+  return 0;
 }
 
 const HEADING_RE = /^(#{1,6})\s+(.+?)\s*#*\s*$/;

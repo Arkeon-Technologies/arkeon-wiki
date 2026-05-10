@@ -139,6 +139,37 @@ describe("edit_file mode='annotate'", () => {
     ).rejects.toThrow(/did not match/);
   });
 
+  it("refuses to splice when the anchor phrase falls inside YAML frontmatter", async () => {
+    // Picking a unique frontmatter line as the anchor would corrupt the
+    // YAML on the next sync. Annotate writes to the body only.
+    const path = "wiki/person/fm-anchor.md";
+    await seedWiki(
+      path,
+      [
+        "---",
+        "label: FM Anchor",
+        "subject_type: person",
+        "fields_of_work: mathematics",
+        "---",
+        "",
+        "Body paragraph.",
+        "",
+      ].join("\n"),
+    );
+    await expect(
+      applyEdit(
+        space,
+        {
+          kind: "annotate",
+          path,
+          insert_after_phrase: "subject_type: person",
+          insert_text: "\nfraudulent_extra: true",
+        },
+        { role: "ingestor", edit_kind: "annotate" },
+      ),
+    ).rejects.toThrow(/inside YAML frontmatter/);
+  });
+
   it("throws when the anchor phrase appears more than once", async () => {
     const path = "wiki/person/dup.md";
     await seedWiki(
