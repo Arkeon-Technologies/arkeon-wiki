@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, it, expect } from "vitest";
-import { parseRipgrepJson } from "../../src/server/lib/search.js";
+import {
+  MAX_QUERY_PATTERNS,
+  parseRipgrepJson,
+  searchKeyword,
+} from "../../src/server/lib/search.js";
 
 const beginEvent = (path: string) =>
   JSON.stringify({ type: "begin", data: { path: { text: path } } });
@@ -130,5 +134,24 @@ describe("parseRipgrepJson", () => {
     const result = parseRipgrepJson(stdout, 3);
     expect(result[0]!.snippets[0]!.text.length).toBeLessThanOrEqual(241);
     expect(result[0]!.snippets[0]!.text.endsWith("…")).toBe(true);
+  });
+});
+
+// Defensive cap on multi-query inputs (#100). The route rejects
+// oversized arrays at the boundary; this test pins the lib's own
+// safety net for any future internal caller that bypasses the route.
+describe("searchKeyword — input validation", () => {
+  it("throws when query is an empty array", async () => {
+    await expect(searchKeyword({ query: [] })).rejects.toThrow(/empty/i);
+  });
+
+  it(`throws when query has more than ${MAX_QUERY_PATTERNS} patterns`, async () => {
+    const queries = Array.from(
+      { length: MAX_QUERY_PATTERNS + 1 },
+      (_, i) => `p${i}`,
+    );
+    await expect(searchKeyword({ query: queries })).rejects.toThrow(
+      /too many query patterns/i,
+    );
   });
 });

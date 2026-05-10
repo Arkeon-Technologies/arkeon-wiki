@@ -18,7 +18,7 @@ import { z } from "zod";
 
 import { safeResolve } from "../lib/file-edits.js";
 import { parseFrontmatter } from "../lib/frontmatter.js";
-import { searchKeyword, searchVector } from "../lib/search.js";
+import { MAX_QUERY_PATTERNS, searchKeyword, searchVector } from "../lib/search.js";
 import { listEntities, parseEntityTypes, type EntityType } from "../lib/entities.js";
 
 import { defineTool, type ToolFactory } from "./define-tool.js";
@@ -134,23 +134,52 @@ const searchTool = defineTool("search", {
   description:
     "Search the role's allowed spaces. Two strategies, no fusion:\n" +
     "  - keyword (ripgrep): exact substring (or regex) over file contents. " +
-    "Best for proper nouns, code identifiers, ULIDs, exact phrases.\n" +
+    "Best for proper nouns, code identifiers, ULIDs, exact phrases. " +
+    "Pass `query` as an array (up to 10) to OR several patterns in a " +
+    "single ripgrep pass — useful for variant batching " +
+    "(['Shannon', 'Claude Shannon', 'information theorist']). Match " +
+    "counts aggregate per file, so files matching multiple variants " +
+    "naturally rank higher.\n" +
     "  - vector (sqlite-vec): semantic similarity. Returns a ranked list " +
     "of WIKIS — each hit is a complete wiki with its full body and " +
     "frontmatter, deduplicated from chunk-level matches under the hood. " +
     "Best for finding related or possibly-duplicate wikis you don't have " +
     "a literal name for. The body is right there in the response, so " +
-    "there's no need to read_file the wiki separately to inspect it.\n" +
+    "there's no need to read_file the wiki separately to inspect it. " +
+    "Vector mode uses the FIRST query when an array is passed.\n" +
     "Default `mode=both` runs both in parallel and returns each result " +
     "set in its own namespace ({keyword, vector}). Pass `mode=keyword` " +
     "or `mode=vector` to scope to one. Vector results carry similarity " +
     "scores in [-1, 1] (higher = more similar); keyword hits are " +
     "ranked by match count with line snippets.\n" +
+    "Pass `type` (comma-separated: 'wiki', 'file') to restrict keyword " +
+    "hits to a subset of entity types — e.g. `type='file'` to focus on " +
+    "raw sources without drowning in wiki hits, or `type='wiki'` to " +
+    "skip raw sources. Vector hits are always wikis (the filter is a " +
+    "no-op for them).\n" +
     "Multi-space roles can pass `space` to scope to one space, or omit " +
     "it to search every allowed space (each hit carries `space_id` and " +
     "`space` so you can tell them apart).",
   inputSchema: z.object({
-    query: z.string().describe("The query string."),
+    query: z
+      .union([z.string(), z.array(z.string()).min(1).max(10)])
+      .describe(
+        "A single query string, or an array of up to 10 patterns OR'd " +
+          "together in one ripgrep invocation. All variants share " +
+          "ripgrep's --smart-case mode: a single uppercase letter " +
+          "anywhere in the array makes the WHOLE batch case-sensitive, " +
+          "so prefer all-lowercase variants unless you need case " +
+          "discrimination. For vector mode, only the first pattern is " +
+          "embedded — pass the most representative form first.",
+      ),
+    type: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated entity types: any of 'wiki', 'file'. Omit for " +
+          "all types. Affects keyword hits only — vector results are " +
+          "always wikis.",
+      ),
     mode: z
       .enum(["keyword", "vector", "both"])
       .optional()
@@ -182,16 +211,47 @@ const searchTool = defineTool("search", {
     space: z.string().optional().describe(SPACE_PARAM_DESC),
   }),
   call: async (
-    { query, mode, regex, limit, max_snippets_per_file, space },
+    { query, type, mode, regex, limit, max_snippets_per_file, space },
     ctx,
   ) => {
     const m = mode ?? "both";
     const wantKeyword = m === "keyword" || m === "both";
     const wantVector = m === "vector" || m === "both";
 
+    let types: EntityType[] | undefined;
+    try {
+      types = parseEntityTypes(type);
+    } catch (err) {
+      // parseEntityTypes throws an ApiError with a route-friendly
+      // message; rewrap with a tool-prefix so the agent sees a clean
+      // error body in the tool result rather than a 400-shaped object.
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`search: ${msg}`);
+    }
+
+    // Defense-in-depth: the Zod schema caps array length at 10, but
+    // direct callers (tests, future internal code) bypass Zod. The
+    // lib's defensive throw IS reached — but it lands inside the
+    // Promise.allSettled below and gets silently coerced to empty
+    // hits. The worst kind of failure for an LLM. Throw here so the
+    // tool result carries a real error message.
+    if (Array.isArray(query) && query.length > MAX_QUERY_PATTERNS) {
+      throw new Error(
+        `search: too many query patterns (${query.length}); max is ${MAX_QUERY_PATTERNS}`,
+      );
+    }
+
     const targets = resolveToolScope(ctx, space);
     const targetIds = targets.map((s) => s.id);
     const indexById = new Map(targets.map((s) => [s.id, s.name]));
+
+    // Vector search embeds a single query. When the agent passes an
+    // array of patterns it's expressing a keyword-side variant union
+    // (different surface forms of the same subject); embedding the
+    // first one is the most useful default — they all describe the
+    // same target, so we pick a representative rather than running
+    // multiple embeddings or refusing the call.
+    const vectorQuery = Array.isArray(query) ? query[0]! : query;
 
     // Run requested strategies in parallel, fail-soft per strategy:
     // if vector throws (e.g. embedder still warming up), the agent
@@ -202,13 +262,14 @@ const searchTool = defineTool("search", {
         ? searchKeyword({
             query,
             spaceIds: targetIds,
+            types,
             regex,
             limit,
             maxSnippetsPerFile: max_snippets_per_file,
           })
         : Promise.resolve(null),
       wantVector
-        ? searchVector({ query, spaceIds: targetIds, limit })
+        ? searchVector({ query: vectorQuery, spaceIds: targetIds, limit })
         : Promise.resolve(null),
     ]);
 
@@ -237,6 +298,12 @@ const searchTool = defineTool("search", {
           : { hits: [], total: 0, model: "unavailable" };
       out.vector = {
         ...raw,
+        // Surface the single pattern that was actually embedded so
+        // the caller can see — at a glance — which form drove the
+        // semantic ranking when an array was passed. Always present
+        // (even for single-string queries) so consumers don't have
+        // to branch on the top-level `query` shape.
+        query_used: vectorQuery,
         hits: raw.hits.map((h) => ({
           ...h,
           space: indexById.get(h.space_id) ?? "",

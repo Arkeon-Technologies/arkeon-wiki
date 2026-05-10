@@ -5,7 +5,9 @@ import { Hono } from "hono";
 
 import type { AppBindings } from "../types.js";
 import { ApiError } from "../lib/errors.js";
+import { parseEntityTypes } from "../lib/entities.js";
 import {
+  MAX_QUERY_PATTERNS,
   searchKeyword,
   searchVector,
   type KeywordSearchResult,
@@ -17,19 +19,26 @@ export const searchRouter = new Hono<AppBindings>();
 type Mode = "keyword" | "vector" | "both";
 
 interface SearchResponse {
-  query: string;
+  /** Echoes the requested query/queries — single string when one `q`
+   *  was passed, array when several were OR'd together. */
+  query: string | string[];
   mode: Mode;
   keyword?: KeywordSearchResult;
-  vector?: VectorSearchResult;
+  /** Vector results carry an extra `query_used` because vector mode
+   *  always embeds a single string — when `q` is repeated only the
+   *  first one drives the embedding. Surfacing it next to the hits
+   *  makes the asymmetry explicit. */
+  vector?: VectorSearchResult & { query_used: string };
 }
 
-// GET /search?q=...&mode=keyword|vector|both&space_id=...&limit=20&snippets=3&regex=false
+// GET /search?q=...&mode=keyword|vector|both&space_id=...&type=...&limit=20&snippets=3&regex=false
 //
-// Issue #47. Two strategies, no fusion. Each mode's results are returned
-// in their own namespace. Caller decides how (or whether) to combine.
+// Issue #47, extended in #100. Two strategies, no fusion. Each mode's
+// results are returned in their own namespace. Caller decides how (or
+// whether) to combine.
 //
 //   mode=keyword           {keyword: {hits, total, unmatched_files}}
-//   mode=vector            {vector: {hits, total, model}}
+//   mode=vector            {vector: {hits, total, model, query_used}}
 //   mode=both (default)    {keyword: ..., vector: ...}
 //
 // `keyword` hits are entity-level, ranked by ripgrep match_count, with
@@ -39,11 +48,34 @@ interface SearchResponse {
 //
 // `space_id` filters both strategies. `limit` is per-strategy — each
 // gets up to `limit` results. `snippets` and `regex` only affect keyword.
+//
+// `q` may be repeated (`?q=foo&q=bar`) up to MAX_QUERY_PATTERNS times
+// to OR several patterns in one ripgrep pass. Vector mode embeds only
+// the first `q` and surfaces it on `vector.query_used`. All patterns
+// share ripgrep's --smart-case semantics — a single uppercase letter
+// in any `q` makes the whole batch case-sensitive.
+//
+// `type` is a comma-separated list of entity types to keep in keyword
+// hits — any of `wiki`, `file`. Omit for no filter. Vector hits are
+// always wikis. Placeholder wikis (post-#104, no file on disk yet) are
+// `type='wiki'`; filter them via `/entities?unresolved=true`.
 searchRouter.get("/", async (c) => {
-  const query = c.req.query("q");
-  if (!query) {
+  const queries = c.req.queries("q");
+  if (!queries || queries.length === 0) {
     throw new ApiError(400, "validation_error", "q is required");
   }
+  if (queries.length > MAX_QUERY_PATTERNS) {
+    throw new ApiError(
+      400,
+      "validation_error",
+      `too many q parameters (${queries.length}); max is ${MAX_QUERY_PATTERNS}`,
+    );
+  }
+  // Single-q calls keep their classic shape (`query: "foo"`); only
+  // collapse to an array when the caller actually passed several.
+  const queryForKeyword = queries.length === 1 ? queries[0]! : queries;
+  const queryForVector = queries[0]!;
+  const queryEcho = queries.length === 1 ? queries[0]! : queries;
 
   const modeParam = c.req.query("mode") ?? "both";
   if (modeParam !== "keyword" && modeParam !== "vector" && modeParam !== "both") {
@@ -54,6 +86,9 @@ searchRouter.get("/", async (c) => {
     );
   }
   const mode: Mode = modeParam;
+
+  // parseEntityTypes throws ApiError on invalid values; let it bubble.
+  const types = parseEntityTypes(c.req.query("type"));
 
   const spaceId = c.req.query("space_id");
   const limitParam = c.req.query("limit");
@@ -81,19 +116,20 @@ searchRouter.get("/", async (c) => {
   const [keywordSettled, vectorSettled] = await Promise.allSettled([
     wantKeyword
       ? searchKeyword({
-          query,
+          query: queryForKeyword,
           spaceId,
+          types,
           limit,
           maxSnippetsPerFile,
           regex,
         })
       : Promise.resolve(null),
     wantVector
-      ? searchVector({ query, spaceId, limit })
+      ? searchVector({ query: queryForVector, spaceId, limit })
       : Promise.resolve(null),
   ]);
 
-  const response: SearchResponse = { query, mode };
+  const response: SearchResponse = { query: queryEcho, mode };
 
   if (wantKeyword) {
     if (keywordSettled.status === "fulfilled" && keywordSettled.value) {
@@ -106,10 +142,15 @@ searchRouter.get("/", async (c) => {
 
   if (wantVector) {
     if (vectorSettled.status === "fulfilled" && vectorSettled.value) {
-      response.vector = vectorSettled.value;
+      response.vector = { ...vectorSettled.value, query_used: queryForVector };
     } else if (vectorSettled.status === "rejected") {
       console.error(`[search] vector strategy failed: ${vectorSettled.reason}`);
-      response.vector = { hits: [], total: 0, model: "unavailable" };
+      response.vector = {
+        hits: [],
+        total: 0,
+        model: "unavailable",
+        query_used: queryForVector,
+      };
     }
   }
 
