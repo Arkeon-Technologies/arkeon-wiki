@@ -5,7 +5,7 @@
  * Layer 3: real-LLM end-to-end demo.
  *
  * Drives runAgent against an actual provider (OpenAI by default) using
- * the declarative built-in `ingestor` role from agents/builtins.ts.
+ * the bundled `ingestor` role template at agents/templates/ingestor.yaml.
  * This exercises the whole config → role-builder → runtime → tools
  * stack, exactly the way the daemon-driven ingestor worker will.
  *
@@ -121,7 +121,7 @@ afterAll(async () => {
 
 describe.skipIf(!HAS_KEY)("real-LLM ingestor agent", () => {
   it(
-    "uses the built-in ingestor role to extract subjects from a source",
+    "uses the bundled ingestor role to extract subjects from a source",
     async () => {
       const sourcePath = "sources/shannon-bio.md";
       writeFileSync(
@@ -160,7 +160,7 @@ describe.skipIf(!HAS_KEY)("real-LLM ingestor agent", () => {
       console.log("\n──────── REAL-LLM AGENT RESULT (auto-trigger) ────────");
       console.log(`provider:  ${PROVIDER}`);
       console.log(`model:     ${MODEL}`);
-      console.log(`role:      ingestor (built-in)`);
+      console.log(`role:      ingestor (bundled template)`);
       console.log(`completed: ${completed ? "✓" : "✗"}`);
       console.log("\nWikis on disk:");
       const wikiDir = join(testDir, "wiki");

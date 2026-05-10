@@ -12,7 +12,7 @@ import {
   mergeConfigs,
   type AgentConfig,
 } from "../../src/server/agents/config.js";
-import { BUILTIN_ROLES } from "../../src/server/agents/builtins.js";
+import { loadBundledTemplates } from "../../src/server/agents/templates.js";
 import {
   buildAgentRole,
   fillTemplate,
@@ -238,7 +238,7 @@ describe("loadAgentConfig", () => {
 
 // ── buildAgentRole ───────────────────────────────────────────────
 
-describe("buildAgentRole — built-in ingestor", () => {
+describe("buildAgentRole — bundled ingestor template", () => {
   beforeEach(() => {
     process.env.OPENAI_API_KEY = "sk-test";
   });
@@ -247,13 +247,14 @@ describe("buildAgentRole — built-in ingestor", () => {
   });
 
   it("builds a working AgentRole from just defaults", () => {
+    const templates = loadBundledTemplates();
     const role = buildAgentRole("ingestor", {
       defaults: { provider: "openai", model: "gpt-5-mini" },
     });
 
     expect(role.name).toBe("ingestor");
-    expect(role.maxSteps).toBe(BUILTIN_ROLES.ingestor.max_steps);
-    expect(role.tools).toEqual(BUILTIN_ROLES.ingestor.tools);
+    expect(role.maxSteps).toBe(templates.ingestor.max_steps);
+    expect(role.tools).toEqual(templates.ingestor.tools);
     expect(role.model).toEqual({
       provider: "openai",
       id: "gpt-5-mini",
@@ -277,7 +278,7 @@ describe("buildAgentRole — built-in ingestor", () => {
     }
   });
 
-  it("layers space-level + role-level instructions onto built-in system", async () => {
+  it("layers space-level + role-level instructions onto template system", async () => {
     const role = buildAgentRole("ingestor", {
       defaults: {
         provider: "openai",
@@ -295,7 +296,7 @@ describe("buildAgentRole — built-in ingestor", () => {
       triggerEntityId: "ent1",
     });
 
-    expect(system).toContain("ingestor");                    // built-in stays
+    expect(system).toContain("ingestor");                    // template stays
     expect(system).toContain("Space-wide focus: climate");   // defaults layer
     expect(system).toContain("Skip generic terms.");         // role layer
     expect(system).toContain("--- Operator instructions ---");
@@ -311,9 +312,9 @@ describe("buildAgentRole — built-in ingestor", () => {
       triggerEntityId: "01ENT",
     });
     // The first phase's prompt is the entry-point user message; it
-    // must surface the trigger path and entity id (built-in's gather
-    // phase puts both at the top so the model can read_file the
-    // source).
+    // must surface the trigger path and entity id (the template's
+    // gather phase puts both at the top so the model can read_file
+    // the source).
     const firstPrompt = phases[0]?.prompt ?? "";
     expect(firstPrompt).toContain("sources/foo.md");
     expect(firstPrompt).toContain("01ENT");
@@ -364,7 +365,7 @@ describe("buildAgentRole — built-in ingestor", () => {
     ).toThrow(/base_url/);
   });
 
-  it("built-in ingestor resolves to two phases (gather + write)", async () => {
+  it("template ingestor resolves to two phases (gather + write)", async () => {
     const role = buildAgentRole("ingestor", {
       defaults: { provider: "openai", model: "gpt-5-mini" },
     });
@@ -420,13 +421,13 @@ describe("buildAgentRole — built-in ingestor", () => {
       space: { id: "s1", name: "n", watch_dir: "/tmp" },
       triggerPath: "src/x.txt",
     });
-    // Two builtin phases, prompts unchanged from the builtin, models swapped.
+    // Two template phases, prompts unchanged from the template, models swapped.
     expect(phases).toHaveLength(2);
     expect(phases[0].name).toBe("gather");
     expect(phases[1].name).toBe("write");
     expect(phases[0].model.id).toBe("gpt-5.4-mini");
     expect(phases[1].model.id).toBe("gpt-5.4");
-    // Prompts still come from the builtin (we didn't restate them).
+    // Prompts still come from the template (we didn't restate them).
     expect(phases[0].prompt).toContain("src/x.txt");
     expect(phases[1].tools).toContain("edit_file");
   });
@@ -546,9 +547,9 @@ describe("buildAgentRole — built-in ingestor", () => {
       defaults: { provider: "openai", model: "gpt-5-mini" },
       roles: {
         ingestor: {
-          // The built-in already has phases. Re-setting `user` here
-          // shouldn't introduce a third phase or replace the built-in
-          // ones — phases (from the built-in) wins.
+          // The bundled template already has phases. Re-setting `user`
+          // here shouldn't introduce a third phase or replace the
+          // template's ones — phases (from the template) wins.
           user: "this should be ignored",
         },
       },
@@ -563,7 +564,7 @@ describe("buildAgentRole — built-in ingestor", () => {
   });
 });
 
-describe("buildAgentRole — built-in consolidator", () => {
+describe("buildAgentRole — bundled consolidator template", () => {
   beforeEach(() => {
     process.env.OPENAI_API_KEY = "sk-test";
   });
@@ -613,11 +614,13 @@ describe("buildAgentRole — built-in consolidator", () => {
 
   it("trigger fires on wiki/** edits attributed to the ingestor", () => {
     // The trigger is declarative config; assert its shape from the
-    // builtin so YAML overrides that drop or change it would surface
-    // here. We don't compile-and-evaluate it (covered separately by
-    // the trigger-cascade e2e); just check the attribution + path
-    // filters that are the contract of the consolidator's identity.
-    const triggers = BUILTIN_ROLES.consolidator?.triggers ?? [];
+    // bundled template so YAML overrides that drop or change it would
+    // surface here. We don't compile-and-evaluate it (covered
+    // separately by the trigger-cascade e2e); just check the
+    // attribution + path filters that are the contract of the
+    // consolidator's identity.
+    const templates = loadBundledTemplates();
+    const triggers = templates.consolidator?.triggers ?? [];
     expect(triggers).toHaveLength(1);
     const t = triggers[0];
     expect(t.on).toBe("file_changed");
@@ -701,6 +704,26 @@ describe("buildAgentRole — user-defined role", () => {
   });
 });
 
+// ── loadBundledTemplates ─────────────────────────────────────────
+
+describe("loadBundledTemplates", () => {
+  it("auto-loads ingestor + consolidator from disk with no config present", () => {
+    // Issue #92: roles ship as YAML templates inherited at runtime,
+    // not as hardcoded constants. A clean install with no agents.yaml
+    // anywhere should still surface both bundled roles, fully shaped
+    // (system, tools, phases, triggers).
+    const templates = loadBundledTemplates();
+    expect(Object.keys(templates).sort()).toEqual(["consolidator", "ingestor"]);
+    for (const name of ["ingestor", "consolidator"] as const) {
+      const t = templates[name];
+      expect(t.system, `${name}.system`).toBeTruthy();
+      expect(t.tools?.length, `${name}.tools`).toBeGreaterThan(0);
+      expect(t.phases?.length, `${name}.phases`).toBeGreaterThan(0);
+      expect(t.triggers?.length, `${name}.triggers`).toBeGreaterThan(0);
+    }
+  });
+});
+
 // ── fillTemplate ─────────────────────────────────────────────────
 
 describe("fillTemplate", () => {
@@ -722,13 +745,13 @@ describe("fillTemplate", () => {
 // ── listAvailableRoles ───────────────────────────────────────────
 
 describe("listAvailableRoles", () => {
-  it("includes all built-ins", () => {
+  it("includes all bundled templates", () => {
     expect(listAvailableRoles({})).toEqual(
-      Object.keys(BUILTIN_ROLES).sort(),
+      Object.keys(loadBundledTemplates()).sort(),
     );
   });
 
-  it("includes user-defined roles alongside built-ins", () => {
+  it("includes user-defined roles alongside bundled templates", () => {
     const roles = listAvailableRoles({
       roles: { "my-thing": { system: "x", tools: ["read_file"] } },
     });
@@ -736,7 +759,7 @@ describe("listAvailableRoles", () => {
     expect(roles).toContain("my-thing");
   });
 
-  it("does not duplicate when a YAML override targets a built-in", () => {
+  it("does not duplicate when a YAML override targets a template role", () => {
     const roles = listAvailableRoles({
       roles: { ingestor: { max_steps: 99 } },
     });

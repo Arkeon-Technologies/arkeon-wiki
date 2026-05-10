@@ -73,9 +73,10 @@ defaults:
     This wiki tracks researchers in climate science. Skip subjects
     not directly relevant to the field. Use British English.
 
-# Per-role overrides. The built-in `ingestor` role is defined in the
-# package and inherited automatically — fields you omit fall back to
-# the built-in. Custom roles appear here too.
+# Per-role overrides. The bundled `ingestor` and `consolidator` roles
+# ship as YAML templates in the package and are inherited automatically
+# — fields you omit fall back to the template. Custom roles appear
+# here too.
 roles:
   ingestor:
     model: gpt-5-mini
@@ -107,7 +108,7 @@ arkeon-wiki config show               # print merged effective config
 arkeon-wiki config validate           # schema-check the YAML
 ```
 
-`config show` is the source of truth for "what is actually going to run" — it reflects the merged result of `~/.arkeon-wiki/agents.yaml`, `.arkeon/agents.yaml`, and the built-in templates.
+`config show` is the source of truth for "what is actually going to run" — it reflects the merged result of `~/.arkeon-wiki/agents.yaml`, `.arkeon/agents.yaml`, and the bundled role templates that ship with the package.
 
 ### How merging works
 
@@ -120,19 +121,20 @@ This asymmetry keeps role overrides predictable: when you write `roles.ingestor:
 
 To carry over a field from a global role override, copy it. The most common case is global YAML setting universal `defaults` and the per-repo file overriding individual roles — that works without copying anything because `defaults` *do* merge.
 
-## Built-in roles
+## Bundled role templates
 
 | Role | Tools | Job |
 |---|---|---|
 | `ingestor` | `read_file`, `list_entities`, `search`, `edit_file` | Read a source file, identify the distinct subjects it discusses, and for each one either edit the existing wiki to weave the new material in (with a markdown link back to the source) or create a new wiki under `wiki/{subject_type}/{slug}.md` with a 2-4 paragraph body. |
+| `consolidator` | `read_file`, `list_entities`, `search`, `edit_file`, `delete_wiki` | Per-wiki cascade after the ingestor: surveys the corpus for related material and either cross-links, bleeds into another wiki, or merges the subject away. Outward-only — never replaces other wikis' content. |
 
-You can override any field of the built-in (`provider`, `model`, `tools`, `max_steps`, `instructions`, `system`, `user`) without redefining the whole role. To inherit the workflow but bias the focus, set `instructions:` only.
+The templates ship as YAML files in the package (`src/server/agents/templates/<name>.yaml`) and are loaded fresh from disk on every agent run. You can override any field of a template (`provider`, `model`, `tools`, `max_steps`, `instructions`, `system`, `user`, `triggers`, `phases`) in your `.arkeon/agents.yaml` without redefining the whole role. To inherit the workflow but bias the focus, set `instructions:` only.
 
 Provenance: the `ingestor` writes a markdown link from each wiki body back to the source path it drew material from. The existing link-resolution path turns those into edges in the `relationships` table — so "which sources contributed to this wiki?" is a SQL query over `relationships`, not a separate inbox.
 
 ## Custom roles
 
-Define a custom role by adding any name under `roles:` that isn't a built-in. Custom roles **must** specify:
+Define a custom role by adding any name under `roles:` that doesn't match a bundled template. Custom roles **must** specify:
 
 - `system:` — the full system prompt (the workflow)
 - `tools:` — list of tool names from the registry

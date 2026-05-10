@@ -14,9 +14,10 @@
  *
  * The YAML is the *source of truth* for what providers/models a role
  * uses, what tools it can call, what its prompts say, and the
- * operator-supplied focus/style instructions. Built-in templates in
- * builtins.ts cover the workflow + tool-use patterns; YAML tunes the
- * knobs operators care about.
+ * operator-supplied focus/style instructions. Bundled role templates
+ * (templates/*.yaml, loaded by templates.ts) cover the workflow +
+ * tool-use patterns; the user's agents.yaml tunes the knobs operators
+ * care about.
  */
 
 import { existsSync, readFileSync } from "node:fs";

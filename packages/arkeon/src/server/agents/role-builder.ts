@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Turns declarative role config (YAML + built-in templates) into the
+ * Turns declarative role config (YAML + bundled templates) into the
  * runtime AgentRole object that runAgent consumes.
  *
  * Resolution chain for each field, most specific wins:
  *   1. config.roles[name]
- *   2. BUILTIN_ROLES[name]   (only when it's a built-in)
+ *   2. bundled template at templates/<name>.yaml
  *   3. config.defaults
  *
  * Required-everywhere fields (provider, model, system, tools) must
@@ -16,11 +16,15 @@
  * `instructions` is the only field that *layers* (defaults +
  * role-specific are concatenated to the system prompt). All other
  * fields use last-write-wins.
+ *
+ * Templates are read from disk on every call (cheap; two small YAML
+ * files) so editing a template + re-running an agent is a one-step
+ * loop with no daemon restart.
  */
 
 import type { ModelConfig } from "./model.js";
 import type { AgentConfig, PhaseConfig, RoleConfig } from "./config.js";
-import { BUILTIN_ROLES, isBuiltinRole } from "./builtins.js";
+import { loadBundledTemplates } from "./templates.js";
 import {
   hashInput,
   type AgentInput,
@@ -36,7 +40,8 @@ import {
  * with no built-in template and no `system` in YAML).
  */
 export function buildAgentRole(name: string, config: AgentConfig): AgentRole {
-  const builtin: RoleConfig = isBuiltinRole(name) ? BUILTIN_ROLES[name] : {};
+  const templates = loadBundledTemplates();
+  const builtin: RoleConfig = templates[name] ?? {};
   const fromConfig: RoleConfig = config.roles?.[name] ?? {};
   const defaults: RoleConfig = config.defaults ?? {};
 
@@ -74,8 +79,8 @@ export function buildAgentRole(name: string, config: AgentConfig): AgentRole {
   const baseSystem = fromConfig.system ?? builtin.system;
   if (!baseSystem) {
     throw new Error(
-      `Role '${name}': no system prompt. Custom (non-builtin) roles must ` +
-        `set 'system' in YAML.`,
+      `Role '${name}': no system prompt. A role with no bundled template ` +
+        `must set 'system' in YAML.`,
     );
   }
   const instructionsLayer = [defaults.instructions, fromConfig.instructions]
@@ -292,11 +297,11 @@ function toModelConfig(
 // ── Discovery ────────────────────────────────────────────────────
 
 /**
- * List all role names available given a config: built-ins plus any
- * roles defined in YAML. Useful for `arkeon-wiki agent list`.
+ * List all role names available given a config: bundled templates plus
+ * any roles defined in YAML. Useful for `arkeon-wiki agent list`.
  */
 export function listAvailableRoles(config: AgentConfig): string[] {
-  const set = new Set<string>(Object.keys(BUILTIN_ROLES));
+  const set = new Set<string>(Object.keys(loadBundledTemplates()));
   for (const name of Object.keys(config.roles ?? {})) set.add(name);
   return [...set].sort();
 }

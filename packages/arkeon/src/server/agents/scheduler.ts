@@ -37,8 +37,8 @@ import {
   type AgentConfig,
   type TriggerCondition,
 } from "./config.js";
-import { BUILTIN_ROLES, isBuiltinRole } from "./builtins.js";
 import { buildAgentRole } from "./role-builder.js";
+import { loadBundledTemplates } from "./templates.js";
 import { runAgent as defaultRunAgent } from "./runtime.js";
 import { ALL_TOOLS } from "./tools.js";
 import {
@@ -60,9 +60,10 @@ export interface StartSchedulerOptions {
   space: Space;
   /** Restrict auto-triggering to a subset of roles. By default the
    *  scheduler walks every role declared in agents.yaml plus every
-   *  built-in role with default triggers, and fires whichever match.
-   *  Pass an explicit role list to limit (mainly for tests). Pass an
-   *  empty array to disable auto-triggering for this space entirely. */
+   *  bundled template role with default triggers, and fires whichever
+   *  match. Pass an explicit role list to limit (mainly for tests).
+   *  Pass an empty array to disable auto-triggering for this space
+   *  entirely. */
   triggerRoles?: string[];
   /** Override the registry (mainly for tests). */
   toolRegistry?: typeof ALL_TOOLS;
@@ -77,27 +78,26 @@ export interface StartSchedulerOptions {
 
 /**
  * Walk every role known in this space's config (built-ins overlaid
- * with agents.yaml) and gather their declared triggers. Built-in roles
- * keep their default triggers unless the user supplied their own; a
- * user-supplied `triggers` array (including the empty array) replaces
- * the built-in default wholesale.
+ * with agents.yaml) and gather their declared triggers. Bundled
+ * templates keep their default triggers unless the user supplied their
+ * own; a user-supplied `triggers` array (including the empty array)
+ * replaces the template default wholesale.
  */
 function collectRoleTriggers(
   config: AgentConfig,
   restrictTo?: string[] | null,
 ): Array<{ role: string; triggers: TriggerCondition[] }> {
+  const templates = loadBundledTemplates();
   const out: Array<{ role: string; triggers: TriggerCondition[] }> = [];
   const allRoles = new Set<string>([
-    ...Object.keys(BUILTIN_ROLES),
+    ...Object.keys(templates),
     ...Object.keys(config.roles ?? {}),
   ]);
   for (const role of allRoles) {
     if (restrictTo && !restrictTo.includes(role)) continue;
     const fromConfig = config.roles?.[role]?.triggers;
-    const fromBuiltin = isBuiltinRole(role)
-      ? BUILTIN_ROLES[role].triggers
-      : undefined;
-    const triggers = fromConfig ?? fromBuiltin ?? [];
+    const fromTemplate = templates[role]?.triggers;
+    const triggers = fromConfig ?? fromTemplate ?? [];
     if (triggers.length > 0) out.push({ role, triggers });
   }
   return out;
@@ -275,8 +275,9 @@ export async function startScheduler(
   async function runOne(item: QueuedItem): Promise<void> {
     try {
       const config = loadAgentConfig({ spaceDir: opts.space.watch_dir });
-      // The role must exist as a built-in or in YAML.
-      if (!isBuiltinRole(item.role) && !config.roles?.[item.role]) {
+      // The role must exist as a bundled template or in YAML.
+      const templates = loadBundledTemplates();
+      if (!templates[item.role] && !config.roles?.[item.role]) {
         await fail(item.id, `unknown role '${item.role}'`);
         return;
       }
