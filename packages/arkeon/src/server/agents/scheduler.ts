@@ -20,6 +20,24 @@
  * lease semantics — a single-daemon model with per-space mutexes
  * doesn't need them. If the daemon dies mid-run the next tick fires
  * fresh.
+ *
+ * Downtime → missed ticks are dropped. We don't persist last-fire
+ * timestamps, so a daemon that's down across N cron firings simply
+ * doesn't fire those N ticks; it picks up at the next scheduled
+ * instant after restart. This is fine for the question-driven `writer`
+ * (each tick observes current state and picks unprocessed sources from
+ * scratch — 30 minutes of skipped ticks costs nothing because the next
+ * tick still sees the accumulated work). Future operators adding
+ * non-idempotent roles need to know this is the contract: at-most-N
+ * firings per cron expression, not at-least-N.
+ *
+ * Config is re-read on every tick (`loadAgentConfig` + `buildAgentRole`
+ * inside `fireTick`). The mtime cache in templates.ts makes the per-call
+ * cost negligible, and the trade-off is intentional: operator edits to
+ * agents.yaml land on the next tick without a daemon restart, matching
+ * the "filesystem is source of truth" philosophy. If a deployment ever
+ * needs minimum-disk-reads instead of live-edits-pickup, hoist the
+ * built role into ScheduledRole at startup.
  */
 
 import { nextTick } from "./cron.js";

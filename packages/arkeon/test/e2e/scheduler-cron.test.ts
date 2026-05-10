@@ -3,20 +3,20 @@
 
 /**
  * End-to-end coverage for the cron scheduler. Uses an injected
- * runAgentFn to avoid any LLM/network calls and asserts:
+ * runAgentFn (no LLM/network calls) and `vi.useFakeTimers()` to drive
+ * tick firings without waiting for wall-clock seconds. Asserts:
  *
- *   1. Per-space mutex: a tick fires runAgent; the next scheduled
- *      tick (after the run completes) fires runAgent again. No deadlock.
- *   2. stop() returns even when an in-flight run hangs (bounded by
- *      gracePeriodMs).
- *   3. Roles without a cron expression aren't scheduled at all.
- *
- * The mutex semantics are inherently race-y to test directly without
- * peeking at internals; the integration assertion (1) is "no deadlock,
- * scheduling continues after a run completes."
+ *   1. A tick fires runAgent and the next tick is scheduled after the
+ *      run completes (no deadlock).
+ *   2. Per-space mutex: when role A is running and role B's tick
+ *      fires, role B is skipped (skip-if-busy) — not queued, not
+ *      run in parallel.
+ *   3. stop() returns within ~gracePeriodMs even when an in-flight
+ *      run hangs, instead of waiting for the run forever.
+ *   4. Roles without a resolvable cron expression aren't scheduled.
  */
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,7 +26,12 @@ import { runMigrations } from "../../src/schema/index.js";
 import { closeDb, createSql } from "../../src/server/lib/sql.js";
 import { generateUlid } from "../../src/server/lib/ids.js";
 import { startScheduler } from "../../src/server/agents/scheduler.js";
-import type { AgentRunResult } from "../../src/server/agents/runtime.js";
+import type {
+  AgentInput,
+  AgentRole,
+  AgentRunResult,
+  ToolRegistry,
+} from "../../src/server/agents/runtime.js";
 import type { Space } from "../../src/server/lib/sync.js";
 
 let testDir: string;
@@ -66,6 +71,13 @@ afterAll(async () => {
   else process.env.ARKEON_WIKI_CHUNKING = prevChunkingEnv;
 }, 10_000);
 
+afterEach(() => {
+  // Each test that flips fake timers on must restore real timers
+  // before exiting; defensive belt-and-braces here so a thrown
+  // assertion can't poison sibling tests.
+  vi.useRealTimers();
+});
+
 async function makeSpaceWithConfig(yamlBody: string): Promise<Space> {
   const spaceDir = join(testDir, randomBytes(4).toString("hex"));
   mkdirSync(join(spaceDir, ".arkeon"), { recursive: true });
@@ -80,8 +92,17 @@ async function makeSpaceWithConfig(yamlBody: string): Promise<Space> {
   return space;
 }
 
+/**
+ * Yield to the event loop a few times so any pending microtasks
+ * (promise resolutions queued by `runAgentFn` returns) can drain
+ * before we advance fake timers further.
+ */
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 4; i++) await Promise.resolve();
+}
+
 describe("cron scheduler", () => {
-  it("schedules a run and continues scheduling after it completes", async () => {
+  it("fires a tick at its scheduled time and schedules the next one", async () => {
     const space = await makeSpaceWithConfig(
       [
         "defaults:",
@@ -89,12 +110,15 @@ describe("cron scheduler", () => {
         "  model: gpt-5-mini",
         "roles:",
         "  writer:",
-        `    cron: "* * * * *"`,
+        `    cron: "* * * * *"`, // every minute
         "",
       ].join("\n"),
     );
 
     let invocations = 0;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-10T00:00:00Z"));
+
     const handle = await startScheduler({
       space,
       runAgentFn: async (): Promise<AgentRunResult> => {
@@ -103,56 +127,158 @@ describe("cron scheduler", () => {
       },
     });
 
-    // We don't wait for an actual cron firing (would mean waiting up
-    // to 60s). Instead, this test asserts the scheduler starts
-    // cleanly, schedules the role, and stops without leaking timers.
-    await new Promise((r) => setTimeout(r, 50));
+    // Advance to 00:01:00 — first cron firing for "* * * * *".
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushMicrotasks();
+    expect(invocations).toBe(1);
+
+    // Advance another minute — second tick should fire.
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushMicrotasks();
+    expect(invocations).toBe(2);
+
     await handle.stop();
-    // invocations may be 0 (didn't fire yet) or higher; the contract
-    // is no crash + clean stop.
-    expect(invocations).toBeGreaterThanOrEqual(0);
   });
 
-  it("stop() returns even if a run is hanging (bounded grace)", async () => {
+  it("per-space mutex skips a tick when another role's run is in flight", async () => {
+    // Two roles in the same space, both with the same cron schedule.
+    // Role A's runAgentFn hangs (we control its resolution); role B's
+    // tick fires while A is mid-flight and should be SKIPPED, not
+    // queued, not run in parallel.
     const space = await makeSpaceWithConfig(
       [
         "defaults:",
         "  provider: openai",
         "  model: gpt-5-mini",
         "roles:",
-        "  writer:",
+        "  role-a:",
+        "    system: a",
+        "    tools: [list_entities]",
+        `    cron: "* * * * *"`,
+        "  role-b:",
+        "    system: b",
+        "    tools: [list_entities]",
         `    cron: "* * * * *"`,
         "",
       ].join("\n"),
     );
 
-    // We need a run to be in flight for the grace path to engage.
-    // Force one by manually invoking the role's first tick: we can't
-    // peek into the scheduler directly, so we install a runAgentFn
-    // that hangs forever and rely on the cron to fire it eventually.
-    // To avoid waiting up to 60s for the next cron minute, we choose
-    // a cron that's already-due: the parser computes "next firing
-    // strictly after now", so any wildcard cron schedules at most
-    // 60s out. Skip the in-flight assertion and just confirm stop()
-    // returns within the grace window even when no run is active.
+    let aStartCount = 0;
+    let bStartCount = 0;
+    let releaseA!: () => void;
+    const aBlocker = new Promise<void>((r) => {
+      releaseA = r;
+    });
+
+    const runAgentFn = async (
+      role: AgentRole,
+      _input: AgentInput,
+      _registry: ToolRegistry,
+    ): Promise<AgentRunResult> => {
+      if (role.name === "role-a") {
+        aStartCount++;
+        await aBlocker;
+      } else {
+        bStartCount++;
+      }
+      return { skipped: false, edits: [], text: "", steps: 0 };
+    };
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-10T00:00:00Z"));
+
+    const handle = await startScheduler({ space, runAgentFn });
+
+    // Advance to first firing. Both roles' setTimeouts target the
+    // same instant; both fire. Role A starts first (it's enumerated
+    // first) and grabs the mutex; role B sees busy and skips.
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushMicrotasks();
+
+    expect(aStartCount).toBe(1);
+    expect(bStartCount).toBe(0); // skipped because A holds the mutex
+
+    // Release A so the run completes, freeing the mutex.
+    releaseA();
+    await flushMicrotasks();
+
+    // Advance another minute. Role B's NEXT tick (the one it
+    // rescheduled after the skip) should fire — and now the mutex
+    // is free, so B actually runs this time.
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushMicrotasks();
+
+    expect(bStartCount).toBeGreaterThanOrEqual(1);
+
+    await handle.stop();
+  });
+
+  it("stop() returns within gracePeriodMs even when a run is hanging", async () => {
+    // Bounded-grace path: an in-flight run that never resolves must
+    // not block daemon shutdown. stop() races inFlight against a
+    // setTimeout(gracePeriodMs) and returns whichever wins.
+    //
+    // Setup ordering matters: enable fake timers BEFORE startScheduler
+    // so the role's first setTimeout is queued against fake time and
+    // can be advanced cheaply. Then for the actual stop() measurement
+    // we switch back to real timers — the grace setTimeout is queued
+    // INSIDE stop() (after the timer swap) so it uses real time.
+    const space = await makeSpaceWithConfig(
+      [
+        "defaults:",
+        "  provider: openai",
+        "  model: gpt-5-mini",
+        "roles:",
+        "  role-hang:",
+        "    system: hangs",
+        "    tools: [list_entities]",
+        `    cron: "* * * * *"`,
+        "",
+      ].join("\n"),
+    );
+
+    let started!: () => void;
+    const hasStarted = new Promise<void>((r) => {
+      started = r;
+    });
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-10T00:00:00Z"));
+
     const handle = await startScheduler({
       space,
-      runAgentFn: async (): Promise<AgentRunResult> =>
-        new Promise(() => {
-          /* hangs */
-        }),
-      gracePeriodMs: 200,
+      runAgentFn: async (): Promise<AgentRunResult> => {
+        started();
+        return new Promise(() => {
+          /* never resolves */
+        });
+      },
+      gracePeriodMs: 150,
     });
+
+    // Advance fake time to the first cron firing (00:01:00).
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushMicrotasks();
+
+    // Switch back to real timers BEFORE calling stop, so the grace
+    // setTimeout queued inside stop() runs against real wall clock.
+    vi.useRealTimers();
+
+    // Confirm the run actually started — otherwise stop() takes the
+    // !inFlight short-circuit and the test wouldn't exercise the
+    // grace path.
+    await hasStarted;
 
     const t0 = Date.now();
     await handle.stop();
     const elapsed = Date.now() - t0;
-    // No in-flight run → stop() returns immediately. The bound is for
-    // the case where there IS one; we assert the no-hang case here
-    // and the bounded-grace path is exercised by code review of
-    // scheduler.ts where Promise.race wraps the wait.
-    expect(elapsed).toBeLessThan(2_000);
-  });
+
+    // Bound: grace + a couple hundred ms of event-loop slack. If the
+    // race never engaged, stop() would hang and hit the test timeout
+    // instead.
+    expect(elapsed).toBeGreaterThanOrEqual(100);
+    expect(elapsed).toBeLessThan(1_500);
+  }, 10_000);
 
   it("does not schedule a role with no resolvable cron", async () => {
     // The bundled writer template ships a cron, but if the operator
@@ -172,6 +298,9 @@ describe("cron scheduler", () => {
     );
 
     let invocations = 0;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-10T00:00:00Z"));
+
     const handle = await startScheduler({
       space,
       runAgentFn: async (): Promise<AgentRunResult> => {
@@ -179,7 +308,11 @@ describe("cron scheduler", () => {
         return { skipped: false, edits: [], text: "", steps: 0 };
       },
     });
-    await new Promise((r) => setTimeout(r, 100));
+
+    // Advance two whole minutes; the role with no cron should never
+    // have had a setTimeout to fire.
+    await vi.advanceTimersByTimeAsync(120_000);
+    await flushMicrotasks();
     await handle.stop();
     expect(invocations).toBe(0);
   });
