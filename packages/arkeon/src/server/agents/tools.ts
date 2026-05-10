@@ -266,25 +266,27 @@ const searchTool = defineTool("search", {
 
 const listEntitiesTool = defineTool("list_entities", {
   description:
-    "List entities in the role's allowed spaces — wikis, source files, " +
-    "and stubs (placeholders left by [[wikilink]] references) — with " +
-    "structural filters. Use this to check whether a subject already has " +
-    "a wiki, find sources you haven't cited yet (type=file inbound_max=0), " +
-    "find stubs that need filling (type=stub), or surface wikis with open " +
-    "threads (has_unresolved_outbound=true). Returns " +
+    "List entities in the role's allowed spaces — wikis (realized and " +
+    "placeholder) and source files — with structural filters. Use this " +
+    "to check whether a subject already has a wiki, find sources you " +
+    "haven't cited yet (type=file inbound_max=0), find placeholders that " +
+    "need filling (unresolved=true), or surface wikis with open threads " +
+    "(has_unresolved_outbound=true). A placeholder is a wiki with no " +
+    "file on disk yet — left behind by a [[wikilink]] that no real wiki " +
+    "has yet been written for. Returns " +
     "{entities, total, limit, offset, spaces}. Each entity row carries " +
-    "`space_id` and `space` so multi-space roles can tell them apart. " +
-    "Pass `space` to scope to one space; omit on a multi-space role to " +
-    "fan out across the whole allowed set.",
+    "`unresolved` (true for placeholders), plus `space_id` and `space` " +
+    "so multi-space roles can tell results apart. Pass `space` to scope " +
+    "to one space; omit on a multi-space role to fan out across the " +
+    "whole allowed set.",
   inputSchema: z.object({
     type: z
       .string()
       .optional()
       .describe(
-        "Comma-separated entity types: any of 'wiki', 'file', 'stub'. " +
-          "Omit to include all types. Examples: 'wiki' (just wikis), " +
-          "'wiki,stub' (wikis and the stubs they point to), 'stub' (only " +
-          "things to fill).",
+        "Comma-separated entity types: 'wiki' or 'file'. Omit to include " +
+          "both. Placeholders are wikis with no file on disk yet — filter " +
+          "with `unresolved` (placeholders are still type='wiki').",
       ),
     subject_type: z
       .string()
@@ -337,9 +339,17 @@ const listEntitiesTool = defineTool("list_entities", {
       .boolean()
       .optional()
       .describe(
-        "True: only entities with at least one outbound link to a stub " +
-          "(i.e. wikis with open threads). False: only entities whose " +
-          "outbound links all resolve to real entities.",
+        "True: only entities with at least one outbound link to a " +
+          "placeholder (i.e. wikis with open threads). False: only " +
+          "entities whose outbound links all resolve to realized wikis.",
+      ),
+    unresolved: z
+      .boolean()
+      .optional()
+      .describe(
+        "True: only placeholder wikis (no file on disk yet — left by a " +
+          "[[wikilink]] that hasn't been filled in). False: only " +
+          "realized rows (file exists). Omit to ignore placeholder status.",
       ),
     updated_since: z
       .string()
@@ -394,6 +404,7 @@ const listEntitiesTool = defineTool("list_entities", {
       outbound_min: input.outbound_min,
       outbound_max: input.outbound_max,
       has_unresolved_outbound: input.has_unresolved_outbound,
+      unresolved: input.unresolved,
       updated_since: input.updated_since,
       edited_by_role: input.edited_by_role,
       sort: input.sort,

@@ -6,12 +6,14 @@
  *
  *   1. Standard markdown links — [text](path.md). Resolve to existing
  *      entities. If the target path is unknown, sync logs a warning and
- *      drops the relationship (treat as a typo, not an intentional stub).
+ *      drops the relationship (treat as a typo, not an intentional
+ *      placeholder).
  *   2. Wiki-link syntax — [[Label]] or [[Label|subject_type]] (Obsidian /
  *      Roam style). Always resolves through wikiPathFor() and creates a
- *      stub entity if no entity exists at the computed path. This is the
- *      explicit "this thing should exist" marker the agent uses when it
- *      doesn't have a verified path.
+ *      placeholder wiki (type='wiki' with source_hash IS NULL — no file
+ *      on disk yet) if no entity exists at the computed path. This is
+ *      the explicit "this thing should exist" marker the agent uses when
+ *      it doesn't have a verified path.
  *
  * The parsers are independent — sync calls both and processes each list
  * with the appropriate resolution rules.

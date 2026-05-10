@@ -2,17 +2,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * End-to-end tests for `[[wikilink]]`-driven stub entities.
+ * End-to-end tests for `[[wikilink]]`-driven placeholder wikis.
+ *
+ * A placeholder is a wiki row with `source_hash IS NULL` — no file on
+ * disk yet. The runtime exposes this as `unresolved: true` on listings
+ * and direct lookups. Pre-006 these used to be a separate `type='stub'`,
+ * which 006-collapse-stubs.sql merged into `type='wiki'` with the
+ * source_hash signal.
  *
  * Covers:
- *   - bare `[[Label]]` creates a stub at `wiki/concept/<slug>.md`
- *   - typed `[[Label|subject_type]]` creates a stub at `wiki/<type>/<slug>.md`
- *   - editing a wiki to drop its [[wikilink]] GCs the stub when no other
- *     wiki points to it; preserves it when one still does
- *   - writing a real wiki at a stub's path upgrades the stub in place,
- *     preserving inbound relationships
- *   - dangling standard markdown links do NOT create stubs (warn-and-drop)
- *   - deleting the only wiki that points at a stub GCs the stub too
+ *   - bare `[[Label]]` creates a placeholder at `wiki/concept/<slug>.md`
+ *   - typed `[[Label|subject_type]]` creates a placeholder at
+ *     `wiki/<type>/<slug>.md`
+ *   - editing a wiki to drop its [[wikilink]] GCs the placeholder when
+ *     no other wiki points to it; preserves it when one still does
+ *   - writing a real wiki at a placeholder's path upgrades the row in
+ *     place, preserving inbound relationships
+ *   - dangling standard markdown links do NOT create placeholders
+ *     (warn-and-drop)
+ *   - deleting the only wiki that points at a placeholder GCs it too
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -62,21 +70,32 @@ async function api(path: string, options?: RequestInit): Promise<any> {
   return res.text();
 }
 
-/** Poll until an entity at a path either exists with the expected type, or until timeout. */
-async function waitForEntityType(
+/**
+ * Poll until an entity at a path either exists with the expected
+ * resolution status, or until timeout. `kind='placeholder'` means
+ * type='wiki' with no file on disk yet (unresolved=true). `kind='wiki'`
+ * means a realized wiki (unresolved=false).
+ */
+async function waitForEntityKind(
   sourcePath: string,
-  expectedType: "wiki" | "file" | "stub",
+  kind: "placeholder" | "wiki" | "file",
   timeoutMs = 5000,
 ): Promise<void> {
+  const matches = (e: { type: "wiki" | "file"; unresolved: boolean }): boolean => {
+    if (kind === "placeholder") return e.type === "wiki" && e.unresolved;
+    if (kind === "wiki") return e.type === "wiki" && !e.unresolved;
+    return e.type === "file";
+  };
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const e = await getEntityBySourcePath(spaceId, sourcePath);
-    if (e?.type === expectedType) return;
+    if (e && matches(e)) return;
     await new Promise((r) => setTimeout(r, 150));
   }
   const final = await getEntityBySourcePath(spaceId, sourcePath);
   throw new Error(
-    `Timed out: entity at ${sourcePath} expected type=${expectedType}, got ${final?.type ?? "<missing>"}`,
+    `Timed out: entity at ${sourcePath} expected kind=${kind}, ` +
+      `got ${final ? `type=${final.type} unresolved=${final.unresolved}` : "<missing>"}`,
   );
 }
 
@@ -132,22 +151,23 @@ afterAll(async () => {
   }
 }, 30_000);
 
-describe("[[wikilink]] → stub entity", () => {
-  it("a bare [[Label]] creates a stub at wiki/concept/<slug>.md", async () => {
+describe("[[wikilink]] → placeholder wiki", () => {
+  it("a bare [[Label]] creates a placeholder at wiki/concept/<slug>.md", async () => {
     writeWiki(
       "wiki/concept/source-a.md",
       { label: "Source A", subject_type: "concept" },
       "References [[Information Theory]] heavily.",
     );
 
-    const stub = await waitForEntityBySourcePath(
+    const placeholder = await waitForEntityBySourcePath(
       spaceId,
       "wiki/concept/information-theory.md",
     );
-    expect(stub.type).toBe("stub");
-    expect(stub.label).toBe("Information Theory");
+    expect(placeholder.type).toBe("wiki");
+    expect(placeholder.unresolved).toBe(true);
+    expect(placeholder.label).toBe("Information Theory");
 
-    // The wiki that referenced it should have an outbound relationship to the stub.
+    // The wiki that referenced it should have an outbound relationship.
     const sourceA = await waitForEntityBySourcePath(
       spaceId,
       "wiki/concept/source-a.md",
@@ -155,27 +175,28 @@ describe("[[wikilink]] → stub entity", () => {
     const wiki = await api(`/entities/${sourceA.id}`);
     const out = wiki.relationships.outgoing;
     expect(out).toHaveLength(1);
-    expect(out[0].target_id).toBe(stub.id);
+    expect(out[0].target_id).toBe(placeholder.id);
     expect(out[0].link_text).toBe("Information Theory");
     expect(out[0].link_path).toBe("[[Information Theory]]");
   });
 
-  it("a typed [[Label|subject_type]] creates a stub under wiki/<type>/<slug>.md", async () => {
+  it("a typed [[Label|subject_type]] creates a placeholder under wiki/<type>/<slug>.md", async () => {
     writeWiki(
       "wiki/concept/source-b.md",
       { label: "Source B", subject_type: "concept" },
       "Mentions [[Bell Labs|organization]] in passing.",
     );
 
-    const stub = await waitForEntityBySourcePath(
+    const placeholder = await waitForEntityBySourcePath(
       spaceId,
       "wiki/organization/bell-labs.md",
     );
-    expect(stub.type).toBe("stub");
-    expect(stub.label).toBe("Bell Labs");
+    expect(placeholder.type).toBe("wiki");
+    expect(placeholder.unresolved).toBe(true);
+    expect(placeholder.label).toBe("Bell Labs");
   });
 
-  it("two wikis pointing at the same [[Label]] share one stub with both inbound", async () => {
+  it("two wikis pointing at the same [[Label]] share one placeholder with both inbound", async () => {
     writeWiki(
       "wiki/concept/source-c.md",
       { label: "Source C", subject_type: "concept" },
@@ -187,17 +208,17 @@ describe("[[wikilink]] → stub entity", () => {
       "Builds on [[Shannon Sampling Theorem]].",
     );
 
-    const stub = await waitForEntityBySourcePath(
+    const placeholder = await waitForEntityBySourcePath(
       spaceId,
       "wiki/concept/shannon-sampling-theorem.md",
     );
-    expect(stub.type).toBe("stub");
+    expect(placeholder.unresolved).toBe(true);
 
-    // Wait for both inbound relationships to arrive on the shared stub.
+    // Wait for both inbound relationships to arrive on the shared row.
     const deadline = Date.now() + 5000;
     let incomingCount = 0;
     while (Date.now() < deadline) {
-      const entity = await api(`/entities/${stub.id}`);
+      const entity = await api(`/entities/${placeholder.id}`);
       incomingCount = entity?.relationships?.incoming?.length ?? 0;
       if (incomingCount === 2) break;
       await new Promise((r) => setTimeout(r, 150));
@@ -205,14 +226,14 @@ describe("[[wikilink]] → stub entity", () => {
     expect(incomingCount).toBe(2);
   });
 
-  it("editing a wiki to drop its [[wikilink]] GCs the stub when no other wiki points to it", async () => {
+  it("editing a wiki to drop its [[wikilink]] GCs the placeholder when no other wiki points to it", async () => {
     writeWiki(
       "wiki/concept/source-e.md",
       { label: "Source E", subject_type: "concept" },
       "Mentions [[Lone Concept]] just once.",
     );
 
-    await waitForEntityType("wiki/concept/lone-concept.md", "stub");
+    await waitForEntityKind("wiki/concept/lone-concept.md", "placeholder");
 
     // Rewrite without the wikilink.
     writeWiki(
@@ -224,50 +245,51 @@ describe("[[wikilink]] → stub entity", () => {
     await waitForEntityAbsent("wiki/concept/lone-concept.md");
   });
 
-  it("writing a real wiki at a stub's path upgrades the stub and preserves inbound", async () => {
+  it("writing a real wiki at a placeholder's path upgrades the row and preserves inbound", async () => {
     writeWiki(
       "wiki/concept/source-f.md",
       { label: "Source F", subject_type: "concept" },
       "Will eventually link to [[Quantum Computing]].",
     );
 
-    const stub = await waitForEntityBySourcePath(
+    const placeholder = await waitForEntityBySourcePath(
       spaceId,
       "wiki/concept/quantum-computing.md",
     );
-    expect(stub.type).toBe("stub");
-    const stubId = stub.id;
+    expect(placeholder.unresolved).toBe(true);
+    const placeholderId = placeholder.id;
 
     // Now write the real wiki at the same path. The id should be preserved
-    // (entity-by-source_path lookup finds the stub and UPDATEs it in place).
+    // (entity-by-source_path lookup finds the row and UPDATEs it in place).
     writeWiki(
       "wiki/concept/quantum-computing.md",
       { label: "Quantum Computing", subject_type: "concept" },
       "Real content for the quantum-computing wiki.",
     );
 
-    await waitForEntityType("wiki/concept/quantum-computing.md", "wiki");
+    await waitForEntityKind("wiki/concept/quantum-computing.md", "wiki");
 
     const upgraded = await getEntityBySourcePath(
       spaceId,
       "wiki/concept/quantum-computing.md",
     );
     expect(upgraded?.type).toBe("wiki");
-    expect(upgraded?.id).toBe(stubId); // entity id preserved across upgrade
+    expect(upgraded?.unresolved).toBe(false);
+    expect(upgraded?.id).toBe(placeholderId); // id preserved across upgrade
 
-    // Source F's outbound link should still resolve to the upgraded entity.
+    // Source F's outbound link should still resolve to the upgraded row.
     const sourceF = await getEntityBySourcePath(
       spaceId,
       "wiki/concept/source-f.md",
     );
     const wiki = await api(`/entities/${sourceF!.id}`);
     const linksToQc = wiki.relationships.outgoing.filter(
-      (r: any) => r.target_id === stubId,
+      (r: any) => r.target_id === placeholderId,
     );
     expect(linksToQc).toHaveLength(1);
   });
 
-  it("a dangling standard markdown link does NOT create a stub (warn-and-drop)", async () => {
+  it("a dangling standard markdown link does NOT create a placeholder (warn-and-drop)", async () => {
     writeWiki(
       "wiki/concept/source-g.md",
       { label: "Source G", subject_type: "concept" },
@@ -278,7 +300,7 @@ describe("[[wikilink]] → stub entity", () => {
       spaceId,
       "wiki/concept/source-g.md",
     );
-    // Give the watcher a moment to (not) create a stub.
+    // Give the watcher a moment to (not) create a placeholder.
     await new Promise((r) => setTimeout(r, 800));
 
     const fake = await getEntityBySourcePath(
@@ -291,14 +313,14 @@ describe("[[wikilink]] → stub entity", () => {
     expect(wiki.relationships.outgoing).toHaveLength(0);
   });
 
-  it("deleting the only wiki pointing at a stub GCs the stub", async () => {
+  it("deleting the only wiki pointing at a placeholder GCs it", async () => {
     writeWiki(
       "wiki/concept/source-h.md",
       { label: "Source H", subject_type: "concept" },
       "Solo reference to [[Disposable Concept]].",
     );
 
-    await waitForEntityType("wiki/concept/disposable-concept.md", "stub");
+    await waitForEntityKind("wiki/concept/disposable-concept.md", "placeholder");
 
     deleteFile("wiki/concept/source-h.md");
 

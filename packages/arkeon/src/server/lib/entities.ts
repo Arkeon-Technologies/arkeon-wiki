@@ -3,9 +3,11 @@
 
 /**
  * Generic entity listing — the read primitive that powers /entities and
- * the agent runtime's `list_entities` tool. One query covers wikis, source
- * files, and stubs; filters on type, frontmatter, link counts, recency,
- * and last-edit role.
+ * the agent runtime's `list_entities` tool. One query covers wikis and
+ * source files (a "placeholder" is a wiki with `source_hash IS NULL`,
+ * surfaced via the derived `unresolved` field — see `?unresolved=true`).
+ * Filters on type, frontmatter, link counts, recency, last-edit role,
+ * and resolution status.
  *
  * The query nests so the outer SELECT can filter on computed columns
  * (inbound/outbound counts, has_unresolved_outbound). Direct column
@@ -16,7 +18,7 @@
 import { ApiError } from "./errors.js";
 import { createSql } from "./sql.js";
 
-export type EntityType = "wiki" | "file" | "stub";
+export type EntityType = "wiki" | "file";
 export type EntitySort = "updated_at" | "label" | "inbound" | "outbound";
 
 export interface ListEntitiesOptions {
@@ -43,8 +45,13 @@ export interface ListEntitiesOptions {
   outbound_min?: number;
   /** Inclusive upper bound on outbound relationship count. */
   outbound_max?: number;
-  /** Filter to entities with at least one outbound link to a stub. */
+  /** Filter to entities with at least one outbound link to a placeholder
+   *  (a wiki with `source_hash IS NULL`). */
   has_unresolved_outbound?: boolean;
+  /** Filter on placeholder status of the entity itself. True → only
+   *  placeholder wikis (source_hash IS NULL); false → only realized
+   *  rows (source_hash IS NOT NULL, i.e. file exists on disk). */
+  unresolved?: boolean;
   /** ISO timestamp; only entities with `updated_at >= this`. */
   updated_since?: string;
   /** Filter on the entity's most recent edit's `by_role` (via
@@ -78,10 +85,15 @@ export interface EntityListRow {
   created_at: string;
   updated_at: string;
   counts?: EntityCounts;
-  /** True if any outbound edge from this entity targets a stub. */
+  /** True if any outbound edge from this entity targets a placeholder
+   *  (a wiki with `source_hash IS NULL`). */
   has_unresolved_outbound: boolean;
+  /** True if this row itself is a placeholder — type='wiki' with no file
+   *  on disk yet (source_hash IS NULL). Realized wikis and source files
+   *  are always false. */
+  unresolved: boolean;
   /** Role/actor that made the most recent edit, or null if no edits
-   *  have been recorded (e.g. stubs that were never written to). */
+   *  have been recorded (e.g. placeholders that were never written to). */
   last_edited_by: string | null;
 }
 
@@ -165,6 +177,15 @@ export async function listEntities(
     innerConditions.push("e.updated_at >= ?");
     innerParams.push(opts.updated_since);
   }
+  if (opts.unresolved !== undefined) {
+    if (opts.unresolved) {
+      // Placeholder wikis only — no file on disk yet. Source files
+      // always have source_hash, so this implicitly narrows to wikis.
+      innerConditions.push("e.type = 'wiki' AND e.source_hash IS NULL");
+    } else {
+      innerConditions.push("e.source_hash IS NOT NULL");
+    }
+  }
 
   // Last-edit filter via the entity_latest_edit view. The LEFT JOIN
   // is unconditional when this filter is present so the WHERE can
@@ -212,12 +233,15 @@ export async function listEntities(
     SELECT
       e.id, e.space_id, e.type, e.label, e.source_path, e.properties,
       e.created_at, e.updated_at,
+      (e.type = 'wiki' AND e.source_hash IS NULL) AS unresolved,
       (SELECT COUNT(*) FROM relationships r WHERE r.target_id = e.id) AS inbound,
       (SELECT COUNT(*) FROM relationships r WHERE r.source_id = e.id) AS outbound,
       EXISTS (
         SELECT 1 FROM relationships r
         JOIN entities t ON t.id = r.target_id
-        WHERE r.source_id = e.id AND t.type = 'stub'
+        WHERE r.source_id = e.id
+          AND t.type = 'wiki'
+          AND t.source_hash IS NULL
       ) AS has_unresolved_outbound,
       (SELECT le2.last_edited_by FROM entity_latest_edit le2
         WHERE le2.entity_id = e.id) AS last_edited_by
@@ -244,7 +268,9 @@ export async function listEntities(
     updated_at: string;
     inbound: number;
     outbound: number;
-    // SQLite's EXISTS yields 0/1 — coerce to boolean at the boundary.
+    // SQLite's EXISTS / boolean expressions yield 0/1 — coerce at the
+    // boundary.
+    unresolved: number;
     has_unresolved_outbound: number;
     last_edited_by: string | null;
   }
@@ -276,6 +302,7 @@ export async function listEntities(
         properties: row.properties,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        unresolved: Boolean(row.unresolved),
         has_unresolved_outbound: Boolean(row.has_unresolved_outbound),
         last_edited_by: row.last_edited_by,
       };
@@ -312,8 +339,12 @@ export async function listEntities(
 
 /**
  * Parse a comma-separated list of entity types, validating each one.
- * Used by route handlers to coerce `?type=wiki,stub` into the typed array.
+ * Used by route handlers to coerce `?type=wiki,file` into the typed array.
  * Returns `undefined` for empty/missing input (= no type filter).
+ *
+ * `?type=stub` is no longer accepted — placeholder wikis are surfaced via
+ * `?unresolved=true` (a wiki with no file on disk yet has type='wiki' and
+ * source_hash IS NULL). The error message points callers at that.
  */
 export function parseEntityTypes(raw: string | undefined): EntityType[] | undefined {
   if (!raw) return undefined;
@@ -321,11 +352,20 @@ export function parseEntityTypes(raw: string | undefined): EntityType[] | undefi
   for (const part of raw.split(",")) {
     const t = part.trim();
     if (!t) continue;
-    if (t !== "wiki" && t !== "file" && t !== "stub") {
+    if (t === "stub") {
       throw new ApiError(
         400,
         "validation_error",
-        `Invalid entity type "${t}": must be one of wiki, file, stub`,
+        `Entity type "stub" was removed in 006-collapse-stubs. ` +
+          `Placeholders are now wikis with no file on disk; use ` +
+          `?unresolved=true (optionally combined with type=wiki).`,
+      );
+    }
+    if (t !== "wiki" && t !== "file") {
+      throw new ApiError(
+        400,
+        "validation_error",
+        `Invalid entity type "${t}": must be one of wiki, file`,
       );
     }
     out.push(t);

@@ -16,21 +16,28 @@ export const entitiesRouter = new Hono<AppBindings>();
  *
  * Generic entity listing with type, frontmatter, link-count, recency,
  * and edit-attribution filters. Powers the agent runtime's
- * `list_entities` tool and any UI that wants a unified view across
- * wikis, source files, and stubs.
+ * `list_entities` tool and any UI that wants a unified view across wikis
+ * (realized and placeholder) and source files.
+ *
+ * A "placeholder" is a wiki with no file on disk yet — type='wiki' with
+ * source_hash IS NULL, surfaced via the `unresolved` field. Each row
+ * carries `unresolved: boolean`; `?unresolved=true|false` filters on it.
  *
  * Query params (all optional unless noted):
  *
  *   space_id                    — restrict to a single space
- *   type                        — comma-separated; "wiki", "file", "stub"
- *                                 (omit = all types)
+ *   type                        — comma-separated; "wiki" or "file"
+ *                                 (omit = all types). Placeholder wikis
+ *                                 are surfaced via `unresolved`, not type.
  *   subject_type                — frontmatter `subject_type`
  *   status                      — frontmatter `status`
  *   label_contains              — case-insensitive substring on label
  *   inbound_min, inbound_max    — bound the inbound link count
  *   outbound_min, outbound_max  — bound the outbound link count
+ *   unresolved                  — "true"/"false"; filter on placeholder
+ *                                 status of the row itself
  *   has_unresolved_outbound     — "true"/"false"; entities with at least
- *                                 one outbound edge to a stub
+ *                                 one outbound edge to a placeholder
  *   updated_since               — ISO timestamp; updated at-or-after
  *   edited_by_role              — last-edit `by_role` (joins
  *                                 entity_latest_edit view)
@@ -59,6 +66,7 @@ entitiesRouter.get("/", async (c) => {
       c.req.query("has_unresolved_outbound"),
       "has_unresolved_outbound",
     ),
+    unresolved: parseBoolQuery(c.req.query("unresolved"), "unresolved"),
     updated_since: c.req.query("updated_since"),
     edited_by_role: c.req.query("edited_by_role"),
     sort: c.req.query("sort"),
@@ -73,9 +81,10 @@ entitiesRouter.get("/", async (c) => {
 /**
  * GET /entities/:id
  *
- * Properties + relationships for a single entity (any type — wiki, file,
- * stub). Pass `?include=content` to read the file body from disk
- * (skipped when source_path is missing or unreadable, e.g. for stubs).
+ * Properties + relationships for a single entity (wiki or file). Pass
+ * `?include=content` to read the file body from disk (skipped when
+ * source_path is missing or unreadable, e.g. for placeholder wikis with
+ * no file yet).
  */
 entitiesRouter.get("/:id", async (c) => {
   const id = c.req.param("id");

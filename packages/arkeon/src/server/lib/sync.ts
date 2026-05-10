@@ -166,15 +166,16 @@ async function syncWikiFile(
 
   const result = await withTransaction(async (tx) => {
     if (existing) {
-      // Update existing entity. Set type='wiki' too: the existing row may
-      // be a stub created from a [[wikilink]] in another wiki, and writing
-      // a real wiki at this path upgrades it in place. The entity id is
-      // preserved so any inbound relationships (the wikilinks that made
-      // the stub) still resolve to this row.
+      // Update existing entity. The row may have been a placeholder wiki
+      // (source_hash IS NULL) created from a [[wikilink]] in another
+      // wiki; writing a real file at this path upgrades it in place. The
+      // entity id is preserved so any inbound relationships (the
+      // wikilinks that made the placeholder) still resolve to this row.
+      // type stays 'wiki' on both sides — appearance of the file on disk
+      // is what flips the row from placeholder to fully-realized.
       await tx`
         UPDATE entities
-        SET type = 'wiki',
-            label = ${label},
+        SET label = ${label},
             source_hash = ${hash},
             properties = ${JSON.stringify(storedProps)},
             updated_at = datetime('now')
@@ -189,7 +190,8 @@ async function syncWikiFile(
     }
 
     // Resolve markdown links + [[wikilinks]] → relationship edges. Wikilinks
-    // create stub entities on miss; standard markdown links must resolve.
+    // create placeholder wikis on miss (source_hash IS NULL, no file on
+    // disk yet); standard markdown links must resolve.
     const { resolved: linksResolved, dangling: linksDangling } =
       await rebuildRelationships(tx, space, relativePath, entityId, parsed.body);
 
@@ -363,9 +365,9 @@ async function syncSourceFile(
 
 /**
  * Remove an entity and its relationships by source_path. Used when a file
- * is deleted from disk. Runs the orphaned-stub GC after the cascade so
- * stubs that were only kept alive by inbound links from the deleted wiki
- * disappear too.
+ * is deleted from disk. Runs the orphaned-placeholder GC after the cascade
+ * so placeholders that were only kept alive by inbound links from the
+ * deleted wiki disappear too.
  */
 export async function removeByPath(spaceId: string, relativePath: string): Promise<string | null> {
   return withTransaction(async (tx) => {
@@ -375,7 +377,7 @@ export async function removeByPath(spaceId: string, relativePath: string): Promi
       RETURNING id
     `;
     if (rows.length === 0) return null;
-    await gcOrphanedStubs(tx, spaceId);
+    await gcOrphanedPlaceholders(tx, spaceId);
     return rows[0].id as string;
   });
 }
@@ -387,17 +389,17 @@ export async function removeByPath(spaceId: string, relativePath: string): Promi
  *
  *   - Standard `[text](path.md)` MUST resolve to an existing entity. If
  *     the target path doesn't exist, the relationship is dropped and a
- *     warning is logged. We do not auto-create stubs for standard links —
- *     they're treated as typos rather than deliberate placeholders, since
- *     the agent can use `[[Label]]` syntax for explicit "should-exist" intent.
+ *     warning is logged. We do not auto-create placeholders for standard
+ *     links — they're treated as typos rather than deliberate "should
+ *     exist" markers, since the agent can use `[[Label]]` syntax for that.
  *
  *   - `[[Label]]` and `[[Label|subject_type]]` always produce an edge. The
  *     target path is computed by `wikiPathFor()`; if no entity is at that
- *     path, a `type='stub'` entity is inserted there. Stubs created this
- *     way live until nothing points to them — see `gcOrphanedStubs()`,
- *     which runs at the end of this function.
+ *     path, a placeholder wiki (type='wiki', source_hash=NULL) is inserted
+ *     there. Placeholders live until nothing points to them — see
+ *     `gcOrphanedPlaceholders()`, which runs at the end of this function.
  *
- *   - When a wikilink resolves to an existing stub, the stub's label is
+ *   - When a wikilink resolves to an existing placeholder, its label is
  *     overwritten with the most recent link text (last-writer-wins). The
  *     inbound relationships still carry their own `link_text` so the
  *     pre-overwrite phrasings aren't lost — they're just not the canonical
@@ -409,12 +411,12 @@ async function rebuildRelationships(
   fromPath: string,
   sourceEntityId: string,
   body: string,
-): Promise<{ resolved: number; dangling: number; stubsCreated: number }> {
+): Promise<{ resolved: number; dangling: number; placeholdersCreated: number }> {
   await tx`DELETE FROM relationships WHERE source_id = ${sourceEntityId}`;
 
   let resolved = 0;
   let dangling = 0;
-  let stubsCreated = 0;
+  let placeholdersCreated = 0;
 
   // Standard markdown links — resolve or warn-and-drop.
   const stdLinks = extractMarkdownLinks(body);
@@ -436,27 +438,30 @@ async function rebuildRelationships(
     } else {
       console.warn(
         `[sync] dangling link in ${fromPath}: [${link.text}](${link.path}) → ${targetPath} not found. ` +
-          `Use [[${link.text}]] if you intend to create a stub for it.`,
+          `Use [[${link.text}]] if you intend to leave a placeholder for it.`,
       );
       dangling++;
     }
   }
 
-  // [[wikilinks]] — resolve or create stub.
+  // [[wikilinks]] — resolve or create placeholder. A placeholder is a
+  // wiki row with source_hash=NULL (no file on disk yet); when a real
+  // file is later written at the same path, syncWikiFile upgrades the
+  // row in place, preserving the id so inbound edges survive.
   const wikilinks = extractWikiLinks(body);
   for (const wl of wikilinks) {
     const targetPath = wikiPathFor(wl.subject_type ?? "concept", wl.label);
     const found = await tx`
-      SELECT id, type FROM entities
+      SELECT id, source_hash FROM entities
       WHERE space_id = ${space.id} AND source_path = ${targetPath}
     `;
 
     let targetId: string;
     if (found.length > 0) {
       targetId = found[0].id as string;
-      if (found[0].type === "stub") {
-        // Last-writer-wins for stub label. Real entities (type='wiki' or
-        // 'file') are not touched — their label is set by their own
+      if (found[0].source_hash === null) {
+        // Last-writer-wins for placeholder label. Realized wikis (file
+        // on disk) are not touched — their label is set by their own
         // frontmatter, not by what other wikis call them.
         await tx`
           UPDATE entities
@@ -470,9 +475,9 @@ async function rebuildRelationships(
         INSERT INTO entities
           (id, space_id, type, label, source_path, source_hash, properties)
         VALUES
-          (${targetId}, ${space.id}, 'stub', ${wl.label}, ${targetPath}, NULL, '{}')
+          (${targetId}, ${space.id}, 'wiki', ${wl.label}, ${targetPath}, NULL, '{}')
       `;
-      stubsCreated++;
+      placeholdersCreated++;
     }
 
     // Preserve the original `[[Label|type]]` form in `link_path` so
@@ -491,28 +496,31 @@ async function rebuildRelationships(
     resolved++;
   }
 
-  await gcOrphanedStubs(tx, space.id);
+  await gcOrphanedPlaceholders(tx, space.id);
 
-  return { resolved, dangling, stubsCreated };
+  return { resolved, dangling, placeholdersCreated };
 }
 
 /**
- * Delete every stub entity in this space whose inbound relationship count
- * has dropped to zero. Runs at the end of `rebuildRelationships()` and
- * after `removeByPath()` deletes — both moments where a relationship row
- * may have just disappeared.
+ * Delete every placeholder wiki in this space (type='wiki' with
+ * source_hash IS NULL — i.e. no file on disk yet) whose inbound
+ * relationship count has dropped to zero. Runs at the end of
+ * `rebuildRelationships()` and after `removeByPath()` deletes — both
+ * moments where a relationship row may have just disappeared.
  */
-async function gcOrphanedStubs(tx: SqlClient, spaceId: string): Promise<void> {
+async function gcOrphanedPlaceholders(tx: SqlClient, spaceId: string): Promise<void> {
   // NOT EXISTS with the correlated lookup against `relationships.target_id`
   // is index-driven via `idx_relationships_target` and probes once per
-  // stub row, bounded by the stub count in this space (which the partial
-  // index `idx_entities_stubs` narrows further). The earlier
-  // `id NOT IN (SELECT DISTINCT target_id FROM relationships)` form forced
-  // a scan of every relationship row across every space on each pass.
+  // placeholder row, bounded by the placeholder count in this space
+  // (which the partial index `idx_entities_unresolved` narrows further).
+  // The earlier `id NOT IN (SELECT DISTINCT target_id FROM relationships)`
+  // form forced a scan of every relationship row across every space on
+  // each pass.
   await tx`
     DELETE FROM entities
     WHERE space_id = ${spaceId}
-      AND type = 'stub'
+      AND type = 'wiki'
+      AND source_hash IS NULL
       AND NOT EXISTS (
         SELECT 1 FROM relationships r WHERE r.target_id = entities.id
       )
@@ -523,7 +531,7 @@ async function gcOrphanedStubs(tx: SqlClient, spaceId: string): Promise<void> {
  * Resolve links for a single wiki entity. Called during the second pass
  * of syncDirectory() after all entities have been created — this catches
  * standard markdown links whose target was synced after the source. With
- * `[[wikilinks]]`, every link resolves on first pass (stub-or-real), so
+ * `[[wikilinks]]`, every link resolves on first pass (placeholder-or-real), so
  * pass two is functionally a re-run for cross-reference catch-up.
  */
 async function resolveLinks(space: Space, relativePath: string): Promise<{ resolved: number; dangling: number }> {

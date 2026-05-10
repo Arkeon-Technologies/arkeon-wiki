@@ -15,9 +15,11 @@ import { createSql } from "../../src/server/lib/sql.js";
 export interface EntityRow {
   id: string;
   space_id: string;
-  type: "wiki" | "file" | "stub";
+  type: "wiki" | "file";
   label: string;
   source_path: string;
+  /** True when the row is a placeholder wiki (no file on disk yet). */
+  unresolved: boolean;
 }
 
 /**
@@ -30,11 +32,21 @@ export async function getEntityBySourcePath(
 ): Promise<EntityRow | null> {
   const sql = createSql();
   const rows = await sql`
-    SELECT id, space_id, type, label, source_path
+    SELECT id, space_id, type, label, source_path,
+           (type = 'wiki' AND source_hash IS NULL) AS unresolved
     FROM entities
     WHERE space_id = ${spaceId} AND source_path = ${sourcePath}
   `;
-  return (rows[0] as EntityRow | undefined) ?? null;
+  if (rows.length === 0) return null;
+  const row = rows[0] as Record<string, unknown>;
+  return {
+    id: row.id as string,
+    space_id: row.space_id as string,
+    type: row.type as "wiki" | "file",
+    label: row.label as string,
+    source_path: row.source_path as string,
+    unresolved: Boolean(row.unresolved),
+  };
 }
 
 /** Poll until an entity with the given source_path exists, or timeout. */
@@ -61,7 +73,7 @@ export async function waitForEntityBySourcePath(
 /** Count rows in the entities table (filterable by type / space). */
 export async function countEntities(opts: {
   spaceId?: string;
-  type?: "wiki" | "file" | "stub";
+  type?: "wiki" | "file";
 } = {}): Promise<number> {
   const sql = createSql();
   const conditions: string[] = [];
