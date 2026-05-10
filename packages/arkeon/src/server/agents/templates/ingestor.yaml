@@ -196,8 +196,8 @@ phases:
              aggregate per file, so files matching multiple variants
              rank naturally higher.
            - `type='file'` restricts hits to raw source files (skipping
-             wikis and stubs) — useful when you want to find evidence
-             in the corpus without drowning in your own prior writes.
+             wikis) — useful when you want to find evidence in the
+             corpus without drowning in your own prior writes.
              `type='wiki'` is the inverse.
 
       4. When you've covered every subject worth a wiki, write a short

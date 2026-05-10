@@ -752,6 +752,20 @@ describe("GET /search?mode=keyword — type filter (#100)", () => {
     expect(data.error?.code).toBe("validation_error");
   });
 
+  it("rejects type=stub with the #104 migration message", async () => {
+    // PR #104 collapsed the `stub` type into placeholder wikis
+    // (type='wiki', source_hash IS NULL) surfaced via `?unresolved=true`.
+    // Callers that still pass type=stub get a 400 with a message
+    // pointing at the new mechanism, not a generic "invalid type".
+    // Pin the migration shape so a regression in the error doesn't
+    // strand future callers (LLM agents included).
+    const data = await api(
+      `/search?space_id=${spaceId}&q=Turing&mode=keyword&type=stub`,
+    );
+    expect(data.error?.code).toBe("validation_error");
+    expect(data.error?.message).toMatch(/unresolved/i);
+  });
+
   it("type filter does not inflate unmatched_files diagnostic", async () => {
     // Files filtered out by `type` are explicitly excluded — they're
     // not the "ripgrep matched but no entity row" condition the

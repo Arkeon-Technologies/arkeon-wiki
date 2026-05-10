@@ -152,11 +152,11 @@ const searchTool = defineTool("search", {
     "or `mode=vector` to scope to one. Vector results carry similarity " +
     "scores in [-1, 1] (higher = more similar); keyword hits are " +
     "ranked by match count with line snippets.\n" +
-    "Pass `type` (comma-separated: 'wiki', 'file', 'stub') to restrict " +
-    "keyword hits to a subset of entity types — e.g. `type='file'` to " +
-    "focus on raw sources without drowning in wiki hits, or `type='wiki'` " +
-    "to skip your own prior writes. Vector hits are always wikis (the " +
-    "filter is a no-op for them).\n" +
+    "Pass `type` (comma-separated: 'wiki', 'file') to restrict keyword " +
+    "hits to a subset of entity types — e.g. `type='file'` to focus on " +
+    "raw sources without drowning in wiki hits, or `type='wiki'` to " +
+    "skip raw sources. Vector hits are always wikis (the filter is a " +
+    "no-op for them).\n" +
     "Multi-space roles can pass `space` to scope to one space, or omit " +
     "it to search every allowed space (each hit carries `space_id` and " +
     "`space` so you can tell them apart).",
@@ -176,9 +176,9 @@ const searchTool = defineTool("search", {
       .string()
       .optional()
       .describe(
-        "Comma-separated entity types: any of 'wiki', 'file', 'stub'. " +
-          "Omit for all types. Affects keyword hits only — vector " +
-          "results are always wikis.",
+        "Comma-separated entity types: any of 'wiki', 'file'. Omit for " +
+          "all types. Affects keyword hits only — vector results are " +
+          "always wikis.",
       ),
     mode: z
       .enum(["keyword", "vector", "both"])

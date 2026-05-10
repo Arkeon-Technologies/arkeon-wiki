@@ -56,8 +56,9 @@ interface SearchResponse {
 // in any `q` makes the whole batch case-sensitive.
 //
 // `type` is a comma-separated list of entity types to keep in keyword
-// hits — any of `wiki`, `file`, `stub`. Omit for no filter. Vector
-// hits are always wikis.
+// hits — any of `wiki`, `file`. Omit for no filter. Vector hits are
+// always wikis. Placeholder wikis (post-#104, no file on disk yet) are
+// `type='wiki'`; filter them via `/entities?unresolved=true`.
 searchRouter.get("/", async (c) => {
   const queries = c.req.queries("q");
   if (!queries || queries.length === 0) {

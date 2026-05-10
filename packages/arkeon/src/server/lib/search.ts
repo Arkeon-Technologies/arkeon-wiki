@@ -26,7 +26,6 @@ import { join } from "node:path";
 import { rgPath } from "@vscode/ripgrep";
 
 import { createSql } from "./sql.js";
-import type { EntityType } from "./entities.js";
 import { getEmbedder } from "./embedder/index.js";
 import type { EntityType } from "./entities.js";
 import { parseFrontmatter } from "./frontmatter.js";
@@ -56,12 +55,15 @@ export interface KeywordSearchOptions {
    *  runtime to fan out across a role's allowed-space scope. */
   spaceIds?: string[];
   /** Restrict hits to entities of the given type(s). Any combination
-   *  of `wiki`, `file`, `stub`. Omit/empty = no filter. Ripgrep still
-   *  scans every indexed file; the filter applies post-fetch on the
+   *  of `wiki`, `file`. Omit/empty = no filter. Ripgrep still scans
+   *  every indexed file; the filter applies post-fetch on the
    *  entity-join rows so the `unmatched_files` diagnostic counter
    *  retains its "no entity at all" meaning instead of conflating
    *  with "filtered out by type". Useful for source-only sweeps
-   *  (`['file']`) or wiki-only sweeps (`['wiki']`). */
+   *  (`['file']`) or wiki-only sweeps (`['wiki']`). Placeholder wikis
+   *  (`type='wiki'` with `source_hash IS NULL`, post-#104) are not
+   *  separable here — use `/entities?unresolved=true` if you want
+   *  those filtered specifically. */
   types?: EntityType[];
   limit?: number;
   maxSnippetsPerFile?: number;
