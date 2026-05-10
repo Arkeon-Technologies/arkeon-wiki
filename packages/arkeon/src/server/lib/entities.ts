@@ -20,8 +20,13 @@ export type EntityType = "wiki" | "file" | "stub";
 export type EntitySort = "updated_at" | "label" | "inbound" | "outbound";
 
 export interface ListEntitiesOptions {
-  /** Restrict to a single space. Omitted → all spaces. */
+  /** Restrict to a single space. Omitted → all spaces.
+   *  If `space_ids` is also set, `space_ids` wins. */
   space_id?: string;
+  /** Restrict to a specific set of spaces. Used by the agent runtime
+   *  to fan out across a role's allowed-space scope. Empty/undefined
+   *  = any space. */
+  space_ids?: string[];
   /** Restrict to one or more entity types. Empty/undefined = any. */
   types?: EntityType[];
   /** Filter on `properties.subject_type` (frontmatter). */
@@ -130,7 +135,11 @@ export async function listEntities(
   const innerConditions: string[] = [];
   const innerParams: unknown[] = [];
 
-  if (opts.space_id) {
+  if (opts.space_ids && opts.space_ids.length > 0) {
+    const placeholders = opts.space_ids.map(() => "?").join(",");
+    innerConditions.push(`e.space_id IN (${placeholders})`);
+    innerParams.push(...opts.space_ids);
+  } else if (opts.space_id) {
     innerConditions.push("e.space_id = ?");
     innerParams.push(opts.space_id);
   }

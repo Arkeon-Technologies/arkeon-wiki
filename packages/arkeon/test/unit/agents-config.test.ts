@@ -99,6 +99,38 @@ describe("AGENT_CONFIG_SCHEMA", () => {
     });
     expect(parsed.roles?.ingestor?.phases?.[0]?.tools).toEqual(["read_file", "search"]);
   });
+
+  it("accepts a spaces array (names, ids, self, *)", () => {
+    const parsed = AGENT_CONFIG_SCHEMA.parse({
+      roles: {
+        bridge: {
+          spaces: ["self", "data-mining", "01ABC123XYZ", "*"],
+        },
+      },
+    });
+    expect(parsed.roles?.bridge?.spaces).toEqual([
+      "self",
+      "data-mining",
+      "01ABC123XYZ",
+      "*",
+    ]);
+  });
+
+  it("rejects an empty-string entry in spaces", () => {
+    expect(() =>
+      AGENT_CONFIG_SCHEMA.parse({
+        roles: { bridge: { spaces: [""] } },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects an empty `spaces: []` array (omit the field for default)", () => {
+    expect(() =>
+      AGENT_CONFIG_SCHEMA.parse({
+        roles: { bridge: { spaces: [] } },
+      }),
+    ).toThrow();
+  });
 });
 
 // ── mergeConfigs ─────────────────────────────────────────────────

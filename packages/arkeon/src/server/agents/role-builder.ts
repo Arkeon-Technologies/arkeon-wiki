@@ -160,11 +160,19 @@ export function buildAgentRole(name: string, config: AgentConfig): AgentRole {
     }
   }
 
+  // Space scope: most-specific-wins (no field-level merge). Either
+  // comes from the role, the bundled template, the operator
+  // defaults, or falls through to ["self"]. Resolution to concrete
+  // Space[] happens at run-start in the runtime, not here.
+  const spaceScope =
+    fromConfig.spaces ?? builtin.spaces ?? defaults.spaces ?? ["self"];
+
   return {
     name,
     model,
     tools,
     maxSteps,
+    spaceScope,
     buildPhases: async (input: AgentInput) => ({
       system: fillTemplate(system, promptVars(name, input)),
       phases: resolvedPhases.map(

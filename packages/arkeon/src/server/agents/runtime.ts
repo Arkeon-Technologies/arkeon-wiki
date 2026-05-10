@@ -39,6 +39,7 @@ import { createSql } from "../lib/sql.js";
 import { type Space } from "../lib/sync.js";
 
 import { resolveModel, type ModelConfig } from "./model.js";
+import { resolveAllowedSpaces } from "./space-scope.js";
 import { getTracer, truncateForTrace, type Tracer } from "./tracer.js";
 
 // ── Types ─────────────────────────────────────────────────────────
@@ -55,6 +56,14 @@ export interface ToolEditOpts {
 
 export interface AgentContext {
   space: Space;
+  /** Every space this role is allowed to read from, including
+   *  `space` itself (always at index 0). Single-space agents have
+   *  `allowedSpaces.length === 1`; cross-space roles see a longer
+   *  list. Resolved from `RoleConfig.spaces` at run-start. Tools
+   *  consult this for `space` argument validation and for fan-out
+   *  behavior when a multi-space agent calls without a `space`
+   *  filter. Read-only across spaces — writes always target `space`. */
+  allowedSpaces: Space[];
   role: string;
   /** Stable identifier for this run, threaded through every trace event
    *  emitted by tools, edits, and the runtime itself. Random UUID per
@@ -124,6 +133,11 @@ export interface AgentRole {
   tools: string[];
   /** Default 10. Caps the tool-use loop so a runaway agent can't churn forever. */
   maxSteps?: number;
+  /** Configured space scope for this role — names, ids, "self", "*".
+   *  Resolved against the live `spaces` table at run-start (not at
+   *  buildAgentRole time, since spaces can be registered after the role
+   *  is built). Defaults to `["self"]` when omitted in YAML. */
+  spaceScope: string[];
   /** Build the system prompt and the ordered list of phases for this
    *  input. Single-phase roles return a 1-element phases array. */
   buildPhases(input: AgentInput): Promise<{ system: string; phases: AgentPhase[] }>;
@@ -159,7 +173,13 @@ export async function runAgent(
 ): Promise<AgentRunResult> {
   return withPathLock(role.concurrencyKey(input), async () => {
     const idem = role.idempotencyKey(input);
-    const ctx = makeContext(input.space, role.name);
+    // Resolve allowed-space scope before the context is built so the
+    // first thing tools see is a consistent view. Resolution errors
+    // (unknown name, ambiguous name, "*" with a missing watch_dir
+    // somewhere) surface here as a hard fail — the agent never ran,
+    // and the operator gets a clean traceback in the daemon log.
+    const allowedSpaces = await resolveAllowedSpaces(role.spaceScope, input.space);
+    const ctx = makeContext(input.space, role.name, { allowedSpaces });
     const runStartedAt = Date.now();
 
     if (await alreadyProcessed(role.name, idem)) {
@@ -172,10 +192,32 @@ export async function runAgent(
       return { skipped: true, reason: "already_processed", edits: [], text: "", steps: 0 };
     }
 
-    const { system, phases } = await role.buildPhases(input);
+    const { system: rawSystem, phases } = await role.buildPhases(input);
     if (phases.length === 0) {
       throw new Error(`Role '${role.name}': buildPhases returned no phases`);
     }
+
+    // Multi-space roles get an explicit list of their allowed spaces
+    // appended to the system prompt so the LLM knows what to pass for
+    // `space` arguments. The read_file caveat leads the section because
+    // it's the one tool whose default behaviour changes on multi-space
+    // roles (every other tool fans out; read_file errors). Burying the
+    // exception in a parenthetical caused unnecessary tool retries when
+    // the model defaulted to fan-out semantics for read_file too.
+    // Single-space roles see the original prompt verbatim — the legacy
+    // contract.
+    const system =
+      allowedSpaces.length > 1
+        ? `${rawSystem}\n\n--- Allowed spaces (read-only) ---\n` +
+          `read_file requires an explicit \`space\` argument on this role. ` +
+          `search and list_entities default to fanning out across every space below; ` +
+          `pass \`space\` (name or id) to scope to one. Edits target the triggering space only.\n\n` +
+          allowedSpaces
+            .map((s, i) =>
+              `${i + 1}. ${s.name} (id: ${s.id})${s.id === input.space.id ? " — triggering space (writes go here)" : ""}`,
+            )
+            .join("\n")
+        : rawSystem;
 
     ctx.trace("run.start", {
       space_name: input.space.name,
@@ -185,6 +227,7 @@ export async function runAgent(
       trigger_entity_id: input.triggerEntityId,
       phases: phases.map((p) => p.name),
       system_chars: system.length,
+      allowed_space_ids: allowedSpaces.map((s) => s.id),
     });
 
     // Each phase resolves to its own model + tools. We keep the system
@@ -320,13 +363,17 @@ function mergeUsage(
 export function makeContext(
   space: Space,
   role: string,
-  options: { runId?: string; tracer?: Tracer } = {},
+  options: { runId?: string; tracer?: Tracer; allowedSpaces?: Space[] } = {},
 ): AgentContext {
   const edits: ApplyEditResult[] = [];
   const runId = options.runId ?? randomUUID();
   const tracer = options.tracer ?? getTracer();
+  // Default to single-space (the triggering space). Tests and ad-hoc
+  // contexts that don't go through runAgent get today's behavior.
+  const allowedSpaces = options.allowedSpaces ?? [space];
   const ctx: AgentContext = {
     space,
+    allowedSpaces,
     role,
     runId,
     currentPhase: null,
