@@ -170,16 +170,19 @@ describe("read_file with multi-space scope", () => {
     ).rejects.toThrow(/space.*required/i);
   });
 
-  it("rejects a `space` outside the allowed set", async () => {
-    const ctx = makeContext(spaceA, "ingestor", { allowedSpaces: [spaceA] });
+  it("rejects a `space` outside the allowed set on a multi-space role", async () => {
+    // Multi-space roles stay strict — passing an out-of-set space
+    // should error so the agent doesn't silently target the wrong
+    // space when it has a real choice to make.
+    const ctx = makeContext(spaceA, "bridge", { allowedSpaces: [spaceA, spaceB] });
     const tool = ALL_TOOLS.read_file(ctx) as ExecutableTool;
     await expect(
-      tool.execute({ path: "wiki/person/lovelace.md", space: "scope-b" }),
+      tool.execute({ path: "wiki/person/turing.md", space: "scope-c" }),
     ).rejects.toThrow(/not in the allowed set/);
   });
 
   it("works without `space` for a single-space role (no behaviour change)", async () => {
-    const ctx = makeContext(spaceA, "ingestor"); // defaults to [spaceA]
+    const ctx = makeContext(spaceA, "writer"); // defaults to [spaceA]
     const tool = ALL_TOOLS.read_file(ctx) as ExecutableTool;
     const result = (await tool.execute({ path: "wiki/person/turing.md" })) as {
       space_id: string;
@@ -187,6 +190,25 @@ describe("read_file with multi-space scope", () => {
     };
     expect(result.space_id).toBe(spaceA.id);
     expect(result.body).toContain("space A");
+  });
+
+  it("single-space role accepts any `space` value (silent leniency)", async () => {
+    // The model occasionally invents `space` values like "default" or
+    // copies error-message text verbatim into the next call. For a
+    // role with only one allowed space, treat any value as the only
+    // choice rather than burning a step on an error the model has to
+    // recover from.
+    const ctx = makeContext(spaceA, "writer"); // single-space
+    const tool = ALL_TOOLS.read_file(ctx) as ExecutableTool;
+
+    for (const garbage of ["default", "scope-b", "anything-else", "scope-a (01ABC)"]) {
+      const result = (await tool.execute({
+        path: "wiki/person/turing.md",
+        space: garbage,
+      })) as { space_id: string; body: string };
+      expect(result.space_id).toBe(spaceA.id);
+      expect(result.body).toContain("space A");
+    }
   });
 });
 
@@ -264,11 +286,28 @@ describe("list_entities fan-out", () => {
     }
   });
 
-  it("rejects a `space` outside the allowed set", async () => {
-    const ctx = makeContext(spaceA, "ingestor", { allowedSpaces: [spaceA] });
+  it("rejects a `space` outside the allowed set on a multi-space role", async () => {
+    const ctx = makeContext(spaceA, "bridge", { allowedSpaces: [spaceA, spaceB] });
     const tool = ALL_TOOLS.list_entities(ctx) as ExecutableTool;
     await expect(
-      tool.execute({ type: "wiki", space: "scope-b" }),
+      tool.execute({ type: "wiki", space: "scope-c" }),
     ).rejects.toThrow(/not in the allowed set/);
+  });
+
+  it("single-space role accepts any `space` value (silent leniency)", async () => {
+    // Same leniency as read_file: a fan-out tool collapses garbage
+    // `space` values to the only allowed space when there's no real
+    // choice. Multi-space roles stay strict (covered above).
+    const ctx = makeContext(spaceA, "writer"); // single-space
+    const tool = ALL_TOOLS.list_entities(ctx) as ExecutableTool;
+    const result = (await tool.execute({
+      type: "wiki",
+      space: "default", // garbage; should fall through to spaceA
+    })) as { entities: Array<{ space_id: string }> };
+
+    expect(result.entities.length).toBeGreaterThan(0);
+    for (const e of result.entities) {
+      expect(e.space_id).toBe(spaceA.id);
+    }
   });
 });

@@ -28,8 +28,10 @@ CREATE INDEX IF NOT EXISTS idx_entity_embeddings_model
 
 -- Per-entity work queue for the embedder. Watcher writes here after
 -- syncWikiFile finishes; a per-process worker drains it asynchronously.
--- Lease pattern (started_at + 5min orphan reclaim) mirrors agent_queue
--- so the same crash-safety reasoning applies.
+-- Lease pattern (started_at + 5min orphan reclaim) makes it crash-safe
+-- without distributed-locking infrastructure: if the daemon dies
+-- mid-embed, the row's started_at ages out and the next worker startup
+-- reclaims it.
 --
 -- UNIQUE(entity_id) coalesces rapid edits: if a wiki is saved 5 times
 -- before the first embedding run drains, the row is upserted (started_at

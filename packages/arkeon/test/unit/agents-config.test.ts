@@ -131,6 +131,29 @@ describe("AGENT_CONFIG_SCHEMA", () => {
       }),
     ).toThrow();
   });
+
+  it("accepts a valid 5-field cron expression", () => {
+    const parsed = AGENT_CONFIG_SCHEMA.parse({
+      roles: { writer: { cron: "*/15 * * * *" } },
+    });
+    expect(parsed.roles?.writer?.cron).toBe("*/15 * * * *");
+  });
+
+  it("rejects a malformed cron expression at config-load time", () => {
+    expect(() =>
+      AGENT_CONFIG_SCHEMA.parse({
+        roles: { writer: { cron: "not a cron" } },
+      }),
+    ).toThrow();
+  });
+
+  it("rejects an empty cron string", () => {
+    expect(() =>
+      AGENT_CONFIG_SCHEMA.parse({
+        roles: { writer: { cron: "" } },
+      }),
+    ).toThrow();
+  });
 });
 
 // ── mergeConfigs ─────────────────────────────────────────────────
@@ -225,6 +248,31 @@ describe("loadAgentConfig", () => {
     ).toThrow(/not valid YAML/);
   });
 
+  it("rejects the legacy `triggers:` field with a migration message", () => {
+    // Pre-cron, roles declared event-driven `triggers:` arrays. The
+    // cron rewrite drops the field; an operator's old agents.yaml
+    // hitting the new daemon should fail clearly with a pointer at
+    // what to do, not a generic Zod "unrecognized key" error.
+    mkdirSync(join(dir, ".arkeon"), { recursive: true });
+    writeFileSync(
+      join(dir, ".arkeon", "agents.yaml"),
+      [
+        "roles:",
+        "  writer:",
+        "    triggers:",
+        "      - on: file_changed",
+        "        path_under: ['**']",
+        "",
+      ].join("\n"),
+    );
+    expect(() =>
+      loadAgentConfig({
+        spaceDir: dir,
+        userGlobalPath: join(dir, "nope.yaml"),
+      }),
+    ).toThrow(/legacy 'triggers:'/);
+  });
+
   it("honors ARKEON_WIKI_HOME for the user-global agents.yaml path", () => {
     // Regression for the case the smoke test surfaced: a module-level
     // constant captured homedir() at import, so isolated installs that
@@ -270,7 +318,7 @@ describe("loadAgentConfig", () => {
 
 // ── buildAgentRole ───────────────────────────────────────────────
 
-describe("buildAgentRole — bundled ingestor template", () => {
+describe("buildAgentRole — bundled writer template", () => {
   beforeEach(() => {
     process.env.OPENAI_API_KEY = "sk-test";
   });
@@ -280,13 +328,13 @@ describe("buildAgentRole — bundled ingestor template", () => {
 
   it("builds a working AgentRole from just defaults", () => {
     const templates = loadBundledTemplates();
-    const role = buildAgentRole("ingestor", {
+    const role = buildAgentRole("writer", {
       defaults: { provider: "openai", model: "gpt-5-mini" },
     });
 
-    expect(role.name).toBe("ingestor");
-    expect(role.maxSteps).toBe(templates.ingestor.max_steps);
-    expect(role.tools).toEqual(templates.ingestor.tools);
+    expect(role.name).toBe("writer");
+    expect(role.maxSteps).toBe(templates.writer.max_steps);
+    expect(role.tools).toEqual(templates.writer.tools);
     expect(role.model).toEqual({
       provider: "openai",
       id: "gpt-5-mini",
@@ -294,13 +342,23 @@ describe("buildAgentRole — bundled ingestor template", () => {
     });
   });
 
+  it("ships with a cron expression on the bundled template", () => {
+    // The writer is the canonical cron-driven role. Operators override
+    // by supplying their own cron in agents.yaml; absence of a cron on
+    // the template would mean the role wouldn't auto-run on a fresh
+    // install, which would silently regress the default UX.
+    const templates = loadBundledTemplates();
+    expect(typeof templates.writer.cron).toBe("string");
+    expect(templates.writer.cron!.length).toBeGreaterThan(0);
+  });
+
   it("lets a role override the model and provider", () => {
     process.env.ANTHROPIC_API_KEY = "sk-ant-test";
     try {
-      const role = buildAgentRole("ingestor", {
+      const role = buildAgentRole("writer", {
         defaults: { provider: "openai", model: "gpt-5-mini" },
         roles: {
-          ingestor: { provider: "anthropic", model: "claude-sonnet-4-6" },
+          writer: { provider: "anthropic", model: "claude-sonnet-4-6" },
         },
       });
       expect(role.model.provider).toBe("anthropic");
@@ -311,51 +369,31 @@ describe("buildAgentRole — bundled ingestor template", () => {
   });
 
   it("layers space-level + role-level instructions onto template system", async () => {
-    const role = buildAgentRole("ingestor", {
+    const role = buildAgentRole("writer", {
       defaults: {
         provider: "openai",
         model: "gpt-5-mini",
         instructions: "Space-wide focus: climate science.",
       },
       roles: {
-        ingestor: { instructions: "Skip generic terms." },
+        writer: { instructions: "Skip generic terms." },
       },
     });
 
     const { system } = await role.buildPhases({
       space: { id: "s1", name: "n", watch_dir: "/tmp" },
-      triggerPath: "x.md",
-      triggerEntityId: "ent1",
     });
 
-    expect(system).toContain("ingestor");                    // template stays
+    expect(system).toContain("writer");                      // template stays
     expect(system).toContain("Space-wide focus: climate");   // defaults layer
     expect(system).toContain("Skip generic terms.");         // role layer
     expect(system).toContain("--- Operator instructions ---");
   });
 
-  it("fills {{trigger_path}} / {{trigger_entity_id}} into the phase prompt", async () => {
-    const role = buildAgentRole("ingestor", {
-      defaults: { provider: "openai", model: "gpt-5-mini" },
-    });
-    const { phases } = await role.buildPhases({
-      space: { id: "s1", name: "n", watch_dir: "/tmp" },
-      triggerPath: "sources/foo.md",
-      triggerEntityId: "01ENT",
-    });
-    // The first phase's prompt is the entry-point user message; it
-    // must surface the trigger path and entity id (the template's
-    // gather phase puts both at the top so the model can read_file
-    // the source).
-    const firstPrompt = phases[0]?.prompt ?? "";
-    expect(firstPrompt).toContain("sources/foo.md");
-    expect(firstPrompt).toContain("01ENT");
-  });
-
   it("throws when the required env var for an api key is missing", () => {
     delete process.env.OPENAI_API_KEY;
     expect(() =>
-      buildAgentRole("ingestor", {
+      buildAgentRole("writer", {
         defaults: { provider: "openai", model: "gpt-5-mini" },
       }),
     ).toThrow(/OPENAI_API_KEY/);
@@ -364,7 +402,7 @@ describe("buildAgentRole — bundled ingestor template", () => {
   it("respects a custom api_key_env name", () => {
     process.env.MY_CUSTOM_KEY = "sk-custom";
     try {
-      const role = buildAgentRole("ingestor", {
+      const role = buildAgentRole("writer", {
         defaults: {
           provider: "openai",
           model: "gpt-5-mini",
@@ -379,7 +417,7 @@ describe("buildAgentRole — bundled ingestor template", () => {
 
   it("openai-compatible can run without an api key (local servers)", () => {
     delete process.env.OPENAI_API_KEY;
-    const role = buildAgentRole("ingestor", {
+    const role = buildAgentRole("writer", {
       defaults: {
         provider: "openai-compatible",
         model: "llama3.1:70b",
@@ -391,45 +429,83 @@ describe("buildAgentRole — bundled ingestor template", () => {
 
   it("openai-compatible requires base_url", () => {
     expect(() =>
-      buildAgentRole("ingestor", {
+      buildAgentRole("writer", {
         defaults: { provider: "openai-compatible", model: "x" },
       }),
     ).toThrow(/base_url/);
   });
 
-  it("template ingestor resolves to two phases (gather + write)", async () => {
-    const role = buildAgentRole("ingestor", {
+  it("synthesizes a single phase from `user` when `phases` is unset", async () => {
+    const role = buildAgentRole("custom-single", {
       defaults: { provider: "openai", model: "gpt-5-mini" },
+      roles: {
+        "custom-single": {
+          tools: ["read_file"],
+          system: "you are a single-phase agent",
+          user: "do thing for {{space_name}}",
+        },
+      },
     });
     const { phases } = await role.buildPhases({
-      space: { id: "s1", name: "n", watch_dir: "/tmp" },
-      triggerPath: "src/x.txt",
-      triggerEntityId: "01ENT",
+      space: { id: "s1", name: "demo-space", watch_dir: "/tmp" },
+    });
+    expect(phases).toHaveLength(1);
+    expect(phases[0].prompt).toContain("demo-space");
+  });
+});
+
+describe("buildAgentRole — multi-phase machinery (custom roles)", () => {
+  // The bundled `writer` is single-phase. The phase machinery itself —
+  // multi-phase walks, per-phase model overrides, phase_models layering,
+  // unknown-name warnings — is exercised here against custom-defined
+  // roles so the runtime contract stays covered without depending on
+  // any specific template's phase shape.
+  beforeEach(() => {
+    process.env.OPENAI_API_KEY = "sk-test";
+  });
+  afterEach(() => {
+    delete process.env.OPENAI_API_KEY;
+  });
+
+  function customMultiPhaseConfig(extra: Partial<AgentConfig["roles"][string]> = {}): AgentConfig {
+    return {
+      defaults: { provider: "openai", model: "gpt-5-mini" },
+      roles: {
+        "two-phase": {
+          system: "you are a two-phase agent",
+          tools: ["read_file", "edit_file"],
+          phases: [
+            { name: "gather", prompt: "phase 1: gather state for {{space_name}}" },
+            { name: "write", prompt: "phase 2: write" },
+          ],
+          ...extra,
+        },
+      },
+    };
+  }
+
+  it("walks every phase in order, preserving names and prompts", async () => {
+    const role = buildAgentRole("two-phase", customMultiPhaseConfig());
+    const { phases } = await role.buildPhases({
+      space: { id: "s1", name: "demo", watch_dir: "/tmp" },
     });
     expect(phases).toHaveLength(2);
     expect(phases[0].name).toBe("gather");
     expect(phases[1].name).toBe("write");
-    // Gather can't edit; write can.
-    expect(phases[0].tools).not.toContain("edit_file");
-    expect(phases[1].tools).toContain("edit_file");
-    // Trigger path is templated into the gather prompt only — phase 2
-    // doesn't repeat it (the conversation history carries it).
-    expect(phases[0].prompt).toContain("src/x.txt");
-    expect(phases[1].prompt).not.toContain("src/x.txt");
+    expect(phases[0].prompt).toContain("demo");
+    expect(phases[1].prompt).toBe("phase 2: write");
   });
 
   it("per-phase model override resolves to phase.model", async () => {
-    const role = buildAgentRole("ingestor", {
-      defaults: { provider: "openai", model: "gpt-5-mini" },
-      roles: {
-        ingestor: {
-          phases: [
-            { name: "gather", prompt: "g", model: "gpt-5-mini" },
-            { name: "write", prompt: "w", model: "gpt-5" },
-          ],
-        },
-      },
-    });
+    const role = buildAgentRole(
+      "two-phase",
+      customMultiPhaseConfig({
+        phases: [
+          { name: "gather", prompt: "g", model: "gpt-5-mini" },
+          { name: "write", prompt: "w", model: "gpt-5" },
+        ],
+      }),
+    );
     const { phases } = await role.buildPhases({
       space: { id: "s1", name: "n", watch_dir: "/tmp" },
     });
@@ -441,46 +517,33 @@ describe("buildAgentRole — bundled ingestor template", () => {
   });
 
   it("phase_models shorthand swaps per-phase model without restating prompts", async () => {
-    const role = buildAgentRole("ingestor", {
-      defaults: { provider: "openai", model: "gpt-5-mini" },
-      roles: {
-        ingestor: {
-          phase_models: { gather: "gpt-5.4-mini", write: "gpt-5.4" },
-        },
-      },
-    });
+    const role = buildAgentRole(
+      "two-phase",
+      customMultiPhaseConfig({
+        phase_models: { gather: "gpt-5.4-mini", write: "gpt-5.4" },
+      }),
+    );
     const { phases } = await role.buildPhases({
       space: { id: "s1", name: "n", watch_dir: "/tmp" },
-      triggerPath: "src/x.txt",
     });
-    // Two template phases, prompts unchanged from the template, models swapped.
-    expect(phases).toHaveLength(2);
-    expect(phases[0].name).toBe("gather");
-    expect(phases[1].name).toBe("write");
     expect(phases[0].model.id).toBe("gpt-5.4-mini");
     expect(phases[1].model.id).toBe("gpt-5.4");
-    // Prompts still come from the template (we didn't restate them).
-    expect(phases[0].prompt).toContain("src/x.txt");
-    expect(phases[1].tools).toContain("edit_file");
   });
 
   it("explicit phase.model beats phase_models lookup", async () => {
-    const role = buildAgentRole("ingestor", {
-      defaults: { provider: "openai", model: "gpt-5-mini" },
-      roles: {
-        ingestor: {
-          phase_models: { gather: "from-shorthand", write: "from-shorthand" },
-          phases: [
-            { name: "gather", prompt: "g", model: "from-explicit" },
-            { name: "write", prompt: "w" },
-          ],
-        },
-      },
-    });
+    const role = buildAgentRole(
+      "two-phase",
+      customMultiPhaseConfig({
+        phase_models: { gather: "from-shorthand", write: "from-shorthand" },
+        phases: [
+          { name: "gather", prompt: "g", model: "from-explicit" },
+          { name: "write", prompt: "w" },
+        ],
+      }),
+    );
     const { phases } = await role.buildPhases({
       space: { id: "s1", name: "n", watch_dir: "/tmp" },
     });
-    // Explicit phase.model wins; the phase without one falls through to phase_models.
     expect(phases[0].model.id).toBe("from-explicit");
     expect(phases[1].model.id).toBe("from-shorthand");
   });
@@ -488,26 +551,16 @@ describe("buildAgentRole — bundled ingestor template", () => {
   it("phase_models with an unknown phase name is ignored but warned about", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const role = buildAgentRole("ingestor", {
-        defaults: { provider: "openai", model: "role-default" },
-        roles: {
-          ingestor: {
-            phase_models: { gather: "gpt-5.4-mini", nonexistent: "should-noop" },
-          },
-        },
-      });
-      const { phases } = await role.buildPhases({
-        space: { id: "s1", name: "n", watch_dir: "/tmp" },
-      });
-      expect(phases[0].model.id).toBe("gpt-5.4-mini");
-      expect(phases[1].model.id).toBe("role-default");
-
-      // The unknown key should produce a single warning naming it,
-      // listing valid phase names, and identifying the role.
+      buildAgentRole(
+        "two-phase",
+        customMultiPhaseConfig({
+          phase_models: { gather: "gpt-5.4-mini", nonexistent: "should-noop" },
+        }),
+      );
       const warnings = warnSpy.mock.calls.map((c) => c.join(" "));
       const matching = warnings.filter((w) => w.includes("nonexistent"));
       expect(matching).toHaveLength(1);
-      expect(matching[0]).toContain("ingestor");
+      expect(matching[0]).toContain("two-phase");
       expect(matching[0]).toContain("gather");
       expect(matching[0]).toContain("write");
     } finally {
@@ -515,17 +568,15 @@ describe("buildAgentRole — bundled ingestor template", () => {
     }
   });
 
-  it("phase_models with all-known keys does not warn", async () => {
+  it("phase_models with all-known keys does not warn", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      buildAgentRole("ingestor", {
-        defaults: { provider: "openai", model: "role-default" },
-        roles: {
-          ingestor: {
-            phase_models: { gather: "gpt-5.4-mini", write: "gpt-5.4" },
-          },
-        },
-      });
+      buildAgentRole(
+        "two-phase",
+        customMultiPhaseConfig({
+          phase_models: { gather: "gpt-5.4-mini", write: "gpt-5.4" },
+        }),
+      );
       const matching = warnSpy.mock.calls
         .map((c) => c.join(" "))
         .filter((w) => w.includes("phase_models"));
@@ -533,162 +584,6 @@ describe("buildAgentRole — bundled ingestor template", () => {
     } finally {
       warnSpy.mockRestore();
     }
-  });
-
-  it("phase_models layers: role override beats defaults", async () => {
-    const role = buildAgentRole("ingestor", {
-      defaults: {
-        provider: "openai",
-        model: "gpt-5-mini",
-        phase_models: { gather: "default-gather", write: "default-write" },
-      },
-      roles: {
-        ingestor: { phase_models: { write: "role-write" } },
-      },
-    });
-    const { phases } = await role.buildPhases({
-      space: { id: "s1", name: "n", watch_dir: "/tmp" },
-    });
-    // gather: defaults supplies it (role didn't override).
-    expect(phases[0].model.id).toBe("default-gather");
-    // write: role override beats defaults.
-    expect(phases[1].model.id).toBe("role-write");
-  });
-
-  it("synthesizes a single phase from `user` when `phases` is unset", async () => {
-    const role = buildAgentRole("custom-single", {
-      defaults: { provider: "openai", model: "gpt-5-mini" },
-      roles: {
-        "custom-single": {
-          tools: ["read_file"],
-          system: "you are a single-phase agent",
-          user: "do thing for {{trigger_path}}",
-        },
-      },
-    });
-    const { phases } = await role.buildPhases({
-      space: { id: "s1", name: "n", watch_dir: "/tmp" },
-      triggerPath: "x.md",
-    });
-    expect(phases).toHaveLength(1);
-    expect(phases[0].prompt).toContain("x.md");
-  });
-
-  it("phases override beats user — when both are set, phases wins", async () => {
-    const role = buildAgentRole("ingestor", {
-      defaults: { provider: "openai", model: "gpt-5-mini" },
-      roles: {
-        ingestor: {
-          // The bundled template already has phases. Re-setting `user`
-          // here shouldn't introduce a third phase or replace the
-          // template's ones — phases (from the template) wins.
-          user: "this should be ignored",
-        },
-      },
-    });
-    const { phases } = await role.buildPhases({
-      space: { id: "s1", name: "n", watch_dir: "/tmp" },
-    });
-    expect(phases).toHaveLength(2);
-    for (const p of phases) {
-      expect(p.prompt).not.toContain("this should be ignored");
-    }
-  });
-});
-
-describe("buildAgentRole — bundled consolidator template", () => {
-  beforeEach(() => {
-    process.env.OPENAI_API_KEY = "sk-test";
-  });
-  afterEach(() => {
-    delete process.env.OPENAI_API_KEY;
-  });
-
-  it("resolves to two phases (gather + edit)", async () => {
-    const role = buildAgentRole("consolidator", {
-      defaults: { provider: "openai", model: "gpt-5-mini" },
-    });
-    const { phases } = await role.buildPhases({
-      space: { id: "s1", name: "n", watch_dir: "/tmp" },
-      triggerPath: "wiki/concept/lust.md",
-      triggerEntityId: "01ENT",
-    });
-    expect(phases).toHaveLength(2);
-    expect(phases[0].name).toBe("gather");
-    expect(phases[1].name).toBe("edit");
-  });
-
-  it("gather phase cannot edit or delete; edit phase can do both", async () => {
-    const role = buildAgentRole("consolidator", {
-      defaults: { provider: "openai", model: "gpt-5-mini" },
-    });
-    const { phases } = await role.buildPhases({
-      space: { id: "s1", name: "n", watch_dir: "/tmp" },
-      triggerPath: "wiki/concept/lust.md",
-    });
-    // Phase 1 surveys; explicitly no edit_file or delete_wiki on the
-    // tool surface so the model literally cannot mutate before plan.
-    expect(phases[0].tools).not.toContain("edit_file");
-    expect(phases[0].tools).not.toContain("delete_wiki");
-    // Phase 2 executes.
-    expect(phases[1].tools).toContain("edit_file");
-    expect(phases[1].tools).toContain("delete_wiki");
-  });
-
-  it("the role-level tools whitelist includes delete_wiki", () => {
-    const role = buildAgentRole("consolidator", {
-      defaults: { provider: "openai", model: "gpt-5-mini" },
-    });
-    expect(role.tools).toContain("delete_wiki");
-    expect(role.tools).toContain("edit_file");
-    expect(role.tools).toContain("search");
-  });
-
-  it("trigger fires on wiki/** edits attributed to the ingestor", () => {
-    // The trigger is declarative config; assert its shape from the
-    // bundled template so YAML overrides that drop or change it would
-    // surface here. We don't compile-and-evaluate it (covered
-    // separately by the trigger-cascade e2e); just check the
-    // attribution + path filters that are the contract of the
-    // consolidator's identity.
-    const templates = loadBundledTemplates();
-    const triggers = templates.consolidator?.triggers ?? [];
-    expect(triggers).toHaveLength(1);
-    const t = triggers[0];
-    expect(t.on).toBe("file_changed");
-    expect(t.path_under).toEqual(["wiki/**"]);
-    expect(t.by_role).toEqual(["ingestor"]);
-    expect(t.by_role_not).toEqual(["consolidator"]);
-  });
-
-  it("templates {{trigger_path}} into the gather phase prompt", async () => {
-    const role = buildAgentRole("consolidator", {
-      defaults: { provider: "openai", model: "gpt-5-mini" },
-    });
-    const { phases } = await role.buildPhases({
-      space: { id: "s1", name: "n", watch_dir: "/tmp" },
-      triggerPath: "wiki/concept/lust.md",
-      triggerEntityId: "01ENT",
-    });
-    expect(phases[0].prompt).toContain("wiki/concept/lust.md");
-    expect(phases[0].prompt).toContain("01ENT");
-  });
-
-  it("system prompt declares the outward-only invariant", async () => {
-    // Sanity check: this is a defining property of the consolidator,
-    // and a YAML override that drops it from the system prompt would
-    // be a real regression — the loop-safety + cascade-discipline
-    // behavior depends on the model internalising it.
-    const role = buildAgentRole("consolidator", {
-      defaults: { provider: "openai", model: "gpt-5-mini" },
-    });
-    const { system } = await role.buildPhases({
-      space: { id: "s1", name: "n", watch_dir: "/tmp" },
-    });
-    expect(system).toMatch(/outward-only/i);
-    expect(system).toMatch(/MERGE_INTO/);
-    expect(system).toMatch(/BLEED_INTO/);
-    expect(system).toMatch(/CROSS_LINK/);
   });
 });
 
@@ -739,20 +634,17 @@ describe("buildAgentRole — user-defined role", () => {
 // ── loadBundledTemplates ─────────────────────────────────────────
 
 describe("loadBundledTemplates", () => {
-  it("auto-loads ingestor + consolidator from disk with no config present", () => {
-    // Issue #92: roles ship as YAML templates inherited at runtime,
-    // not as hardcoded constants. A clean install with no agents.yaml
-    // anywhere should still surface both bundled roles, fully shaped
-    // (system, tools, phases, triggers).
+  it("auto-loads writer from disk with no config present", () => {
+    // Roles ship as YAML templates inherited at runtime, not as
+    // hardcoded constants. A clean install with no agents.yaml
+    // anywhere should still surface the bundled writer, fully shaped
+    // (system prompt, tools, cron schedule).
     const templates = loadBundledTemplates();
-    expect(Object.keys(templates).sort()).toEqual(["consolidator", "ingestor"]);
-    for (const name of ["ingestor", "consolidator"] as const) {
-      const t = templates[name];
-      expect(t.system, `${name}.system`).toBeTruthy();
-      expect(t.tools?.length, `${name}.tools`).toBeGreaterThan(0);
-      expect(t.phases?.length, `${name}.phases`).toBeGreaterThan(0);
-      expect(t.triggers?.length, `${name}.triggers`).toBeGreaterThan(0);
-    }
+    expect(Object.keys(templates)).toContain("writer");
+    const t = templates.writer;
+    expect(t.system, "writer.system").toBeTruthy();
+    expect(t.tools?.length, "writer.tools").toBeGreaterThan(0);
+    expect(t.cron, "writer.cron").toBeTruthy();
   });
 });
 
@@ -787,16 +679,16 @@ describe("listAvailableRoles", () => {
     const roles = listAvailableRoles({
       roles: { "my-thing": { system: "x", tools: ["read_file"] } },
     });
-    expect(roles).toContain("ingestor");
+    expect(roles).toContain("writer");
     expect(roles).toContain("my-thing");
   });
 
   it("does not duplicate when a YAML override targets a template role", () => {
     const roles = listAvailableRoles({
-      roles: { ingestor: { max_steps: 99 } },
+      roles: { writer: { max_steps: 99 } },
     });
-    const contribCount = roles.filter((r) => r === "ingestor").length;
-    expect(contribCount).toBe(1);
+    const writerCount = roles.filter((r) => r === "writer").length;
+    expect(writerCount).toBe(1);
   });
 });
 
@@ -811,7 +703,7 @@ describe("default idempotency / concurrency keys", () => {
   });
 
   it("uses triggerPath as the idempotency key when present", () => {
-    const role = buildAgentRole("ingestor", {
+    const role = buildAgentRole("writer", {
       defaults: { provider: "openai", model: "gpt-5-mini" },
     });
     const input: AgentInput = {
@@ -822,7 +714,7 @@ describe("default idempotency / concurrency keys", () => {
   });
 
   it("falls back to triggerEntityId", () => {
-    const role = buildAgentRole("ingestor", {
+    const role = buildAgentRole("writer", {
       defaults: { provider: "openai", model: "gpt-5-mini" },
     });
     const input: AgentInput = {
@@ -833,7 +725,7 @@ describe("default idempotency / concurrency keys", () => {
   });
 
   it("hashes meta + trigger info into the idempotency hash", () => {
-    const role = buildAgentRole("ingestor", {
+    const role = buildAgentRole("writer", {
       defaults: { provider: "openai", model: "gpt-5-mini" },
     });
     const a = role.idempotencyKey({
@@ -850,7 +742,7 @@ describe("default idempotency / concurrency keys", () => {
   });
 
   it("scopes concurrency to (role, space, triggerEntityId)", () => {
-    const role = buildAgentRole("ingestor", {
+    const role = buildAgentRole("writer", {
       defaults: { provider: "openai", model: "gpt-5-mini" },
     });
     expect(
@@ -858,6 +750,6 @@ describe("default idempotency / concurrency keys", () => {
         space: { id: "s1", name: "n", watch_dir: "/tmp" },
         triggerEntityId: "01ENT",
       }),
-    ).toBe("ingestor::s1::01ENT");
+    ).toBe("writer::s1::01ENT");
   });
 });

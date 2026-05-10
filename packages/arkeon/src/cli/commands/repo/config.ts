@@ -38,10 +38,10 @@ const TEMPLATE = `# .arkeon/agents.yaml
 # Secrets never live here — set OPENAI_API_KEY / ANTHROPIC_API_KEY
 # in .env (gitignored) or your shell.
 #
-# The bundled 'ingestor' and 'consolidator' roles ship with the
-# package and are inherited automatically. Override their fields
-# here, or define your own custom roles. Run \`arkeon-wiki config show\`
-# to see the merged effective config.
+# The bundled 'writer' role ships with the package and is inherited
+# automatically. Override its fields here, or define your own custom
+# roles. Run \`arkeon-wiki config show\` to see the merged effective
+# config.
 
 defaults:
   provider: openai             # openai | anthropic | openai-compatible
@@ -53,24 +53,27 @@ defaults:
   #   not directly relevant. Cross-link to existing wikis.
 
 # Per-role overrides (the bundled roles inherit by name). Add
-# custom roles here too — they need at least 'system' and 'tools'.
+# custom roles here too — they need at least 'system', 'tools',
+# and 'cron' (any role without 'cron' is template-only and won't
+# auto-run).
 #
 # roles:
-#   ingestor:
+#   writer:
 #     model: gpt-5-mini
 #     max_steps: 20
+#     cron: "*/30 * * * *"            # override default firing cadence
 #     instructions: |
-#       Use British English. Each new wiki body should be 2-4
-#       paragraphs. Skip generic terms.
+#       Use British English. Each new article should be 600-1000
+#       words. Skip generic terms.
 #
-#   link-checker:                       # custom user-defined role
+#   curator:                          # custom user-defined role
 #     model: gpt-5-mini
 #     tools: [list_entities, read_file, edit_file]
 #     max_steps: 30
+#     cron: "0 4 * * *"               # daily at 04:00
 #     system: |
-#       You find broken cross-references and fix them.
-#     user: |
-#       Wiki: {{trigger_entity_id}}
+#       You find articles whose theses no longer match their evidence
+#       and rewrite the thesis.
 `;
 
 export function registerConfigCommand(program: Command): void {

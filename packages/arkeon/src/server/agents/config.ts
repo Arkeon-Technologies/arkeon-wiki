@@ -27,35 +27,9 @@ import { join } from "node:path";
 import yaml from "js-yaml";
 import { z } from "zod";
 
-// ── Schema ────────────────────────────────────────────────────────
+import { validateCronExpression } from "./cron.js";
 
-/**
- * One declarative trigger for a role. The scheduler watches for events
- * (currently only `file_changed`; future kinds slot in here without
- * breaking existing config) and evaluates each role's triggers against
- * each event. A match enqueues a run for that role.
- *
- * Path filters (`path_under` / `path_not_under`) are picomatch globs
- * matched against the path relative to the space's watch_dir.
- *
- * Attribution filters use entity_edits.by_role on the latest edit for
- * the affected entity:
- *   - `by_role`     : a positive list — only fire if the latest edit
- *                     was made by one of these roles.
- *   - `by_role_not` : a negative list — don't fire if the latest edit
- *                     was made by one of these roles. The canonical
- *                     loop-safety idiom: a worker should not re-trigger
- *                     itself, so its own role goes here.
- *
- * Both attribution filters can be combined; positive applies first.
- */
-export const TRIGGER_CONDITION_SCHEMA = z.object({
-  on: z.literal("file_changed"),
-  path_under: z.array(z.string()).min(1),
-  path_not_under: z.array(z.string()).optional(),
-  by_role: z.array(z.string()).optional(),
-  by_role_not: z.array(z.string()).optional(),
-});
+// ── Schema ────────────────────────────────────────────────────────
 
 /**
  * One stage of a multi-phase agent run. The runtime loops over phases
@@ -72,9 +46,11 @@ export const PHASE_CONFIG_SCHEMA = z.object({
   /** Optional name, surfaced in logs and traces. */
   name: z.string().optional(),
   /** User-message template added to the conversation when this phase
-   *  starts. Variables: {{trigger_path}}, {{trigger_entity_id}},
-   *  {{space_id}}, {{space_name}}. The first phase's prompt is the
-   *  initial user message; subsequent phase prompts are appended. */
+   *  starts. Variables: {{space_id}}, {{space_name}}. (For
+   *  cron-driven roles there is no triggering file, so the older
+   *  {{trigger_path}} / {{trigger_entity_id}} variables expand to
+   *  the empty string.) The first phase's prompt is the initial user
+   *  message; subsequent phase prompts are appended. */
   prompt: z.string(),
   /** Override the role-level model for this phase only (e.g. cheap
    *  model for context-gathering, strong model for writing). Same
@@ -130,14 +106,28 @@ export const ROLE_CONFIG_SCHEMA = z.object({
    *  warning at role-build time so typos are visible. */
   phase_models: z.record(z.string(), z.string()).optional(),
 
-  /** Declarative event triggers for this role. The scheduler watches
-   *  for matching events and enqueues a run for each match. See
-   *  TRIGGER_CONDITION_SCHEMA for the shape of an individual trigger.
+  /** Cron expression that fires this role on a schedule. Five-field
+   *  unix-cron syntax (`min hour day month dow`); validated at config
+   *  load time so a typo fails the daemon at startup rather than at
+   *  first tick. Omit (or leave undefined in the merged config) to
+   *  opt the role out of automatic firing — it can still be invoked
+   *  manually by external callers.
    *
-   *  Setting `triggers: []` (an empty array) explicitly opts the role
-   *  out of automatic triggers — useful for roles that are only run
-   *  manually or by external schedulers. */
-  triggers: z.array(TRIGGER_CONDITION_SCHEMA).optional(),
+   *  Per-space mutex applies: if a role's tick fires while another
+   *  role's run is in flight in the same space, the tick is skipped
+   *  (skip-if-busy) and the next firing is scheduled from "now."
+   *
+   *  Examples (in standard 5-field cron syntax):
+   *    every 15 minutes, every 6 hours on the hour, daily at 03:00.
+   *    Operators write the cron expression directly in agents.yaml.
+   */
+  cron: z
+    .string()
+    .min(1)
+    .refine((expr) => validateCronExpression(expr) === null, {
+      message: "is not a valid cron expression",
+    })
+    .optional(),
 
   /** Spaces this role is allowed to read from. Each entry is either a
    *  space name, a space id (ULID), the literal `"self"` (= the space
@@ -171,7 +161,6 @@ export const AGENT_CONFIG_SCHEMA = z.object({
   roles: z.record(z.string(), ROLE_CONFIG_SCHEMA).optional(),
 });
 
-export type TriggerCondition = z.infer<typeof TRIGGER_CONDITION_SCHEMA>;
 export type PhaseConfig = z.infer<typeof PHASE_CONFIG_SCHEMA>;
 export type RoleConfig = z.infer<typeof ROLE_CONFIG_SCHEMA>;
 export type AgentConfig = z.infer<typeof AGENT_CONFIG_SCHEMA>;
@@ -229,7 +218,41 @@ function readConfigFile(path: string): AgentConfig {
     throw new Error(`agents.yaml at ${path} is not valid YAML: ${msg}`);
   }
   if (parsed === null || parsed === undefined) return {};
+  rejectLegacyTriggers(parsed, path);
   return AGENT_CONFIG_SCHEMA.parse(parsed);
+}
+
+/**
+ * The pre-cron event-driven scheduler exposed a `triggers:` array on
+ * each role. Bundled templates carried defaults; operators sometimes
+ * overrode them. The cron rewrite drops both the field and the
+ * underlying queue. Catch the legacy field here and tell the operator
+ * exactly what to do, instead of letting Zod reject it as
+ * "unrecognized key" with no migration path.
+ */
+function rejectLegacyTriggers(parsed: unknown, path: string): void {
+  if (!parsed || typeof parsed !== "object") return;
+  const root = parsed as Record<string, unknown>;
+  const offenders: string[] = [];
+  if (root.defaults && typeof root.defaults === "object") {
+    if ("triggers" in (root.defaults as object)) offenders.push("defaults");
+  }
+  if (root.roles && typeof root.roles === "object") {
+    for (const [name, role] of Object.entries(root.roles)) {
+      if (role && typeof role === "object" && "triggers" in role) {
+        offenders.push(`roles.${name}`);
+      }
+    }
+  }
+  if (offenders.length === 0) return;
+  throw new Error(
+    `agents.yaml at ${path} uses the legacy 'triggers:' field on ` +
+      `${offenders.join(", ")}. The agent runtime is now cron-paced; ` +
+      `replace 'triggers:' with 'cron: \"<expression>\"' (e.g. ` +
+      `'cron: \"*/15 * * * *\"' for every 15 minutes). Per-space ` +
+      `serialization is now handled by the runtime, so the by_role / ` +
+      `by_role_not loop-safety options are no longer needed.`,
+  );
 }
 
 /**

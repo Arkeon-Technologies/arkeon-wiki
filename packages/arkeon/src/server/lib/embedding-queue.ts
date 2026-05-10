@@ -4,9 +4,9 @@
 /**
  * Pure SQL helpers for the embedding queue (issue #47).
  *
- * Same lease-pattern queue as agent-queue.ts, scoped to a single
- * concern: "this entity's chunks need re-embedding." The shape is
- * (entity_id) — there's no per-role concept here, just one worker.
+ * Crash-safe lease-pattern queue, scoped to one concern: "this
+ * entity's chunks need re-embedding." The shape is (entity_id) — one
+ * row per entity, drained by a single in-process worker.
  *
  *   pending  (started_at IS NULL)
  *     ↓ claim

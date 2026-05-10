@@ -43,6 +43,15 @@ interface ToolSpace {
  *     from pre-#99 behaviour)
  *   - omitted, multi-space role → the full allowed set (fan-out)
  *
+ * Single-space leniency: when there's only one allowed space, ANY
+ * `space` arg falls through to that space — including unrecognized
+ * names. The model occasionally invents values like "default" or
+ * copies error-message text verbatim into the next call; for a
+ * role that can only target one space anyway, treating those as
+ * the obvious target is strictly better than burning a step on an
+ * error the model has to recover from. Multi-space roles stay strict
+ * because there the choice actually matters.
+ *
  * Returns the list of spaces to query. The caller maps to ids for
  * the SQL/ripgrep backend and keeps the returned objects to tag
  * result rows with `space` (name) for the LLM.
@@ -52,6 +61,11 @@ function resolveToolScope(
   spaceArg: string | undefined,
 ): ToolSpace[] {
   if (spaceArg !== undefined && spaceArg !== "") {
+    if (ctx.allowedSpaces.length <= 1) {
+      // Single-space leniency: any value collapses to the one allowed
+      // space. Saves the model a wasted step on garbage values.
+      return [ctx.space];
+    }
     return [resolveSpaceArg(spaceArg, ctx.allowedSpaces)];
   }
   if (ctx.allowedSpaces.length <= 1) {
@@ -84,11 +98,17 @@ const readFileTool = defineTool("read_file", {
     // a multi-space agent omits `space`, demand they pick one. Better
     // a clear error than silently reading from the triggering space
     // when the agent meant another.
+    //
+    // Single-space leniency mirrors resolveToolScope: any `space`
+    // value (including garbage like "default" or a verbatim copy of
+    // an error message) collapses to the only allowed space. Saves
+    // the model a wasted retry without changing semantics — there's
+    // only one place the file could have come from.
     let target: ToolSpace;
-    if (space !== undefined && space !== "") {
-      target = resolveSpaceArg(space, ctx.allowedSpaces);
-    } else if (ctx.allowedSpaces.length <= 1) {
+    if (ctx.allowedSpaces.length <= 1) {
       target = ctx.space;
+    } else if (space !== undefined && space !== "") {
+      target = resolveSpaceArg(space, ctx.allowedSpaces);
     } else {
       throw new Error(
         `read_file: this role can read from multiple spaces, so the ` +
@@ -430,8 +450,7 @@ const listEntitiesTool = defineTool("list_entities", {
       .optional()
       .describe(
         "Filter on the entity's most recent edit's by_role — e.g. " +
-          "'human' for filesystem-driven changes, 'ingestor'/'consolidator' " +
-          "for agent edits.",
+          "'human' for filesystem-driven changes, 'writer' for agent edits.",
       ),
     sort: z
       .enum(["updated_at", "label", "inbound", "outbound"])
@@ -534,56 +553,69 @@ const editFileTool = defineTool("edit_file", {
     "  - annotate: splice `insert_text` immediately after a unique `insert_after_phrase`. Everything else stays byte-for-byte identical. Prefer this over `replace` when you are adding an observation to an existing wiki — the schema makes it impossible to accidentally rewrite surrounding prose.\n" +
     "  - delete_section: remove an ATX heading line and its body, up to the next same-or-higher heading. Pass the literal heading line as `heading` (e.g. '## Open threads'). Heading must match exactly once.\n" +
     "Whole-file deletion is a separate tool (`delete_wiki`).",
-  inputSchema: z.discriminatedUnion("mode", [
-    z.object({
-      mode: z.literal("create"),
-      path: z.string().describe("Relative path inside the space's watch_dir."),
-      content: z.string().describe("Full file content (frontmatter + body)."),
-    }),
-    z.object({
-      mode: z.literal("append"),
-      path: z.string().describe("Relative path inside the space's watch_dir."),
-      content: z.string().describe("Material to append at the end of the file."),
-    }),
-    z.object({
-      mode: z.literal("replace"),
-      path: z.string().describe("Relative path inside the space's watch_dir."),
-      search: z
-        .string()
-        .min(1)
-        .describe("Exact span to substitute. Must match exactly once."),
-      replace: z.string().describe("Substitute content."),
-    }),
-    z.object({
-      mode: z.literal("annotate"),
-      path: z.string().describe("Relative path inside the space's watch_dir."),
-      insert_after_phrase: z
-        .string()
-        .min(1)
-        .describe(
-          "Anchor phrase already in the file (must match exactly once). " +
-            "The runtime inserts `insert_text` immediately after this phrase " +
-            "and preserves everything else byte-for-byte.",
-        ),
-      insert_text: z
-        .string()
-        .describe("Text to splice in directly after the anchor phrase."),
-    }),
-    z.object({
-      mode: z.literal("delete_section"),
-      path: z.string().describe("Relative path inside the space's watch_dir."),
-      heading: z
-        .string()
-        .min(1)
-        .describe(
-          "ATX heading line to delete (e.g. '## Open threads'). The runtime " +
-            "removes this heading and its body up to (but not including) the " +
-            "next heading at the same or higher level. Must match exactly once.",
-        ),
-    }),
-  ]),
+  // Flat schema (instead of a discriminatedUnion) because OpenAI's
+  // Responses API rejects function schemas whose top-level shape isn't
+  // `type: "object"` — `discriminatedUnion` compiles to `oneOf`/`anyOf`
+  // which fails strict validation. Per-mode field requirements are
+  // enforced at the top of `call` instead.
+  inputSchema: z.object({
+    mode: z
+      .enum(["create", "append", "replace", "annotate", "delete_section"])
+      .describe(
+        "Which kind of edit to perform. Each mode requires a distinct " +
+          "set of additional fields — see the tool description for the " +
+          "shape of each.",
+      ),
+    path: z.string().describe("Relative path inside the space's watch_dir."),
+    content: z
+      .string()
+      .optional()
+      .describe(
+        "REQUIRED when mode='create' (full file content) or mode='append' " +
+          "(material to add at the end). Ignored otherwise.",
+      ),
+    search: z
+      .string()
+      .optional()
+      .describe(
+        "REQUIRED when mode='replace'. The exact span to substitute. Must " +
+          "match exactly once in the file.",
+      ),
+    replace: z
+      .string()
+      .optional()
+      .describe("REQUIRED when mode='replace'. The substitute content."),
+    insert_after_phrase: z
+      .string()
+      .optional()
+      .describe(
+        "REQUIRED when mode='annotate'. Anchor phrase already in the file " +
+          "(must match exactly once). The runtime inserts `insert_text` " +
+          "immediately after this phrase and preserves everything else " +
+          "byte-for-byte.",
+      ),
+    insert_text: z
+      .string()
+      .optional()
+      .describe(
+        "REQUIRED when mode='annotate'. Text to splice in directly after " +
+          "the anchor phrase.",
+      ),
+    heading: z
+      .string()
+      .optional()
+      .describe(
+        "REQUIRED when mode='delete_section'. The ATX heading line to delete " +
+          "(e.g. '## Open threads'). The runtime removes this heading and its " +
+          "body up to (but not including) the next heading at the same or " +
+          "higher level. Must match exactly once.",
+      ),
+  }),
   call: async (input, ctx) => {
     if (input.mode === "create") {
+      if (typeof input.content !== "string") {
+        throw new Error("edit_file mode='create' requires `content`");
+      }
       const absPath = safeResolve(ctx.space.watch_dir, input.path);
       if (existsSync(absPath)) {
         throw new Error(
@@ -598,6 +630,9 @@ const editFileTool = defineTool("edit_file", {
     }
 
     if (input.mode === "append") {
+      if (typeof input.content !== "string") {
+        throw new Error("edit_file mode='append' requires `content`");
+      }
       const absPath = safeResolve(ctx.space.watch_dir, input.path);
       if (!existsSync(absPath)) {
         throw new Error(
@@ -617,6 +652,12 @@ const editFileTool = defineTool("edit_file", {
     }
 
     if (input.mode === "replace") {
+      if (typeof input.search !== "string" || input.search.length === 0) {
+        throw new Error("edit_file mode='replace' requires non-empty `search`");
+      }
+      if (typeof input.replace !== "string") {
+        throw new Error("edit_file mode='replace' requires `replace`");
+      }
       const result = await ctx.applyEdit(
         {
           kind: "edit",
@@ -630,6 +671,17 @@ const editFileTool = defineTool("edit_file", {
     }
 
     if (input.mode === "annotate") {
+      if (
+        typeof input.insert_after_phrase !== "string" ||
+        input.insert_after_phrase.length === 0
+      ) {
+        throw new Error(
+          "edit_file mode='annotate' requires non-empty `insert_after_phrase`",
+        );
+      }
+      if (typeof input.insert_text !== "string") {
+        throw new Error("edit_file mode='annotate' requires `insert_text`");
+      }
       const result = await ctx.applyEdit(
         {
           kind: "annotate",
@@ -643,6 +695,11 @@ const editFileTool = defineTool("edit_file", {
     }
 
     if (input.mode === "delete_section") {
+      if (typeof input.heading !== "string" || input.heading.length === 0) {
+        throw new Error(
+          "edit_file mode='delete_section' requires non-empty `heading`",
+        );
+      }
       const result = await ctx.applyEdit(
         {
           kind: "delete_section",
@@ -654,13 +711,12 @@ const editFileTool = defineTool("edit_file", {
       return { path: result.path, mode: "delete_section" as const };
     }
 
-    // Discriminated union exhaustiveness check. The Zod schema rejects
-    // unknown mode values upstream when the AI SDK validates; this is
-    // a defensive guard for callers that bypass validation (e.g. tests
-    // calling tool.execute directly).
-    const _exhaustive: never = input;
+    // Defensive exhaustiveness check. Zod's enum validates `mode`
+    // upstream; this catches callers that bypass validation (tests
+    // calling tool.execute directly with an unknown mode).
+    const _exhaustive: never = input.mode;
     throw new Error(
-      `edit_file: unknown mode '${(_exhaustive as { mode?: string }).mode}'`,
+      `edit_file: unknown mode '${String(_exhaustive)}'`,
     );
   },
   summarize: (r) => ({ path: r.path, mode: r.mode }),
@@ -671,11 +727,10 @@ const editFileTool = defineTool("edit_file", {
 /**
  * Remove a wiki file from disk and its entity from the index.
  *
- * Off-limits to the ingestor by default — the consolidator role uses
- * this to merge a wiki into another and then delete the now-empty
- * source. The convention the consolidator's prompt enforces is "you
- * only delete YOUR OWN subject's wiki, never someone else's", which
- * keeps cascading consolidation runs orderly.
+ * Not part of the bundled `writer` role's tool whitelist — the
+ * create/extend loop never needs deletion. Available for future
+ * curator/cleaner roles or for operators who add it to a custom role
+ * in `agents.yaml`.
  *
  * `reason` is required and surfaces in the agent trace alongside the
  * tool call. There's no permanent audit row in `entity_edits` because
@@ -688,11 +743,9 @@ const editFileTool = defineTool("edit_file", {
 const deleteWikiTool = defineTool("delete_wiki", {
   description:
     "Delete a wiki file from disk and remove it from the index. " +
-    "Use this when consolidating: you've folded the subject's content " +
-    "into another wiki (via edit_file APPEND on that wiki) and the " +
-    "current wiki should no longer exist. Only paths under `wiki/` are " +
-    "allowed — you cannot delete source files. The `reason` is recorded " +
-    "in the run trace; write it as if it were a commit message.",
+    "Only paths under `wiki/` are allowed — you cannot delete source " +
+    "files. The `reason` is recorded in the run trace; write it as if " +
+    "it were a commit message.",
   inputSchema: z.object({
     path: z
       .string()
@@ -706,7 +759,7 @@ const deleteWikiTool = defineTool("delete_wiki", {
         "One-line explanation of why this wiki is being deleted (e.g. " +
           "'merged into wiki/concept/lust.md — same subject under different label'). " +
           "Surfaces in the agent trace; future operators read this when " +
-          "auditing what the consolidator did.",
+          "auditing what was deleted.",
       ),
   }),
   call: async ({ path, reason }, ctx) => {
