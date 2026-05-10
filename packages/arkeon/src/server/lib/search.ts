@@ -28,6 +28,7 @@ import { rgPath } from "@vscode/ripgrep";
 import { createSql } from "./sql.js";
 import type { EntityType } from "./entities.js";
 import { getEmbedder } from "./embedder/index.js";
+import type { EntityType } from "./entities.js";
 import { parseFrontmatter } from "./frontmatter.js";
 
 const SNIPPET_MAX_LEN = 240;
@@ -35,9 +36,18 @@ const DEFAULT_LIMIT = 20;
 const VECTOR_DEFAULT_LIMIT = 8;
 const MAX_LIMIT = 200;
 const DEFAULT_SNIPPETS_PER_FILE = 3;
+/** Maximum number of patterns accepted in a single multi-query call.
+ *  Defensive cap so a runaway caller can't fan out a thousand-pattern
+ *  search; the tool layer enforces the same limit at the Zod schema. */
+export const MAX_QUERY_PATTERNS = 10;
 
 export interface KeywordSearchOptions {
-  query: string;
+  /** Single substring/regex pattern, or up to MAX_QUERY_PATTERNS
+   *  patterns run together as one ripgrep invocation (`-e p1 -e p2`).
+   *  Match counts aggregate per file, so multi-pattern hits naturally
+   *  rank higher — this is the right behaviour for variant batching
+   *  ("Shannon", "Claude Shannon", "information theorist"). */
+  query: string | string[];
   /** Single-space convenience filter. Equivalent to passing
    *  `spaceIds: [spaceId]`. If both are set, `spaceIds` wins. */
   spaceId?: string;
@@ -45,6 +55,13 @@ export interface KeywordSearchOptions {
    *  Empty/undefined = every registered space. Used by the agent
    *  runtime to fan out across a role's allowed-space scope. */
   spaceIds?: string[];
+  /** Restrict hits to entities of the given type(s). Omit/empty = no
+   *  filter (every type). Filters at SQL-join time — ripgrep still
+   *  scans every indexed file; the entity rows that aren't of an
+   *  allowed type just don't make it into the response. Cheap path
+   *  for `type=file` (raw sources only) or `type=wiki` (skip stubs
+   *  and sources). */
+  types?: EntityType[];
   limit?: number;
   maxSnippetsPerFile?: number;
   regex?: boolean;
@@ -212,12 +229,15 @@ function truncateSnippet(text: string): string {
 }
 
 /**
- * Spawn ripgrep against `cwd` with the given query and return parsed file
- * results. Exit codes: 0 = matches found, 1 = no matches, 2+ = error.
+ * Spawn ripgrep against `cwd` with one or more query patterns and return
+ * parsed file results. Multiple patterns are passed as repeated `-e`
+ * arguments — ripgrep ORs them in a single pass, so an entity that
+ * matches several variants of a name accumulates a higher match count
+ * naturally. Exit codes: 0 = matches found, 1 = no matches, 2+ = error.
  */
 export function runRipgrep(opts: {
   cwd: string;
-  query: string;
+  queries: string[];
   regex: boolean;
   maxSnippetsPerFile: number;
 }): Promise<FileResult[]> {
@@ -233,7 +253,10 @@ export function runRipgrep(opts: {
     // Restrict to the file types we index.
     args.push("--type-add", "arkeon:*.{md,txt,json,csv,xml,html,rst}");
     args.push("--type", "arkeon");
-    args.push("--", opts.query, ".");
+    for (const q of opts.queries) {
+      args.push("-e", q);
+    }
+    args.push("--", ".");
 
     const child = spawn(rgPath, args, {
       cwd: opts.cwd,
@@ -265,9 +288,22 @@ export function runRipgrep(opts: {
 export async function searchKeyword(
   opts: KeywordSearchOptions,
 ): Promise<KeywordSearchResult> {
-  const query = opts.query;
+  // Normalise to a non-empty pattern array. Empty / oversized inputs
+  // are caller bugs — surface them rather than silently swallowing the
+  // call (e.g. a 0-pattern array would otherwise tell ripgrep to match
+  // everything, which is almost certainly not what was meant).
+  const queries = Array.isArray(opts.query) ? opts.query : [opts.query];
+  if (queries.length === 0) {
+    throw new Error("searchKeyword: query must not be empty");
+  }
+  if (queries.length > MAX_QUERY_PATTERNS) {
+    throw new Error(
+      `searchKeyword: too many query patterns (${queries.length}); max is ${MAX_QUERY_PATTERNS}`,
+    );
+  }
   const limit = Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
   const maxSnippets = Math.max(0, opts.maxSnippetsPerFile ?? DEFAULT_SNIPPETS_PER_FILE);
+  const types = opts.types && opts.types.length > 0 ? opts.types : null;
 
   const sql = createSql();
   const requestedIds =
@@ -303,7 +339,7 @@ export async function searchKeyword(
 
     const fileResults = await runRipgrep({
       cwd: watchDir,
-      query,
+      queries,
       regex: !!opts.regex,
       maxSnippetsPerFile: maxSnippets,
     });
@@ -325,6 +361,13 @@ export async function searchKeyword(
       const entity = entityByPath.get(fileResult.path);
       if (!entity) {
         unmatched++;
+        continue;
+      }
+      // Type filter: drop entities whose type isn't in the allowed set.
+      // We filter post-fetch (instead of pushing into SQL) so the
+      // `unmatched_files` diagnostic keeps its meaning — files filtered
+      // out by `types` are not "unmatched", they're explicitly excluded.
+      if (types && !types.includes(entity.type as EntityType)) {
         continue;
       }
       hits.push({

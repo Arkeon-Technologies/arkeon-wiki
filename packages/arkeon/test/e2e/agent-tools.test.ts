@@ -562,6 +562,78 @@ describe("search edge cases", () => {
     expect(result.vector).toBeDefined();
     expect(result.keyword).toBeUndefined();
   });
+
+  // Issue #100 — multi-query batching + type filter.
+  it("accepts an array of patterns and ORs them in one keyword pass", async () => {
+    // Both patterns lowercase so smart-case stays case-insensitive
+    // across both — mixing cases would force case-sensitive matching
+    // in ripgrep and skew this test.
+    const result = (await tool("search").execute({
+      query: ["electron", "redox"],
+      mode: "keyword",
+    })) as {
+      keyword: { hits: Array<{ source_path: string; match_count: number }> };
+    };
+    const paths = result.keyword.hits.map((h) => h.source_path).sort();
+    expect(paths).toContain("wiki/concept/redox.md");
+    expect(paths).toContain("wiki/concept/oxidation.md");
+    // redox.md matches "electron" in its body line AND "redox" in its
+    // frontmatter `label: Redox Reactions` — two distinct matched
+    // lines. oxidation.md only matches "electron" on its body line.
+    // Match counts aggregate per file, so redox.md ranks higher.
+    const redox = result.keyword.hits.find(
+      (h) => h.source_path === "wiki/concept/redox.md",
+    )!;
+    const oxid = result.keyword.hits.find(
+      (h) => h.source_path === "wiki/concept/oxidation.md",
+    )!;
+    expect(redox.match_count).toBeGreaterThan(oxid.match_count);
+  });
+
+  it("type='file' filters keyword hits to source files only", async () => {
+    // Seed a source file. Watcher indexes it as type='file'; without
+    // the filter both wikis and sources can match, with type='file'
+    // only the source survives.
+    writeFileSync(
+      join(testDir, "type-filter-source.txt"),
+      "type-filter-source mentions electron in passing.",
+    );
+    const sql = createSql();
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const rows =
+        await sql`SELECT id FROM entities WHERE space_id = ${space.id} AND source_path = ${"type-filter-source.txt"}`;
+      if (rows.length === 1) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    const result = (await tool("search").execute({
+      query: "electron",
+      type: "file",
+      mode: "keyword",
+    })) as {
+      keyword: { hits: Array<{ type: string; source_path: string }> };
+    };
+    expect(result.keyword.hits.length).toBeGreaterThan(0);
+    for (const hit of result.keyword.hits) {
+      expect(hit.type).toBe("file");
+    }
+    expect(
+      result.keyword.hits.some(
+        (h) => h.source_path === "type-filter-source.txt",
+      ),
+    ).toBe(true);
+  });
+
+  it("type='bogus' surfaces a tool-prefixed error", async () => {
+    await expect(
+      tool("search").execute({
+        query: "electron",
+        type: "bogus",
+        mode: "keyword",
+      }),
+    ).rejects.toThrow(/search:.*bogus/);
+  });
 });
 
 // ── list_entities ─────────────────────────────────────────────────

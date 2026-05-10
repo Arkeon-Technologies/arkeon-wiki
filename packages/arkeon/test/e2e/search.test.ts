@@ -604,3 +604,152 @@ describe("GET /search — cross-space scoping", () => {
     expect(data.keyword.hits).toEqual([]);
   });
 });
+
+// ────────────────────────────────────────────────────────────────────
+// Issue #100: type filter + multi-query batching for keyword search.
+// ────────────────────────────────────────────────────────────────────
+
+describe("GET /search?mode=keyword — multi-query batching (#100)", () => {
+  it("ORs multiple ?q= patterns in a single call", async () => {
+    // Two patterns that match disjoint wikis. Without multi-query a
+    // caller would have to issue two requests; with multi-query the
+    // single response carries hits from both.
+    const data = await api(
+      `/search?space_id=${spaceId}&mode=keyword&q=Turing&q=Shannon`,
+    );
+    const labels = data.keyword.hits.map((h: any) => h.label);
+    expect(labels).toContain("Alan Turing");
+    expect(labels).toContain("Claude Shannon");
+    // The route echoes the array form back so callers can confirm
+    // they got the multi-pattern semantics.
+    expect(data.query).toEqual(["Turing", "Shannon"]);
+  });
+
+  it("aggregates match counts across patterns so multi-pattern matches rank higher", async () => {
+    // alan-turing.md mentions "Turing" twice and "mathematician" once.
+    // claude-shannon.md mentions "mathematician" once but not "Turing".
+    // Single-pattern ?q=mathematician → both wikis tie at 1.
+    // Multi-pattern ?q=Turing&q=mathematician → turing.md sums to 3,
+    // shannon.md stays at 1. Same in computability.md (mentions Turing).
+    const data = await api(
+      `/search?space_id=${spaceId}&mode=keyword&q=Turing&q=mathematician`,
+    );
+    const turing = data.keyword.hits.find((h: any) => h.label === "Alan Turing");
+    const shannon = data.keyword.hits.find(
+      (h: any) => h.label === "Claude Shannon",
+    );
+    expect(turing).toBeDefined();
+    expect(shannon).toBeDefined();
+    expect(turing.match_count).toBeGreaterThan(shannon.match_count);
+    expect(data.keyword.hits[0].label).toBe("Alan Turing");
+  });
+
+  it("preserves single-string echo when only one ?q= is passed", async () => {
+    const data = await api(`/search?space_id=${spaceId}&mode=keyword&q=Turing`);
+    expect(data.query).toBe("Turing");
+  });
+
+  it("rejects more than 10 patterns with 400", async () => {
+    const params = Array.from({ length: 11 }, (_, i) => `q=p${i}`).join("&");
+    const data = await api(
+      `/search?space_id=${spaceId}&mode=keyword&${params}`,
+    );
+    expect(data.error?.code).toBe("validation_error");
+  });
+});
+
+describe("GET /search?mode=keyword — type filter (#100)", () => {
+  // Add a source file alongside the wikis so we have type=file rows
+  // to filter on. The notes.txt added by the keyword edge-case suite
+  // would also work but lives behind a different describe block —
+  // duplicate the seed locally so test ordering doesn't bind us.
+  beforeAll(async () => {
+    writeFileSync(
+      join(testDir, "source-doc.txt"),
+      "source-doc covers ZZTYPEPROBE and other notes about Turing.",
+    );
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const r = await api(
+        `/search?space_id=${spaceId}&q=ZZTYPEPROBE&mode=keyword`,
+      );
+      if (r.keyword.hits.some((h: any) => h.source_path === "source-doc.txt")) {
+        return;
+      }
+      await new Promise((res) => setTimeout(res, 200));
+    }
+    throw new Error("source-doc.txt never appeared in keyword search");
+  }, 15_000);
+
+  it("type=file restricts hits to source files (no wikis)", async () => {
+    const data = await api(
+      `/search?space_id=${spaceId}&q=Turing&mode=keyword&type=file`,
+    );
+    expect(data.keyword.hits.length).toBeGreaterThan(0);
+    for (const hit of data.keyword.hits) {
+      expect(hit.type).toBe("file");
+    }
+    expect(
+      data.keyword.hits.some((h: any) => h.source_path === "source-doc.txt"),
+    ).toBe(true);
+    // Wikis under wiki/ must not appear when type=file.
+    expect(
+      data.keyword.hits.some((h: any) => h.source_path.startsWith("wiki/")),
+    ).toBe(false);
+  });
+
+  it("type=wiki restricts hits to wikis (no source files)", async () => {
+    const data = await api(
+      `/search?space_id=${spaceId}&q=Turing&mode=keyword&type=wiki`,
+    );
+    expect(data.keyword.hits.length).toBeGreaterThan(0);
+    for (const hit of data.keyword.hits) {
+      expect(hit.type).toBe("wiki");
+    }
+    expect(
+      data.keyword.hits.some((h: any) => h.source_path === "source-doc.txt"),
+    ).toBe(false);
+  });
+
+  it("type=wiki,file accepts both", async () => {
+    const data = await api(
+      `/search?space_id=${spaceId}&q=Turing&mode=keyword&type=wiki,file`,
+    );
+    const types = new Set(data.keyword.hits.map((h: any) => h.type));
+    expect(types.has("wiki")).toBe(true);
+    expect(types.has("file")).toBe(true);
+  });
+
+  it("omitted type returns hits of every type", async () => {
+    const data = await api(
+      `/search?space_id=${spaceId}&q=Turing&mode=keyword`,
+    );
+    const types = new Set(data.keyword.hits.map((h: any) => h.type));
+    // Both wiki and file rows match the query when no filter is set.
+    expect(types.has("wiki")).toBe(true);
+    expect(types.has("file")).toBe(true);
+  });
+
+  it("rejects an invalid type with 400", async () => {
+    const data = await api(
+      `/search?space_id=${spaceId}&q=Turing&mode=keyword&type=bogus`,
+    );
+    expect(data.error?.code).toBe("validation_error");
+  });
+
+  it("type filter does not inflate unmatched_files diagnostic", async () => {
+    // Files filtered out by `type` are explicitly excluded — they're
+    // not the "ripgrep matched but no entity row" condition the
+    // unmatched_files counter is for. Verify by comparing a no-filter
+    // call (where wiki/file paths both have entities, so unmatched=0)
+    // to a type=file call (which drops wiki rows in JS, not as
+    // unmatched). Both calls should report the same unmatched count.
+    const all = await api(
+      `/search?space_id=${spaceId}&q=Turing&mode=keyword`,
+    );
+    const filtered = await api(
+      `/search?space_id=${spaceId}&q=Turing&mode=keyword&type=file`,
+    );
+    expect(filtered.keyword.unmatched_files).toBe(all.keyword.unmatched_files);
+  });
+});

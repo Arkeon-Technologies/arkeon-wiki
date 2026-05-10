@@ -134,23 +134,48 @@ const searchTool = defineTool("search", {
   description:
     "Search the role's allowed spaces. Two strategies, no fusion:\n" +
     "  - keyword (ripgrep): exact substring (or regex) over file contents. " +
-    "Best for proper nouns, code identifiers, ULIDs, exact phrases.\n" +
+    "Best for proper nouns, code identifiers, ULIDs, exact phrases. " +
+    "Pass `query` as an array (up to 10) to OR several patterns in a " +
+    "single ripgrep pass — useful for variant batching " +
+    "(['Shannon', 'Claude Shannon', 'information theorist']). Match " +
+    "counts aggregate per file, so files matching multiple variants " +
+    "naturally rank higher.\n" +
     "  - vector (sqlite-vec): semantic similarity. Returns a ranked list " +
     "of WIKIS — each hit is a complete wiki with its full body and " +
     "frontmatter, deduplicated from chunk-level matches under the hood. " +
     "Best for finding related or possibly-duplicate wikis you don't have " +
     "a literal name for. The body is right there in the response, so " +
-    "there's no need to read_file the wiki separately to inspect it.\n" +
+    "there's no need to read_file the wiki separately to inspect it. " +
+    "Vector mode uses the FIRST query when an array is passed.\n" +
     "Default `mode=both` runs both in parallel and returns each result " +
     "set in its own namespace ({keyword, vector}). Pass `mode=keyword` " +
     "or `mode=vector` to scope to one. Vector results carry similarity " +
     "scores in [-1, 1] (higher = more similar); keyword hits are " +
     "ranked by match count with line snippets.\n" +
+    "Pass `type` (comma-separated: 'wiki', 'file', 'stub') to restrict " +
+    "keyword hits to a subset of entity types — e.g. `type='file'` to " +
+    "focus on raw sources without drowning in wiki hits, or `type='wiki'` " +
+    "to skip your own prior writes. Vector hits are always wikis (the " +
+    "filter is a no-op for them).\n" +
     "Multi-space roles can pass `space` to scope to one space, or omit " +
     "it to search every allowed space (each hit carries `space_id` and " +
     "`space` so you can tell them apart).",
   inputSchema: z.object({
-    query: z.string().describe("The query string."),
+    query: z
+      .union([z.string(), z.array(z.string()).min(1).max(10)])
+      .describe(
+        "A single query string, or an array of up to 10 patterns OR'd " +
+          "together in one ripgrep invocation. For vector mode, only " +
+          "the first pattern is embedded.",
+      ),
+    type: z
+      .string()
+      .optional()
+      .describe(
+        "Comma-separated entity types: any of 'wiki', 'file', 'stub'. " +
+          "Omit for all types. Affects keyword hits only — vector " +
+          "results are always wikis.",
+      ),
     mode: z
       .enum(["keyword", "vector", "both"])
       .optional()
@@ -182,16 +207,35 @@ const searchTool = defineTool("search", {
     space: z.string().optional().describe(SPACE_PARAM_DESC),
   }),
   call: async (
-    { query, mode, regex, limit, max_snippets_per_file, space },
+    { query, type, mode, regex, limit, max_snippets_per_file, space },
     ctx,
   ) => {
     const m = mode ?? "both";
     const wantKeyword = m === "keyword" || m === "both";
     const wantVector = m === "vector" || m === "both";
 
+    let types: EntityType[] | undefined;
+    try {
+      types = parseEntityTypes(type);
+    } catch (err) {
+      // parseEntityTypes throws an ApiError with a route-friendly
+      // message; rewrap with a tool-prefix so the agent sees a clean
+      // error body in the tool result rather than a 400-shaped object.
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`search: ${msg}`);
+    }
+
     const targets = resolveToolScope(ctx, space);
     const targetIds = targets.map((s) => s.id);
     const indexById = new Map(targets.map((s) => [s.id, s.name]));
+
+    // Vector search embeds a single query. When the agent passes an
+    // array of patterns it's expressing a keyword-side variant union
+    // (different surface forms of the same subject); embedding the
+    // first one is the most useful default — they all describe the
+    // same target, so we pick a representative rather than running
+    // multiple embeddings or refusing the call.
+    const vectorQuery = Array.isArray(query) ? query[0]! : query;
 
     // Run requested strategies in parallel, fail-soft per strategy:
     // if vector throws (e.g. embedder still warming up), the agent
@@ -202,13 +246,14 @@ const searchTool = defineTool("search", {
         ? searchKeyword({
             query,
             spaceIds: targetIds,
+            types,
             regex,
             limit,
             maxSnippetsPerFile: max_snippets_per_file,
           })
         : Promise.resolve(null),
       wantVector
-        ? searchVector({ query, spaceIds: targetIds, limit })
+        ? searchVector({ query: vectorQuery, spaceIds: targetIds, limit })
         : Promise.resolve(null),
     ]);
 
