@@ -55,12 +55,13 @@ export interface KeywordSearchOptions {
    *  Empty/undefined = every registered space. Used by the agent
    *  runtime to fan out across a role's allowed-space scope. */
   spaceIds?: string[];
-  /** Restrict hits to entities of the given type(s). Omit/empty = no
-   *  filter (every type). Filters at SQL-join time — ripgrep still
-   *  scans every indexed file; the entity rows that aren't of an
-   *  allowed type just don't make it into the response. Cheap path
-   *  for `type=file` (raw sources only) or `type=wiki` (skip stubs
-   *  and sources). */
+  /** Restrict hits to entities of the given type(s). Any combination
+   *  of `wiki`, `file`, `stub`. Omit/empty = no filter. Ripgrep still
+   *  scans every indexed file; the filter applies post-fetch on the
+   *  entity-join rows so the `unmatched_files` diagnostic counter
+   *  retains its "no entity at all" meaning instead of conflating
+   *  with "filtered out by type". Useful for source-only sweeps
+   *  (`['file']`) or wiki-only sweeps (`['wiki']`). */
   types?: EntityType[];
   limit?: number;
   maxSnippetsPerFile?: number;

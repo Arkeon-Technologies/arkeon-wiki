@@ -18,7 +18,7 @@ import { z } from "zod";
 
 import { safeResolve } from "../lib/file-edits.js";
 import { parseFrontmatter } from "../lib/frontmatter.js";
-import { searchKeyword, searchVector } from "../lib/search.js";
+import { MAX_QUERY_PATTERNS, searchKeyword, searchVector } from "../lib/search.js";
 import { listEntities, parseEntityTypes, type EntityType } from "../lib/entities.js";
 
 import { defineTool, type ToolFactory } from "./define-tool.js";
@@ -165,8 +165,12 @@ const searchTool = defineTool("search", {
       .union([z.string(), z.array(z.string()).min(1).max(10)])
       .describe(
         "A single query string, or an array of up to 10 patterns OR'd " +
-          "together in one ripgrep invocation. For vector mode, only " +
-          "the first pattern is embedded.",
+          "together in one ripgrep invocation. All variants share " +
+          "ripgrep's --smart-case mode: a single uppercase letter " +
+          "anywhere in the array makes the WHOLE batch case-sensitive, " +
+          "so prefer all-lowercase variants unless you need case " +
+          "discrimination. For vector mode, only the first pattern is " +
+          "embedded — pass the most representative form first.",
       ),
     type: z
       .string()
@@ -223,6 +227,18 @@ const searchTool = defineTool("search", {
       // error body in the tool result rather than a 400-shaped object.
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(`search: ${msg}`);
+    }
+
+    // Defense-in-depth: the Zod schema caps array length at 10, but
+    // direct callers (tests, future internal code) bypass Zod. The
+    // lib's defensive throw IS reached — but it lands inside the
+    // Promise.allSettled below and gets silently coerced to empty
+    // hits. The worst kind of failure for an LLM. Throw here so the
+    // tool result carries a real error message.
+    if (Array.isArray(query) && query.length > MAX_QUERY_PATTERNS) {
+      throw new Error(
+        `search: too many query patterns (${query.length}); max is ${MAX_QUERY_PATTERNS}`,
+      );
     }
 
     const targets = resolveToolScope(ctx, space);
@@ -282,6 +298,12 @@ const searchTool = defineTool("search", {
           : { hits: [], total: 0, model: "unavailable" };
       out.vector = {
         ...raw,
+        // Surface the single pattern that was actually embedded so
+        // the caller can see — at a glance — which form drove the
+        // semantic ranking when an array was passed. Always present
+        // (even for single-string queries) so consumers don't have
+        // to branch on the top-level `query` shape.
+        query_used: vectorQuery,
         hits: raw.hits.map((h) => ({
           ...h,
           space: indexById.get(h.space_id) ?? "",

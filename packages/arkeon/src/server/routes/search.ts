@@ -24,7 +24,11 @@ interface SearchResponse {
   query: string | string[];
   mode: Mode;
   keyword?: KeywordSearchResult;
-  vector?: VectorSearchResult;
+  /** Vector results carry an extra `query_used` because vector mode
+   *  always embeds a single string — when `q` is repeated only the
+   *  first one drives the embedding. Surfacing it next to the hits
+   *  makes the asymmetry explicit. */
+  vector?: VectorSearchResult & { query_used: string };
 }
 
 // GET /search?q=...&mode=keyword|vector|both&space_id=...&type=...&limit=20&snippets=3&regex=false
@@ -34,7 +38,7 @@ interface SearchResponse {
 // whether) to combine.
 //
 //   mode=keyword           {keyword: {hits, total, unmatched_files}}
-//   mode=vector            {vector: {hits, total, model}}
+//   mode=vector            {vector: {hits, total, model, query_used}}
 //   mode=both (default)    {keyword: ..., vector: ...}
 //
 // `keyword` hits are entity-level, ranked by ripgrep match_count, with
@@ -46,8 +50,10 @@ interface SearchResponse {
 // gets up to `limit` results. `snippets` and `regex` only affect keyword.
 //
 // `q` may be repeated (`?q=foo&q=bar`) up to MAX_QUERY_PATTERNS times
-// to OR several patterns in one ripgrep pass. Vector mode embeds the
-// first `q` only.
+// to OR several patterns in one ripgrep pass. Vector mode embeds only
+// the first `q` and surfaces it on `vector.query_used`. All patterns
+// share ripgrep's --smart-case semantics — a single uppercase letter
+// in any `q` makes the whole batch case-sensitive.
 //
 // `type` is a comma-separated list of entity types to keep in keyword
 // hits — any of `wiki`, `file`, `stub`. Omit for no filter. Vector
@@ -135,10 +141,15 @@ searchRouter.get("/", async (c) => {
 
   if (wantVector) {
     if (vectorSettled.status === "fulfilled" && vectorSettled.value) {
-      response.vector = vectorSettled.value;
+      response.vector = { ...vectorSettled.value, query_used: queryForVector };
     } else if (vectorSettled.status === "rejected") {
       console.error(`[search] vector strategy failed: ${vectorSettled.reason}`);
-      response.vector = { hits: [], total: 0, model: "unavailable" };
+      response.vector = {
+        hits: [],
+        total: 0,
+        model: "unavailable",
+        query_used: queryForVector,
+      };
     }
   }
 

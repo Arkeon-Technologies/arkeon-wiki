@@ -656,6 +656,21 @@ describe("GET /search?mode=keyword — multi-query batching (#100)", () => {
     );
     expect(data.error?.code).toBe("validation_error");
   });
+
+  it("vector response surfaces the embedded query via query_used", async () => {
+    // Vector mode embeds only the first ?q=. Without explicit echo
+    // a consumer sees `query: ["A","B","C"]` next to vector hits
+    // derived purely from "A" — surprising. `vector.query_used`
+    // makes the asymmetry explicit. Always present (even for
+    // single-q calls) so consumers don't have to branch on shape.
+    const multi = await api(
+      `/search?space_id=${spaceId}&q=Turing&q=Shannon&mode=vector`,
+    );
+    expect(multi.vector.query_used).toBe("Turing");
+
+    const single = await api(`/search?space_id=${spaceId}&q=Shannon&mode=vector`);
+    expect(single.vector.query_used).toBe("Shannon");
+  });
 });
 
 describe("GET /search?mode=keyword — type filter (#100)", () => {

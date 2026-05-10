@@ -634,6 +634,36 @@ describe("search edge cases", () => {
       }),
     ).rejects.toThrow(/search:.*bogus/);
   });
+
+  it("rejects an oversized query array with a clear error (not silent empty hits)", async () => {
+    // The Zod schema caps at 10, but direct callers bypass Zod. The
+    // tool layer enforces the cap explicitly so the failure surfaces
+    // as a real error rather than getting swallowed by the inner
+    // Promise.allSettled into an empty-hits response.
+    const queries = Array.from({ length: 11 }, (_, i) => `pattern${i}`);
+    await expect(
+      tool("search").execute({ query: queries, mode: "keyword" }),
+    ).rejects.toThrow(/search: too many query patterns \(11\); max is 10/);
+  });
+
+  it("vector namespace echoes the embedded query via query_used", async () => {
+    // Multi-pattern keyword search runs ripgrep with all patterns,
+    // but vector embeds only the first one. The tool layer surfaces
+    // that as `vector.query_used` so a consumer can see — at a
+    // glance — which form drove the semantic ranking.
+    const result = (await tool("search").execute({
+      query: ["redox", "electron"],
+    })) as { vector?: { query_used?: string } };
+    expect(result.vector?.query_used).toBe("redox");
+
+    // Single-string queries also include query_used so consumers
+    // don't have to branch on shape.
+    const single = (await tool("search").execute({
+      query: "electron",
+      mode: "vector",
+    })) as { vector?: { query_used?: string } };
+    expect(single.vector?.query_used).toBe("electron");
+  });
 });
 
 // ── list_entities ─────────────────────────────────────────────────
