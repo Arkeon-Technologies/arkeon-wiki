@@ -438,7 +438,8 @@ describe("API read endpoints", () => {
     const all = await api("/entities?type=wiki");
     expect(all.total).toBeGreaterThan(0);
     expect(all.entities.length).toBeGreaterThan(0);
-    // type=wiki filter excludes sources and stubs; every row should be 'wiki'.
+    // type=wiki filter excludes source files; every row should be 'wiki'
+    // (placeholder rows are also type='wiki' but unresolved=true).
     for (const w of all.entities) {
       expect(w.type).toBe("wiki");
     }

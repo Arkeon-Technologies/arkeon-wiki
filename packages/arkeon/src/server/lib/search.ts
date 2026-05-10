@@ -26,6 +26,7 @@ import { join } from "node:path";
 import { rgPath } from "@vscode/ripgrep";
 
 import { createSql } from "./sql.js";
+import type { EntityType } from "./entities.js";
 import { getEmbedder } from "./embedder/index.js";
 import { parseFrontmatter } from "./frontmatter.js";
 
@@ -57,7 +58,7 @@ export interface SearchSnippet {
 export interface KeywordSearchHit {
   entity_id: string;
   space_id: string;
-  type: string;
+  type: EntityType;
   label: string;
   source_path: string;
   match_count: number;
@@ -329,7 +330,7 @@ export async function searchKeyword(
       hits.push({
         entity_id: entity.id as string,
         space_id: entity.space_id as string,
-        type: entity.type as string,
+        type: entity.type as EntityType,
         label: entity.label as string,
         source_path: entity.source_path as string,
         match_count: fileResult.match_count,

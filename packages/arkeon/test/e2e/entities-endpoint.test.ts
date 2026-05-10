@@ -5,7 +5,7 @@
  * End-to-end coverage for the generic GET /entities listing.
  *
  * One space is set up with a representative mix:
- *   - a wiki with one outbound [[wikilink]] (creates a stub)
+ *   - a wiki with one outbound [[wikilink]] (creates a placeholder)
  *   - a separate wiki with two outbound standard links to existing wikis
  *   - one isolated wiki with no links in or out
  *   - one source file
@@ -141,23 +141,47 @@ describe("GET /entities", () => {
     const types = new Set(data.entities.map((e: any) => e.type));
     expect(types.has("wiki")).toBe(true);
     expect(types.has("file")).toBe(true);
-    expect(types.has("stub")).toBe(true);
-    expect(data.total).toBe(5); // 3 wikis + 1 file + 1 stub
+    // The placeholder for "Unknown Topic" is a wiki, not a separate type.
+    const unresolved = data.entities.filter((e: any) => e.unresolved);
+    expect(unresolved.map((e: any) => e.label).sort()).toEqual(["Unknown Topic"]);
+    expect(data.total).toBe(5); // 3 wikis + 1 file + 1 placeholder wiki
   });
 
   it("filters by single type", async () => {
-    const stubs = await api(`?space_id=${spaceId}&type=stub`);
-    expect(stubs.entities).toHaveLength(1);
-    expect(stubs.entities[0].label).toBe("Unknown Topic");
-    expect(stubs.entities[0].type).toBe("stub");
+    const wikis = await api(`?space_id=${spaceId}&type=wiki`);
+    // 3 realized + 1 placeholder = 4 wikis total.
+    expect(wikis.entities).toHaveLength(4);
+    for (const e of wikis.entities) expect(e.type).toBe("wiki");
   });
 
   it("filters by multiple types via comma list", async () => {
-    const data = await api(`?space_id=${spaceId}&type=wiki,stub`);
+    const data = await api(`?space_id=${spaceId}&type=wiki,file`);
     const types = new Set(data.entities.map((e: any) => e.type));
     expect(types.has("wiki")).toBe(true);
-    expect(types.has("stub")).toBe(true);
-    expect(types.has("file")).toBe(false);
+    expect(types.has("file")).toBe(true);
+    expect(data.entities.length).toBe(5);
+  });
+
+  it("unresolved=true surfaces placeholder wikis", async () => {
+    const data = await api(`?space_id=${spaceId}&unresolved=true`);
+    expect(data.entities).toHaveLength(1);
+    expect(data.entities[0].label).toBe("Unknown Topic");
+    expect(data.entities[0].type).toBe("wiki");
+    expect(data.entities[0].unresolved).toBe(true);
+  });
+
+  it("unresolved=false hides placeholders", async () => {
+    const data = await api(`?space_id=${spaceId}&unresolved=false&type=wiki`);
+    const labels = data.entities.map((e: any) => e.label).sort();
+    expect(labels).toEqual(["Hub Concept", "Leaf Concept", "Seeker"]);
+    for (const e of data.entities) expect(e.unresolved).toBe(false);
+  });
+
+  it("rejects ?type=stub with a 400 pointing at the new filter", async () => {
+    const res = await fetch(`${BASE_URL}/entities?space_id=${spaceId}&type=stub`);
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(String(body.error?.message ?? body.message ?? "")).toMatch(/unresolved/);
   });
 
   it("filters by subject_type from frontmatter", async () => {
@@ -173,7 +197,7 @@ describe("GET /entities", () => {
       `?space_id=${spaceId}&inbound_min=1&include=counts`,
     );
     const labels = linked.entities.map((e: any) => e.label).sort();
-    // Leaf is linked from Hub; Unknown Topic stub is linked from Seeker.
+    // Leaf is linked from Hub; Unknown Topic placeholder is linked from Seeker.
     expect(labels).toEqual(["Leaf Concept", "Unknown Topic"]);
     const leaf = linked.entities.find((e: any) => e.label === "Leaf Concept");
     expect(leaf.counts.inbound).toBe(1);
@@ -185,7 +209,7 @@ describe("GET /entities", () => {
     expect(labels).toEqual(["Hub Concept", "Seeker"]);
   });
 
-  it("has_unresolved_outbound=true surfaces wikis pointing at stubs", async () => {
+  it("has_unresolved_outbound=true surfaces wikis pointing at placeholders", async () => {
     const data = await api(
       `?space_id=${spaceId}&has_unresolved_outbound=true`,
     );
@@ -195,8 +219,11 @@ describe("GET /entities", () => {
   });
 
   it("has_unresolved_outbound=false hides them", async () => {
+    // Filter to realized wikis (unresolved=false) so the Unknown Topic
+    // placeholder — which has no outbound but is itself unresolved —
+    // doesn't show up.
     const data = await api(
-      `?space_id=${spaceId}&has_unresolved_outbound=false&type=wiki`,
+      `?space_id=${spaceId}&has_unresolved_outbound=false&type=wiki&unresolved=false`,
     );
     const labels = data.entities.map((e: any) => e.label).sort();
     expect(labels).toEqual(["Hub Concept", "Leaf Concept"]);
@@ -240,21 +267,22 @@ describe("GET /entities", () => {
       `?space_id=${spaceId}&type=wiki&include=relationships`,
     );
     expect(Array.isArray(data.relationships)).toBe(true);
-    // Hub→Leaf and Seeker→stub both have wiki sources.
+    // Hub→Leaf and Seeker→placeholder both have wiki sources.
     expect(data.relationships.length).toBeGreaterThanOrEqual(2);
   });
 
   it("edited_by_role=human matches filesystem-driven edits", async () => {
     // syncFile attributes filesystem-driven creations to "human" with
-    // edit_kind="resync" (sync.ts:120). Every wiki we wrote here was
-    // a plain disk write, so they all qualify. Stubs aren't recorded
+    // edit_kind="resync" (sync.ts:120). Every wiki we wrote here was a
+    // plain disk write, so they all qualify. Placeholders aren't recorded
     // in entity_edits because their creation doesn't go through the
-    // edit-context-tagged write path.
+    // edit-context-tagged write path — and unresolved=false confirms the
+    // attributed entities are all realized.
     const data = await api(`?space_id=${spaceId}&edited_by_role=human`);
     const types = new Set(data.entities.map((e: any) => e.type));
     expect(types.has("wiki")).toBe(true);
     expect(types.has("file")).toBe(true);
-    expect(types.has("stub")).toBe(false);
+    for (const e of data.entities) expect(e.unresolved).toBe(false);
   });
 
   it("rejects an invalid sort value with 400", async () => {
