@@ -5,13 +5,13 @@
  * `arkeon-wiki config <subcommand>` — manage the agent configuration.
  *
  * Subcommands:
- *   show        print the merged effective config (built-ins + YAML)
+ *   show        print the merged effective config (templates + YAML)
  *   init        create .arkeon/agents.yaml from a template
  *   validate    schema-check .arkeon/agents.yaml
  *
  * The config file is `.arkeon/agents.yaml` in the current repo (or
  * `~/.arkeon-wiki/agents.yaml` for user-global defaults). Both are
- * optional; the runtime falls back to the built-in templates plus
+ * optional; the runtime falls back to the bundled role templates plus
  * env-var-based key resolution.
  */
 
@@ -25,7 +25,7 @@ import {
   AGENT_CONFIG_SCHEMA,
   loadAgentConfig,
 } from "../../../server/agents/config.js";
-import { BUILTIN_ROLES } from "../../../server/agents/builtins.js";
+import { loadBundledTemplates } from "../../../server/agents/templates.js";
 import { listAvailableRoles } from "../../../server/agents/role-builder.js";
 import { output } from "../../lib/output.js";
 
@@ -38,10 +38,10 @@ const TEMPLATE = `# .arkeon/agents.yaml
 # Secrets never live here — set OPENAI_API_KEY / ANTHROPIC_API_KEY
 # in .env (gitignored) or your shell.
 #
-# The built-in 'ingestor' role is defined in the package and
-# inherited automatically. Override its fields here, or define
-# your own custom roles. Run \`arkeon-wiki config show\` to see
-# the merged effective config.
+# The bundled 'ingestor' and 'consolidator' roles ship with the
+# package and are inherited automatically. Override their fields
+# here, or define your own custom roles. Run \`arkeon-wiki config show\`
+# to see the merged effective config.
 
 defaults:
   provider: openai             # openai | anthropic | openai-compatible
@@ -52,7 +52,7 @@ defaults:
   #   This wiki tracks researchers in climate science. Skip subjects
   #   not directly relevant. Cross-link to existing wikis.
 
-# Per-role overrides (the built-in role inherits by name). Add
+# Per-role overrides (the bundled roles inherit by name). Add
 # custom roles here too — they need at least 'system' and 'tools'.
 #
 # roles:
@@ -126,15 +126,16 @@ async function runShow(): Promise<void> {
   console.log("");
   console.log(yaml.dump({ defaults: merged.defaults ?? {}, roles: merged.roles ?? {} }, { sortKeys: false }));
 
+  const templates = loadBundledTemplates();
   console.log(`# Available roles (${roles.length}):`);
   for (const name of roles) {
-    const isBuiltin = Object.prototype.hasOwnProperty.call(BUILTIN_ROLES, name);
+    const isTemplate = Object.prototype.hasOwnProperty.call(templates, name);
     const overridden = !!merged.roles?.[name];
     const tag =
-      isBuiltin && overridden
-        ? "(builtin, overridden)"
-        : isBuiltin
-        ? "(builtin)"
+      isTemplate && overridden
+        ? "(template, overridden)"
+        : isTemplate
+        ? "(template)"
         : "(custom)";
     console.log(`#   ${name}  ${tag}`);
   }
