@@ -86,7 +86,7 @@ Tables in SQLite:
 - `chunk_vectors` — `vec0` virtual table holding the actual float[256] vectors (sqlite-vec). Joined to chunks via `chunk_id`.
 - `embedding_queue` — per-entity work queue drained by the in-process embedding worker. Same lease pattern as `agent_queue`.
 
-No actors, no auth, no versioning. Schema across `src/schema/001-foundation.sql`, `002-chunks.sql`, `003-embeddings.sql`, and `004-edits-and-triggers.sql`.
+No actors, no auth, no versioning. Schema across `src/schema/001-foundation.sql`, `002-chunks.sql`, `003-embeddings.sql`, `004-edits-and-triggers.sql`, and `005-edit-kinds.sql`.
 
 ## Key modules
 
@@ -97,7 +97,7 @@ No actors, no auth, no versioning. Schema across `src/schema/001-foundation.sql`
 - `src/server/lib/search.ts` — ripgrep adapter: spawns `rg --json` per space, parses match events, joins paths back to entities, ranks by `match_count`.
 - `src/server/lib/wiki-paths.ts` — pure helpers for routing labels to wiki file paths: `slugify`, `normalizeLabel`, `wikiPathFor(subject_type, label)`, `findFreePath`.
 - `src/server/lib/file-edits.ts` — the universal mutation primitive. `applyEdit(space, edit)` is the chokepoint every agent and routing helper uses; runs `syncFile`/`removeByPath` after each change.
-- `src/server/agents/` — the agent runtime: declarative `.arkeon/agents.yaml` config (Zod-validated), built-in `ingestor` role template, role-builder that merges YAML + builtins + env, tool registry (`read_file`, `list_entities`, `search`, `edit_file`), the runAgent loop (Vercel AI SDK), and the per-space scheduler that drives auto-triggering. `edit_file` is the only mutation tool — three modes (CREATE, APPEND, REPLACE) dispatched on whether `search` is empty and whether the file exists. There's no overwrite path.
+- `src/server/agents/` — the agent runtime: declarative `.arkeon/agents.yaml` config (Zod-validated), built-in `ingestor` role template, role-builder that merges YAML + builtins + env, tool registry (`read_file`, `list_entities`, `search`, `edit_file`), the runAgent loop (Vercel AI SDK), and the per-space scheduler that drives auto-triggering. `edit_file` is the only mutation tool — five modes (`create`, `append`, `replace`, `annotate`, `delete_section`) on an explicit `mode` discriminator. `replace` is Aider-style SEARCH/REPLACE; `annotate` splices `insert_text` after a unique anchor phrase without touching surrounding bytes (the load-bearing primitive for additive edits — the schema makes prose drift impossible); `delete_section` removes an ATX heading and its body up to the next same-or-higher heading. Whole-file deletion lives in `delete_wiki` (different tool, guarded `wiki/` prefix, required `reason`).
 - `src/server/lib/agent-queue.ts` — pure SQL helpers around the `agent_queue` table (`enqueue`, `claimNext`, `complete`, `fail`, `reclaimOrphans`).
 - `src/server/agents/path-filter.ts` — `shouldTrigger(path)` — the hardcoded `wiki/**` + `.arkeon/**` filter the scheduler consults before enqueueing. Single source of truth; when user-tunable include/exclude lands, this file is the place.
 - `src/server/lib/chunker.ts` — `chunkWiki(parsed, label)`: pure function that turns a wiki into the chunks the embedder will see. Issue #47. Card chunk (label + subject_type + aliases + short_description + lead paragraph) plus one chunk per non-empty H2 with the heading path prepended. Oversized sections fall back to H3-then-paragraph splits with ~80-token overlap. Runs on every wiki sync (`syncWikiFile()`); set `ARKEON_WIKI_CHUNKING=0` to disable.
@@ -196,7 +196,7 @@ The writer is append-only — there is no built-in rotation, so the file grows a
 
 ## Schema migrations
 
-`src/schema/*.sql`, applied in alphabetical order. Currently `001-foundation.sql` (spaces, entities — `type IN ('wiki','file','stub')` — relationships, agent runtime), `002-chunks.sql` (`entity_chunks`), `003-embeddings.sql` (`chunk_vectors` vec0 table, `entity_embeddings` pivot, `embedding_queue`), and `004-edits-and-triggers.sql` (`entity_edits` audit log, `entity_latest_edit` view, agent triggers). Must be idempotent (all `IF NOT EXISTS`). Runs on every startup. Note: `003-embeddings.sql` requires the sqlite-vec extension to be loaded; `initDb()` does this automatically before migrations run.
+`src/schema/*.sql`, applied in alphabetical order. Currently `001-foundation.sql` (spaces, entities — `type IN ('wiki','file','stub')` — relationships, agent runtime), `002-chunks.sql` (`entity_chunks`), `003-embeddings.sql` (`chunk_vectors` vec0 table, `entity_embeddings` pivot, `embedding_queue`), `004-edits-and-triggers.sql` (`entity_edits` audit log, `entity_latest_edit` view), and `005-edit-kinds.sql` (drops the `edit_kind` CHECK constraint so the runtime `EditKind` type is the authoritative enum). The runner tracks applied files in `schema_migrations` so non-idempotent migrations (e.g. table-recreate dances) only run once. Runs on every startup. Note: `003-embeddings.sql` requires the sqlite-vec extension to be loaded; `initDb()` does this automatically before migrations run.
 
 ## What's NOT here (yet)
 

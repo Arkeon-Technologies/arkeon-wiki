@@ -248,9 +248,9 @@ describe("runAgent — tool-call loop", () => {
   it("dispatches one tool call, accumulates the edit, and finishes on text", async () => {
     const model = scriptModel([
       toolCallStep("edit_file", {
+        mode: "create",
         path: "wiki/concept/from-mock.md",
-        search: "",
-        replace: "---\nlabel: From Mock\n---\n\nbody\n",
+        content: "---\nlabel: From Mock\n---\n\nbody\n",
       }),
       textStep("file written"),
     ]);
@@ -285,6 +285,7 @@ describe("runAgent — tool-call loop", () => {
       toolCallStep("search", { query: "Group theory" }),
       toolCallStep("read_file", { path: "wiki/person/galois.md" }),
       toolCallStep("edit_file", {
+        mode: "replace",
         path: "wiki/person/galois.md",
         search: "Group theory.",
         replace: "Group theory. Founded the field before age 20.",
@@ -432,9 +433,9 @@ describe("runAgent — step cap", () => {
       doGenerate: async () => {
         i++;
         return toolCallStep("edit_file", {
+          mode: "create",
           path: `wiki/concept/loop-${i}.md`,
-          search: "",
-          replace: `---\nlabel: Loop ${i}\n---\n\nbody\n`,
+          content: `---\nlabel: Loop ${i}\n---\n\nbody\n`,
         });
       },
     });
@@ -480,9 +481,9 @@ describe("runAgent — multi-phase", () => {
         // Phase 2: one edit call, then text -> stop.
         if (i === 3) {
           return toolCallStep("edit_file", {
+            mode: "create",
             path: "wiki/concept/from-phase-2.md",
-            search: "",
-            replace: "---\nlabel: From Phase 2\n---\n\nbody\n",
+            content: "---\nlabel: From Phase 2\n---\n\nbody\n",
           });
         }
         return textStep("phase 2 done");

@@ -23,7 +23,14 @@
  * process, so no cross-process coordination is needed.
  */
 
-export type EditKind = "create" | "append" | "replace" | "delete" | "resync";
+export type EditKind =
+  | "create"
+  | "append"
+  | "replace"
+  | "annotate"
+  | "delete"
+  | "delete_section"
+  | "resync";
 
 export interface EditContext {
   role: string;

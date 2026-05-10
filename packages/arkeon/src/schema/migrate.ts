@@ -37,12 +37,33 @@ export async function runMigrations(opts: MigrateOptions): Promise<void> {
 
   const db = initDb(opts.dbPath);
 
+  // Bootstrap the migration ledger so subsequent runs can skip applied
+  // files. Without this, every migration must be naturally idempotent
+  // (CREATE TABLE IF NOT EXISTS); with it, non-idempotent recreates
+  // (e.g. dropping a CHECK constraint via the SQLite 12-step) are safe.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      name TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+    )
+  `);
+  const applied = new Set(
+    (db.prepare("SELECT name FROM schema_migrations").all() as { name: string }[])
+      .map((r) => r.name),
+  );
+
   let failed = false;
 
   for (const file of files) {
+    process.stdout.write(`  ${file} ... `);
+
+    if (applied.has(file)) {
+      console.log("SKIP (already applied)");
+      continue;
+    }
+
     const content = await readFile(join(schemaDir, file), "utf-8");
     const statements = splitStatements(content);
-    process.stdout.write(`  ${file} ... `);
 
     let fileOk = true;
 
@@ -53,12 +74,17 @@ export async function runMigrations(opts: MigrateOptions): Promise<void> {
         if (stmt.replace(/--[^\n]*/g, "").trim() === "") continue;
         db.exec(stmt);
       }
+      db.prepare("INSERT INTO schema_migrations(name) VALUES (?)").run(file);
       db.exec("COMMIT");
     } catch (err: unknown) {
       try { db.exec("ROLLBACK"); } catch { /* ignore */ }
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("already exists")) {
-        // Table/index already exists — idempotent, that's fine
+        // Pre-ledger DB: the file's CREATE TABLE IF NOT EXISTS already
+        // matched. Record it as applied so the next run skips cleanly.
+        try {
+          db.prepare("INSERT OR IGNORE INTO schema_migrations(name) VALUES (?)").run(file);
+        } catch { /* ignore */ }
       } else {
         console.log(`ERROR: ${msg}`);
         fileOk = false;
