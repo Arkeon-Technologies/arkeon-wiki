@@ -40,15 +40,6 @@ let serverHandle: { stop: () => Promise<void> } | null = null;
 let spaceA: Space;
 let spaceB: Space;
 
-// vitest.e2e.config.ts runs e2e files in a single shared process
-// (`isolate: false`, `fileParallelism: false`), so any env we mutate
-// here leaks into later files unless explicitly restored. Capture
-// the prior values in beforeAll, put them back in afterAll. The
-// canonical example of the leak: queue-reclaim.test.ts hung waiting
-// for the embedding worker after this file silently disabled it.
-let prevChunkingEnv: string | undefined;
-let prevEmbeddingsEnv: string | undefined;
-
 interface ExecutableTool {
   execute: (input: unknown) => Promise<unknown>;
 }
@@ -75,14 +66,6 @@ beforeAll(async () => {
   );
 
   process.env.ARKEON_WIKI_HOME = stateDir;
-  // Disable chunking + embeddings — keyword search is enough for this
-  // suite, and the embedder warm-up otherwise dominates the first run.
-  // Capture-and-restore (see top-of-file note) so we don't pollute
-  // sibling e2e files that depend on the embedding worker.
-  prevChunkingEnv = process.env.ARKEON_WIKI_CHUNKING;
-  prevEmbeddingsEnv = process.env.ARKEON_WIKI_EMBEDDINGS;
-  process.env.ARKEON_WIKI_CHUNKING = "0";
-  process.env.ARKEON_WIKI_EMBEDDINGS = "0";
 
   const dbFile = join(stateDir, "data", "arke.db");
   const { runMigrations } = await import("../../src/schema/index.js");
@@ -118,10 +101,6 @@ afterAll(async () => {
   if (baseDir && existsSync(baseDir)) {
     rmSync(baseDir, { recursive: true, force: true });
   }
-  if (prevChunkingEnv === undefined) delete process.env.ARKEON_WIKI_CHUNKING;
-  else process.env.ARKEON_WIKI_CHUNKING = prevChunkingEnv;
-  if (prevEmbeddingsEnv === undefined) delete process.env.ARKEON_WIKI_EMBEDDINGS;
-  else process.env.ARKEON_WIKI_EMBEDDINGS = prevEmbeddingsEnv;
 }, 30_000);
 
 describe("resolveAllowedSpaces against live SQLite", () => {

@@ -52,22 +52,3 @@ CREATE INDEX IF NOT EXISTS idx_relationships_target ON relationships(target_id);
 -- relationships.target_id (which already has idx_relationships_target).
 CREATE INDEX IF NOT EXISTS idx_entities_stubs
   ON entities(space_id) WHERE type = 'stub';
-
--- Agent runs: idempotency tracking for the agent runtime. Keyed by
--- (role, idempotency_key); the input_hash lets the runtime decide
--- whether a re-trigger of the same key represents new work or a replay.
-CREATE TABLE IF NOT EXISTS agent_runs (
-  role TEXT NOT NULL,
-  idempotency_key TEXT NOT NULL,
-  input_hash TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('completed', 'failed')),
-  finished_at TEXT NOT NULL DEFAULT (datetime('now')),
-  error TEXT,
-  PRIMARY KEY (role, idempotency_key)
-);
-
--- Supports recency queries: "recent failed runs" for diagnostics,
--- "runs in the last hour" for monitoring. Cheap insurance while the
--- schema is fresh.
-CREATE INDEX IF NOT EXISTS idx_agent_runs_finished
-  ON agent_runs(role, finished_at);

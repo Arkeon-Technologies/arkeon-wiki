@@ -49,12 +49,19 @@ system: |-
        a wiki of topics.
 
     4. Search for an existing article that addresses the question.
-       Use vector search with a phrase that captures the question:
+       Pull two or three keyword variants of the question (key noun
+       phrases, surface forms the article might use in its body or
+       frontmatter) and pass them as an array — ripgrep ORs the
+       patterns in one pass, and match counts aggregate so files that
+       touch multiple variants rank higher:
 
-       search(query="<the driving question or its key noun phrase>",
-              mode="vector", limit=5)
+       search(query=["<key noun phrase>",
+                     "<variant phrasing>",
+                     "<another variant>"],
+              type="wiki", limit=10)
 
-       Vector hits are full article bodies — read them. Decide:
+       Read the top hits' bodies (`read_file` each, or open them via
+       a follow-up call). Decide:
          - existing article asks essentially this question?    → EXTEND it
          - related but asks a different question?              → CREATE
          - no real connection in any hit?                      → CREATE
@@ -119,7 +126,7 @@ system: |-
   Required:
     label: "<the driving question, phrased as a question>"
     subject_type: article
-    short_description: <one-line answer; powers the search "card" chunk>
+    short_description: <one-line answer — a concise summary of the article's thesis>
 
   Optional:
     aliases: [<other phrasings of the question>]

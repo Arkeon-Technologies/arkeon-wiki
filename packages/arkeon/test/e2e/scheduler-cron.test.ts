@@ -36,14 +36,8 @@ import type { Space } from "../../src/server/lib/sync.js";
 
 let testDir: string;
 let stateDir: string;
-let prevEmbeddingsEnv: string | undefined;
-let prevChunkingEnv: string | undefined;
 
 beforeAll(async () => {
-  prevEmbeddingsEnv = process.env.ARKEON_WIKI_EMBEDDINGS;
-  prevChunkingEnv = process.env.ARKEON_WIKI_CHUNKING;
-  process.env.ARKEON_WIKI_EMBEDDINGS = "0";
-  process.env.ARKEON_WIKI_CHUNKING = "0";
   process.env.OPENAI_API_KEY = "sk-test";
 
   const base = join(tmpdir(), `arkeon-cron-${randomBytes(4).toString("hex")}`);
@@ -65,10 +59,6 @@ afterAll(async () => {
     });
   }
   delete process.env.OPENAI_API_KEY;
-  if (prevEmbeddingsEnv === undefined) delete process.env.ARKEON_WIKI_EMBEDDINGS;
-  else process.env.ARKEON_WIKI_EMBEDDINGS = prevEmbeddingsEnv;
-  if (prevChunkingEnv === undefined) delete process.env.ARKEON_WIKI_CHUNKING;
-  else process.env.ARKEON_WIKI_CHUNKING = prevChunkingEnv;
 }, 10_000);
 
 afterEach(() => {

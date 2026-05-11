@@ -3,27 +3,21 @@
 
 /**
  * End-to-end tests for the agent runtime infrastructure: tool registry
- * (each tool's execute path) and the idempotency table.
+ * (each tool's execute path).
  *
  * These tests don't call an LLM. They exercise the parts of the runtime
- * that the AI SDK doesn't already test: our tool wiring, our SQLite
- * roundtrip for agent_runs, and the integration between tools and
- * applyEdit.
+ * that the AI SDK doesn't already test: our tool wiring and the
+ * integration between tools and applyEdit.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdirSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 
 import { ALL_TOOLS } from "../../src/server/agents/tools.js";
-import {
-  alreadyProcessed,
-  hashInput,
-  makeContext,
-  markProcessed,
-} from "../../src/server/agents/runtime.js";
+import { makeContext } from "../../src/server/agents/runtime.js";
 import { createSql } from "../../src/server/lib/sql.js";
 import type { Space } from "../../src/server/lib/sync.js";
 
@@ -75,49 +69,6 @@ afterAll(async () => {
     });
   }
 }, 30_000);
-
-describe("agent_runs idempotency table", () => {
-  beforeEach(async () => {
-    const sql = createSql();
-    await sql`DELETE FROM agent_runs`;
-  });
-
-  it("alreadyProcessed returns false when no row exists", async () => {
-    const seen = await alreadyProcessed("any-role", { key: "k1", hash: "h1" });
-    expect(seen).toBe(false);
-  });
-
-  it("markProcessed + alreadyProcessed roundtrip", async () => {
-    await markProcessed("ingestor", { key: "src/a.md", hash: "abc" }, "completed", null);
-    expect(
-      await alreadyProcessed("ingestor", { key: "src/a.md", hash: "abc" }),
-    ).toBe(true);
-  });
-
-  it("returns false when the hash differs (same key, new content)", async () => {
-    await markProcessed("ingestor", { key: "src/a.md", hash: "abc" }, "completed", null);
-    expect(
-      await alreadyProcessed("ingestor", { key: "src/a.md", hash: "DIFFERENT" }),
-    ).toBe(false);
-  });
-
-  it("returns false when the previous run failed (so we'll retry)", async () => {
-    await markProcessed("editor", { key: "wiki-1", hash: "h" }, "failed", "boom");
-    expect(await alreadyProcessed("editor", { key: "wiki-1", hash: "h" })).toBe(false);
-  });
-
-  it("upserts: a successful run after a failure flips to completed", async () => {
-    await markProcessed("editor", { key: "wiki-1", hash: "h" }, "failed", "boom");
-    await markProcessed("editor", { key: "wiki-1", hash: "h" }, "completed", null);
-    expect(await alreadyProcessed("editor", { key: "wiki-1", hash: "h" })).toBe(true);
-  });
-});
-
-describe("hashInput integration", () => {
-  it("matches the same logical input regardless of object key order", () => {
-    expect(hashInput({ a: 1, b: 2 })).toBe(hashInput({ b: 2, a: 1 }));
-  });
-});
 
 describe("read_file tool", () => {
   it("reads a markdown file and returns parsed frontmatter", async () => {
@@ -235,10 +186,7 @@ describe("search tool", () => {
 
     const ctx = makeContext(space, "test");
     const tool = ALL_TOOLS.search(ctx) as ExecutableTool;
-    // Scope to keyword for deterministic assertion against synthetic
-    // fixtures — vector mode would also fire under default `mode=both`
-    // but with mock embeddings its ranking isn't semantically grounded.
-    const result = (await tool.execute({ query: "polonium", mode: "keyword" })) as {
+    const result = (await tool.execute({ query: "polonium" })) as {
       keyword: { hits: Array<{ label: string; source_path: string }> };
     };
 

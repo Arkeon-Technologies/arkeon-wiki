@@ -12,8 +12,8 @@
 -- becomes (type='wiki' AND source_hash IS NULL).
 --
 -- Existing data is migrated in place. Inbound relationships, cascades,
--- chunks/embeddings, edit logs all reference entities.id which is
--- preserved across the UPDATE. The check constraint stays permissive
+-- edit logs all reference entities.id which is preserved across the
+-- UPDATE. The check constraint stays permissive
 -- of 'stub' so we don't have to do the SQLite table-recreate dance with
 -- six FK-cascading dependents — the TS EntityType ('wiki' | 'file') is
 -- the runtime gate, and `parseEntityTypes` rejects 'stub' at the API

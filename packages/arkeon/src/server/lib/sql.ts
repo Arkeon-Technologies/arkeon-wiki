@@ -3,7 +3,6 @@
 
 import Database from "better-sqlite3";
 import type { Database as DatabaseType } from "better-sqlite3";
-import * as sqliteVec from "sqlite-vec";
 
 type Row = Record<string, unknown>;
 
@@ -19,23 +18,6 @@ export function initDb(path: string): DatabaseType {
   _db = new Database(path);
   _db.pragma("journal_mode = WAL");
   _db.pragma("foreign_keys = ON");
-
-  // sqlite-vec must be loaded before any prepared statement that touches
-  // vec0 functions or the migration that creates `chunk_vectors`. The
-  // helper wraps db.loadExtension() with the right binary path resolved
-  // from the platform-specific optional dependencies.
-  try {
-    sqliteVec.load(_db);
-    _db.prepare("SELECT vec_version()").get();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `Failed to load sqlite-vec extension: ${msg}. ` +
-        `If you are running on an unsupported platform (e.g. Alpine/musl), ` +
-        `embeddings will not work; rebuild against a supported runtime.`,
-    );
-  }
-
   return _db;
 }
 

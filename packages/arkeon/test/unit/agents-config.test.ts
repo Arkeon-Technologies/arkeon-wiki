@@ -18,8 +18,6 @@ import {
   fillTemplate,
   listAvailableRoles,
 } from "../../src/server/agents/role-builder.js";
-import type { AgentInput } from "../../src/server/agents/runtime.js";
-
 // ── Schema ───────────────────────────────────────────────────────
 
 describe("AGENT_CONFIG_SCHEMA", () => {
@@ -694,51 +692,12 @@ describe("listAvailableRoles", () => {
 
 // ── default keying ───────────────────────────────────────────────
 
-describe("default idempotency / concurrency keys", () => {
+describe("default concurrency keys", () => {
   beforeEach(() => {
     process.env.OPENAI_API_KEY = "sk-test";
   });
   afterEach(() => {
     delete process.env.OPENAI_API_KEY;
-  });
-
-  it("uses triggerPath as the idempotency key when present", () => {
-    const role = buildAgentRole("writer", {
-      defaults: { provider: "openai", model: "gpt-5-mini" },
-    });
-    const input: AgentInput = {
-      space: { id: "s1", name: "n", watch_dir: "/tmp" },
-      triggerPath: "src/a.md",
-    };
-    expect(role.idempotencyKey(input).key).toBe("src/a.md");
-  });
-
-  it("falls back to triggerEntityId", () => {
-    const role = buildAgentRole("writer", {
-      defaults: { provider: "openai", model: "gpt-5-mini" },
-    });
-    const input: AgentInput = {
-      space: { id: "s1", name: "n", watch_dir: "/tmp" },
-      triggerEntityId: "01ENT",
-    };
-    expect(role.idempotencyKey(input).key).toBe("01ENT");
-  });
-
-  it("hashes meta + trigger info into the idempotency hash", () => {
-    const role = buildAgentRole("writer", {
-      defaults: { provider: "openai", model: "gpt-5-mini" },
-    });
-    const a = role.idempotencyKey({
-      space: { id: "s1", name: "n", watch_dir: "/tmp" },
-      triggerPath: "x.md",
-      meta: { hash: "v1" },
-    });
-    const b = role.idempotencyKey({
-      space: { id: "s1", name: "n", watch_dir: "/tmp" },
-      triggerPath: "x.md",
-      meta: { hash: "v2" },
-    });
-    expect(a.hash).not.toBe(b.hash);
   });
 
   it("scopes concurrency to (role, space, triggerEntityId)", () => {

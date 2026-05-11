@@ -273,7 +273,7 @@ When the daemon is running and you drop, edit, or save a file under the space's 
 
 Rapid saves of the same file are coalesced: the `UNIQUE(space, role, path)` constraint means five saves in a second produce one queue row that runs against the latest content.
 
-The queue is crash-safe via a 5-minute lease. If the daemon dies while a row is in flight, the next daemon startup runs `reclaimOrphans()` which resets stale `started_at` values back to pending. The runtime's `agent_runs` idempotency table is the second safety net — re-runs against unchanged content are no-ops.
+The queue is crash-safe via a 5-minute lease. If the daemon dies while a row is in flight, the next daemon startup runs `reclaimOrphans()` which resets stale `started_at` values back to pending.
 
 In v1 the trigger filter is hardcoded: every non-`wiki/`, non-`.arkeon/` file event fires the ingestor. User-tunable include/exclude lands later when there's a real use case.
 
