@@ -16,7 +16,7 @@
  * tiny.
  */
 
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 import {
   generateText,
@@ -398,30 +398,4 @@ export function makeContext(
  *  log the API key, baseURL, or anything that could leak secrets. */
 function describeModel(model: ModelConfig): string {
   return `${model.provider}:${model.id}`;
-}
-
-/**
- * Deterministic hash of an arbitrary JSON-serializable value. Sorted
- * keys ensure two logically-equal objects hash the same regardless of
- * construction order.
- */
-export function hashInput(input: unknown): string {
-  return createHash("sha256").update(stableStringify(input)).digest("hex");
-}
-
-function stableStringify(value: unknown): string {
-  if (value === null || value === undefined) return "null";
-  if (typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) {
-    return "[" + value.map(stableStringify).join(",") + "]";
-  }
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  return (
-    "{" +
-    keys
-      .map((k) => JSON.stringify(k) + ":" + stableStringify(obj[k]))
-      .join(",") +
-    "}"
-  );
 }

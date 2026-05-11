@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 
 import { ALL_TOOLS } from "../../src/server/agents/tools.js";
-import { hashInput, makeContext } from "../../src/server/agents/runtime.js";
+import { makeContext } from "../../src/server/agents/runtime.js";
 import { createSql } from "../../src/server/lib/sql.js";
 import type { Space } from "../../src/server/lib/sync.js";
 
@@ -69,12 +69,6 @@ afterAll(async () => {
     });
   }
 }, 30_000);
-
-describe("hashInput integration", () => {
-  it("matches the same logical input regardless of object key order", () => {
-    expect(hashInput({ a: 1, b: 2 })).toBe(hashInput({ b: 2, a: 1 }));
-  });
-});
 
 describe("read_file tool", () => {
   it("reads a markdown file and returns parsed frontmatter", async () => {

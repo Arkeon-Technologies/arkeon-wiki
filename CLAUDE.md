@@ -65,7 +65,7 @@ YAML is a superset of JSON, so wikis written with the old JSON-style frontmatter
 
 ## Writing (the `writer` role)
 
-A single agent role — `writer` — turns recent sources into articles on a recurring cron schedule. Every tick, the writer queries `list_entities?type=file&inbound_max=0&sort=updated_at` to find recent unprocessed sources, reads the most interesting one or two, articulates a driving question, vector-searches articles for an existing answer, then either extends an existing article (`edit_file` annotate/replace/append) or writes a new one (`edit_file` create) at `wiki/article/<slug>.md`. Provenance is captured as plain markdown links from the article body back to the source path — those become relationship edges in SQLite via the same link-resolution path that handles wiki↔wiki links.
+A single agent role — `writer` — turns recent sources into articles on a recurring cron schedule. Every tick, the writer queries `list_entities?type=file&inbound_max=0&sort=updated_at` to find recent unprocessed sources, reads the most interesting one or two, articulates a driving question, runs a multi-variant keyword search (`type=wiki` plus a few key noun-phrase patterns OR'd in one pass) to see whether an existing article addresses it, then either extends an existing article (`edit_file` annotate/replace/append) or writes a new one (`edit_file` create) at `wiki/article/<slug>.md`. Provenance is captured as plain markdown links from the article body back to the source path — those become relationship edges in SQLite via the same link-resolution path that handles wiki↔wiki links.
 
 Articles are **horizontal**: one article spans many sources, growing as the corpus grows. The default body convention is four sections — `## Question` / `## Current answer` / `## Evidence` / `## Open threads` — but it's a soft convention, not enforced in code. Operators reshape it via `instructions:` in their `agents.yaml`.
 
@@ -171,9 +171,9 @@ Agents emit verbose, human-readable logs to the daemon log unconditionally (`[ag
 
 When enabled, one JSON object per line is appended to `<arkeonHome>/agent-trace.jsonl` (override path with `ARKEON_WIKI_AGENT_TRACE_FILE`). Each event carries `ts`, `run_id`, `role`, `space_id`, `phase`, plus event-specific fields:
 
-- `run.start` — phases planned, idempotency key, trigger path
+- `run.start` — phases planned, trigger path
 - `phase.start` / `phase.end` — model, tool whitelist, step count, token usage, duration
-- `tool.call` / `tool.result` — args (truncated to 500 chars), per-tool `summary` (e.g. `search` reports `keyword_hits`, `vector_hits`, `vector_model`; `list_entities` reports `total`/`returned`), `duration_ms`, `ok`
+- `tool.call` / `tool.result` — args (truncated to 500 chars), per-tool `summary` (e.g. `search` reports `keyword_hits` / `keyword_total`; `list_entities` reports `total`/`returned`), `duration_ms`, `ok`
 - `edit` — path, edit_kind (create|append|replace), char counts (no body content)
 - `run.end` / `run.error` — total steps, edits, usage, duration
 
