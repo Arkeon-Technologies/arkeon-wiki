@@ -26,11 +26,9 @@ import type { ModelConfig } from "./model.js";
 import type { AgentConfig, PhaseConfig, RoleConfig } from "./config.js";
 import { loadBundledTemplates } from "./templates.js";
 import {
-  hashInput,
   type AgentInput,
   type AgentPhase,
   type AgentRole,
-  type IdempotencyKey,
 } from "./runtime.js";
 
 /**
@@ -185,7 +183,6 @@ export function buildAgentRole(name: string, config: AgentConfig): AgentRole {
         }),
       ),
     }),
-    idempotencyKey: defaultIdempotencyKey(name),
     concurrencyKey: defaultConcurrencyKey(name),
   };
 }
@@ -224,23 +221,6 @@ export function fillTemplate(
 }
 
 // ── Defaults for keying functions ────────────────────────────────
-
-export function defaultIdempotencyKey(
-  roleName: string,
-): (input: AgentInput) => IdempotencyKey {
-  return (input: AgentInput): IdempotencyKey => {
-    const key =
-      input.triggerPath ??
-      input.triggerEntityId ??
-      `${roleName}::${input.space.id}`;
-    const hash = hashInput({
-      triggerPath: input.triggerPath ?? null,
-      triggerEntityId: input.triggerEntityId ?? null,
-      meta: input.meta ?? null,
-    });
-    return { key, hash };
-  };
-}
 
 export function defaultConcurrencyKey(
   roleName: string,

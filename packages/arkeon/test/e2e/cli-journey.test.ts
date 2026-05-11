@@ -13,11 +13,8 @@
  *
  * The bug class this catches: the CLI builds correctly, the daemon
  * comes up, the search command speaks the same wire format the
- * server returns, and the namespaced response shape (keyword/vector)
- * survives JSON serialization through both the daemon and the CLI's
- * output layer.
- *
- * Mock embedder via setup.ts so we don't pull weights every CI run.
+ * server returns, and the namespaced response shape survives JSON
+ * serialization through both the daemon and the CLI's output layer.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -105,8 +102,6 @@ beforeAll(async () => {
   // (matches the production path) but ensure we don't inherit a
   // stray ARKEON_WIKI_HOME from a sibling test run.
   delete testEnv.ARKEON_WIKI_HOME;
-  // Force mock — no model download.
-  testEnv.ARKEON_WIKI_EMBEDDER = "mock";
 
   // Spawn the detached daemon via the CLI.
   const up = await runCli(["up", "--name", NAME]);
@@ -183,7 +178,7 @@ describe("CLI search journey through detached daemon", () => {
     expect(labels).toEqual(["Alan Turing", "Marie Curie", "Photosynthesis"]);
   });
 
-  it("`arkeon-wiki search` against the running daemon returns the namespaced response", async () => {
+  it("`arkeon-wiki search` against the running daemon returns the keyword response", async () => {
     const res = await runCli([
       "search",
       "Turing",
@@ -191,26 +186,18 @@ describe("CLI search journey through detached daemon", () => {
       apiUrl,
       "--space",
       spaceId,
-      "--mode",
-      "both",
     ]);
 
-    // The CLI's output.result writes the daemon's response shape with
-    // an `operation: "search"` envelope. Verify both namespaces are
-    // present and Alan Turing surfaces in keyword (vector with mock is
-    // not semantically meaningful but the array shape is intact).
     expect(res.json.ok).toBe(true);
     expect(res.json.operation).toBe("search");
     expect(res.json.keyword).toBeDefined();
-    expect(res.json.vector).toBeDefined();
+    expect(res.json.vector).toBeUndefined();
 
     const keywordLabels = (res.json.keyword.hits as { label: string }[]).map((h) => h.label);
     expect(keywordLabels).toContain("Alan Turing");
-
-    expect(res.json.vector.model).toBe("mock@256");
   });
 
-  it("`--mode keyword` returns only the keyword namespace", async () => {
+  it("returns keyword hits for a different query", async () => {
     const res = await runCli([
       "search",
       "Curie",
@@ -218,39 +205,11 @@ describe("CLI search journey through detached daemon", () => {
       apiUrl,
       "--space",
       spaceId,
-      "--mode",
-      "keyword",
     ]);
 
     expect(res.json.keyword).toBeDefined();
-    expect(res.json.vector).toBeUndefined();
     const labels = (res.json.keyword.hits as { label: string }[]).map((h) => h.label);
     expect(labels).toContain("Marie Curie");
-  });
-
-  it("`--mode vector` returns only the vector namespace with chunk-level hits", async () => {
-    const res = await runCli([
-      "search",
-      "biology",
-      "--api-url",
-      apiUrl,
-      "--space",
-      spaceId,
-      "--mode",
-      "vector",
-      "--limit",
-      "5",
-    ]);
-
-    expect(res.json.vector).toBeDefined();
-    expect(res.json.keyword).toBeUndefined();
-    expect(Array.isArray(res.json.vector.hits)).toBe(true);
-    for (const hit of res.json.vector.hits) {
-      expect(typeof hit.entity_id).toBe("string");
-      expect(typeof hit.label).toBe("string");
-      expect(typeof hit.body).toBe("string");
-      expect(typeof hit.similarity).toBe("number");
-    }
   });
 
   it("daemon survives across multiple search invocations and reports `running` in status", async () => {
@@ -294,8 +253,6 @@ describe("CLI search journey through detached daemon", () => {
         apiUrl,
         "--space",
         spaceId,
-        "--mode",
-        "keyword",
       ],
       { cwd },
     );

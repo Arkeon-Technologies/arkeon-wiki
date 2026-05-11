@@ -87,7 +87,7 @@ If the daemon isn't running, start it with `arkeon-wiki up` — it survives the 
 
 - **No auth.** Anyone who can reach the port can read and delete entities. Designed for `localhost`. Don't expose the API publicly without putting a reverse proxy in front of it.
 - **Filesystem is truth.** Don't `INSERT` into SQLite directly — your changes will be overwritten the next time the watcher reconciles. Edit the underlying markdown files and let the watcher catch up.
-- **No background workers.** No extraction, no LLM enrichment, no embedding generation in the current build. Vector search (sqlite-vec + EmbeddingGemma) is planned next; until then, search is keyword-only via ripgrep.
+- **Keyword-only search.** Search is ripgrep against the filesystem. No vector / semantic search in this build.
 - **One package, one process.** The CLI and server are the same binary. Don't run worktree A's CLI against worktree B's daemon — use `--name` to keep instances separate.
 
 ## Pointers for working on the codebase itself

@@ -2,12 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `arkeon-wiki search <query>` — search across registered spaces.
- *
- * Calls `GET /search` on the running daemon. Default mode is `both` —
- * runs keyword (ripgrep) and vector (sqlite-vec) in parallel and dumps
- * both result sets unfused. Pass `--mode keyword|vector` to scope to
- * one strategy.
+ * `arkeon-wiki search <query>` — keyword search across registered
+ * spaces via the running daemon's GET /search route.
  *
  * By default scopes to the space bound to the current directory (via
  * `.arkeon/state.json`); pass `--all` to search every registered space,
@@ -26,7 +22,6 @@ interface SearchOptions {
   limit?: string;
   snippets?: string;
   regex?: boolean;
-  mode?: string;
 }
 
 interface KeywordHit {
@@ -39,42 +34,25 @@ interface KeywordHit {
   snippets: { line_number: number; text: string }[];
 }
 
-interface VectorHit {
-  entity_id: string;
-  space_id: string;
-  label: string;
-  source_path: string;
-  similarity: number;
-  frontmatter: Record<string, unknown>;
-  body: string;
-}
-
 interface SearchResponse {
   query: string;
-  mode: "keyword" | "vector" | "both";
-  keyword?: { hits: KeywordHit[]; total: number; unmatched_files: number };
-  vector?: { hits: VectorHit[]; total: number; model: string };
+  keyword: { hits: KeywordHit[]; total: number; unmatched_files: number };
 }
 
 export function registerSearchCommand(program: Command): void {
   program
     .command("search")
     .argument("<query>", "Search query")
-    .description("Search across registered spaces (keyword via ripgrep, vector via sqlite-vec)")
+    .description("Keyword search (ripgrep) across registered spaces")
     // --api-url is declared on the root program (src/index.ts); the
     // preAction hook moves the value into ARKE_API_URL. Declaring it
     // here too created a precedence bug where Commander routed the
     // value to globals but runSearch read subcommand-local opts.
     .option("--space <id>", "Space ID to search (default: bound space, or all)")
     .option("--all", "Search every registered space")
-    .option(
-      "--mode <mode>",
-      "Search mode: keyword | vector | both (default: both)",
-      "both",
-    )
-    .option("--limit <n>", "Max results per strategy (default 20, max 200)")
-    .option("--snippets <n>", "Max line snippets per keyword hit (default 3)")
-    .option("--regex", "Treat keyword query as a regular expression")
+    .option("--limit <n>", "Max results (default 20, max 200)")
+    .option("--snippets <n>", "Max line snippets per hit (default 3)")
+    .option("--regex", "Treat query as a regular expression")
     .action(async (query: string, options: SearchOptions) => {
       try {
         await runSearch(query, options);
@@ -95,12 +73,7 @@ async function runSearch(query: string, options: SearchOptions): Promise<void> {
     repoState?.api_url ??
     `http://localhost:${DEFAULT_API_PORT}`;
 
-  const mode = options.mode ?? "both";
-  if (mode !== "keyword" && mode !== "vector" && mode !== "both") {
-    throw new Error(`--mode must be keyword | vector | both, got: ${mode}`);
-  }
-
-  const params = new URLSearchParams({ q: query, mode });
+  const params = new URLSearchParams({ q: query });
   if (!options.all) {
     const spaceId = options.space ?? repoState?.space_id;
     if (spaceId) params.set("space_id", spaceId);
@@ -122,8 +95,6 @@ async function runSearch(query: string, options: SearchOptions): Promise<void> {
   output.result({
     operation: "search",
     query: result.query,
-    mode: result.mode,
     keyword: result.keyword,
-    vector: result.vector,
   });
 }

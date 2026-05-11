@@ -49,9 +49,6 @@ let spaceBId: string;
 // watch_dir (the schema's UNIQUE constraint is on watch_dir, not name).
 let spaceDupId: string;
 
-let prevChunkingEnv: string | undefined;
-let prevEmbeddingsEnv: string | undefined;
-
 function writeWiki(
   dir: string,
   relativePath: string,
@@ -109,10 +106,6 @@ beforeAll(async () => {
   }
 
   process.env.ARKEON_WIKI_HOME = stateDir;
-  prevChunkingEnv = process.env.ARKEON_WIKI_CHUNKING;
-  prevEmbeddingsEnv = process.env.ARKEON_WIKI_EMBEDDINGS;
-  process.env.ARKEON_WIKI_CHUNKING = "0";
-  process.env.ARKEON_WIKI_EMBEDDINGS = "0";
 
   const dbFile = join(stateDir, "data", "arke.db");
   const { runMigrations } = await import("../../src/schema/index.js");
@@ -157,10 +150,6 @@ afterAll(async () => {
   if (baseDir && existsSync(baseDir)) {
     rmSync(baseDir, { recursive: true, force: true });
   }
-  if (prevChunkingEnv === undefined) delete process.env.ARKEON_WIKI_CHUNKING;
-  else process.env.ARKEON_WIKI_CHUNKING = prevChunkingEnv;
-  if (prevEmbeddingsEnv === undefined) delete process.env.ARKEON_WIKI_EMBEDDINGS;
-  else process.env.ARKEON_WIKI_EMBEDDINGS = prevEmbeddingsEnv;
 }, 30_000);
 
 describe("cross-space [[wikilink|space:NAME]]", () => {

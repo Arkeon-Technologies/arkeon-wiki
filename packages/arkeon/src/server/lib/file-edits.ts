@@ -309,8 +309,8 @@ interface HeadingHit {
 /**
  * Locate every ATX heading line in `content` outside of fenced code
  * blocks. Returns one record per heading with its level, cleaned text,
- * and byte offsets. Mirrors chunker.ts's parser: setext headings and
- * `#` lines inside ``` fences are not treated as headings.
+ * and byte offsets. Setext headings and `#` lines inside ``` fences
+ * are not treated as headings.
  */
 function findHeadings(content: string): HeadingHit[] {
   const hits: HeadingHit[] = [];

@@ -22,15 +22,8 @@ import { generateUlid } from "../../src/server/lib/ids.js";
 let testDir: string;
 let stateDir: string;
 let space: { id: string; name: string; watch_dir: string };
-let prevEmbeddingsEnv: string | undefined;
-let prevChunkingEnv: string | undefined;
 
 beforeAll(async () => {
-  prevEmbeddingsEnv = process.env.ARKEON_WIKI_EMBEDDINGS;
-  prevChunkingEnv = process.env.ARKEON_WIKI_CHUNKING;
-  process.env.ARKEON_WIKI_EMBEDDINGS = "0";
-  process.env.ARKEON_WIKI_CHUNKING = "0";
-
   const base = join(tmpdir(), `arkeon-edit-modes-${randomBytes(4).toString("hex")}`);
   testDir = join(base, "repo");
   stateDir = join(base, "state");
@@ -58,10 +51,6 @@ afterAll(async () => {
       force: true,
     });
   }
-  if (prevEmbeddingsEnv === undefined) delete process.env.ARKEON_WIKI_EMBEDDINGS;
-  else process.env.ARKEON_WIKI_EMBEDDINGS = prevEmbeddingsEnv;
-  if (prevChunkingEnv === undefined) delete process.env.ARKEON_WIKI_CHUNKING;
-  else process.env.ARKEON_WIKI_CHUNKING = prevChunkingEnv;
 }, 10_000);
 
 const seedWiki = async (path: string, body: string) => {

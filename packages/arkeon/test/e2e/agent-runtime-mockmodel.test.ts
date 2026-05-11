@@ -6,15 +6,14 @@
  *
  * Uses MockLanguageModelV3 from `ai/test` to drive runAgent through
  * deterministic tool-call sequences without an API key. Validates the
- * runtime contract: tool wiring, edit accumulation, idempotency lookup
- * and write, retry-on-failure, and the step-count cap.
+ * runtime contract: tool wiring, edit accumulation, and the step-count cap.
  *
  * Together with agent-tools.test.ts (Layer 1, per-tool edge cases),
- * this gives the ingestor worker a runtime
- * they can build on without retesting the plumbing.
+ * this gives the writer role a runtime they can build on without
+ * retesting the plumbing.
  */
 
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -74,12 +73,6 @@ afterAll(async () => {
     });
   }
 }, 30_000);
-
-afterEach(async () => {
-  // Reset idempotency table between tests so each starts fresh.
-  const sql = createSql();
-  await sql`DELETE FROM agent_runs`;
-});
 
 // ── Mock helpers ──────────────────────────────────────────────────
 
@@ -149,6 +142,7 @@ function makeTestRole(overrides: Partial<AgentRole> = {}): AgentRole {
     model,
     tools,
     maxSteps,
+    spaceScope: ["self"],
     buildPhases: async () => ({
       system: "you are a test",
       phases: [
@@ -160,10 +154,6 @@ function makeTestRole(overrides: Partial<AgentRole> = {}): AgentRole {
           maxSteps,
         },
       ],
-    }),
-    idempotencyKey: ({ triggerPath, meta }) => ({
-      key: triggerPath ?? "default-key",
-      hash: (meta?.hash as string) ?? "default-hash",
     }),
     concurrencyKey: ({ space: s }) => `mock-test-role::${s.id}`,
     ...overrides,
@@ -181,6 +171,7 @@ function makeTwoPhaseRole(overrides: Partial<AgentRole> = {}): AgentRole {
     name: "mock-two-phase-role",
     model,
     tools,
+    spaceScope: ["self"],
     buildPhases: async () => ({
       system: "you are a two-phase test agent",
       phases: [
@@ -199,10 +190,6 @@ function makeTwoPhaseRole(overrides: Partial<AgentRole> = {}): AgentRole {
           maxSteps: 10,
         },
       ],
-    }),
-    idempotencyKey: ({ triggerPath, meta }) => ({
-      key: triggerPath ?? "default-key",
-      hash: (meta?.hash as string) ?? "default-hash",
     }),
     concurrencyKey: ({ space: s }) => `mock-two-phase-role::${s.id}`,
     ...overrides,
@@ -224,24 +211,6 @@ describe("runAgent — single-step text response", () => {
     expect(result.steps).toBe(1);
   });
 
-  it("writes an agent_runs row with status='completed'", async () => {
-    const model = scriptModel([textStep("ok")]);
-    await runAgent(
-      makeTestRole(),
-      { space, triggerPath: "src/a", meta: { hash: "h-completed" } },
-      ALL_TOOLS,
-      { modelOverride: model },
-    );
-
-    const sql = createSql();
-    const rows = await sql`
-      SELECT status, input_hash FROM agent_runs
-      WHERE role = ${"mock-test-role"} AND idempotency_key = ${"src/a"}
-    `;
-    expect(rows).toHaveLength(1);
-    expect(rows[0].status).toBe("completed");
-    expect(rows[0].input_hash).toBe("h-completed");
-  });
 });
 
 describe("runAgent — tool-call loop", () => {
@@ -325,85 +294,10 @@ describe("runAgent — tool-call loop", () => {
   });
 });
 
-describe("runAgent — idempotency", () => {
-  it("skips on replay (same key + same hash, previous status='completed')", async () => {
-    const role = makeTestRole();
-    const input = { space, triggerPath: "src/idem-1", meta: { hash: "h-1" } };
-
-    await runAgent(role, input, ALL_TOOLS, {
-      modelOverride: scriptModel([textStep("first")]),
-    });
-
-    // The replay shouldn't even reach the (single-shot) mock model.
-    const result = await runAgent(role, input, ALL_TOOLS, {
-      modelOverride: scriptModel([]),
-    });
-
-    expect(result.skipped).toBe(true);
-    expect(result.reason).toBe("already_processed");
-  });
-
-  it("re-runs on a new hash for the same key (content changed)", async () => {
-    const role = makeTestRole();
-    const trigger = "src/idem-2";
-
-    await runAgent(role, { space, triggerPath: trigger, meta: { hash: "v1" } }, ALL_TOOLS, {
-      modelOverride: scriptModel([textStep("v1")]),
-    });
-
-    const result = await runAgent(
-      role,
-      { space, triggerPath: trigger, meta: { hash: "v2" } },
-      ALL_TOOLS,
-      { modelOverride: scriptModel([textStep("v2")]) },
-    );
-
-    expect(result.skipped).toBe(false);
-    expect(result.text).toBe("v2");
-  });
-
-  it("retries when the previous run is recorded as 'failed'", async () => {
-    const role = makeTestRole();
-    const input = { space, triggerPath: "src/idem-3", meta: { hash: "h-3" } };
-
-    // First: model throws, run is marked failed.
-    await expect(
-      runAgent(role, input, ALL_TOOLS, {
-        modelOverride: new MockLanguageModelV3({
-          doGenerate: async () => {
-            throw new Error("simulated provider error");
-          },
-        }),
-      }),
-    ).rejects.toThrow(/simulated provider/);
-
-    const sql = createSql();
-    let rows = await sql`
-      SELECT status FROM agent_runs
-      WHERE role = ${role.name} AND idempotency_key = ${"src/idem-3"}
-    `;
-    expect(rows[0].status).toBe("failed");
-
-    // Second: succeed; the failed row should not block the retry.
-    const result = await runAgent(role, input, ALL_TOOLS, {
-      modelOverride: scriptModel([textStep("retry succeeded")]),
-    });
-
-    expect(result.skipped).toBe(false);
-    expect(result.text).toBe("retry succeeded");
-
-    rows = await sql`
-      SELECT status FROM agent_runs
-      WHERE role = ${role.name} AND idempotency_key = ${"src/idem-3"}
-    `;
-    expect(rows[0].status).toBe("completed");
-  });
-});
-
 describe("runAgent — provider error handling", () => {
-  it("marks the run failed and re-throws when the model errors", async () => {
+  it("re-throws when the model errors", async () => {
     const role = makeTestRole();
-    const input = { space, triggerPath: "src/err", meta: { hash: "h-err" } };
+    const input = { space };
 
     await expect(
       runAgent(role, input, ALL_TOOLS, {
@@ -414,14 +308,6 @@ describe("runAgent — provider error handling", () => {
         }),
       }),
     ).rejects.toThrow(/provider went pop/);
-
-    const sql = createSql();
-    const rows = await sql`
-      SELECT status, error FROM agent_runs
-      WHERE role = ${role.name} AND idempotency_key = ${"src/err"}
-    `;
-    expect(rows[0].status).toBe("failed");
-    expect((rows[0].error as string) ?? "").toMatch(/provider went pop/);
   });
 });
 

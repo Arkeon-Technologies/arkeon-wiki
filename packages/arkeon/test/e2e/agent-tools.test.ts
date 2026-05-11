@@ -507,14 +507,8 @@ describe("search edge cases", () => {
   }, 15_000);
 
   it("returns an empty hits array when nothing matches", async () => {
-    // The search tool now returns a namespaced response (keyword and
-    // vector each get their own array). Default mode is "both"; we
-    // scope to keyword here so the assertion is deterministic against
-    // mock embeddings (vector with mock isn't semantically meaningful
-    // and may surface unrelated chunks).
     const result = (await tool("search").execute({
       query: "definitely-not-present-in-any-file-xyzzy",
-      mode: "keyword",
     })) as { keyword: { hits: unknown[] } };
     expect(result.keyword.hits).toEqual([]);
   });
@@ -523,7 +517,6 @@ describe("search edge cases", () => {
     const result = (await tool("search").execute({
       query: "electron[s]?",
       regex: true,
-      mode: "keyword",
     })) as { keyword: { hits: Array<{ source_path: string }> } };
 
     const paths = result.keyword.hits.map((h) => h.source_path).sort();
@@ -535,32 +528,8 @@ describe("search edge cases", () => {
     const result = (await tool("search").execute({
       query: "electron",
       limit: 1,
-      mode: "keyword",
     })) as { keyword: { hits: unknown[] } };
     expect(result.keyword.hits.length).toBeLessThanOrEqual(1);
-  });
-
-  it("returns both keyword and vector namespaces by default (mode=both)", async () => {
-    const result = (await tool("search").execute({
-      query: "electron",
-    })) as {
-      keyword: { hits: unknown[]; total: number };
-      vector: { hits: unknown[]; total: number; model: string };
-      mode: string;
-    };
-    expect(result.mode).toBe("both");
-    expect(result.keyword).toBeDefined();
-    expect(result.vector).toBeDefined();
-    expect(result.vector.model).toBeTruthy();
-  });
-
-  it("returns only the vector namespace when mode=vector", async () => {
-    const result = (await tool("search").execute({
-      query: "electron",
-      mode: "vector",
-    })) as { vector?: { hits: unknown[] }; keyword?: unknown };
-    expect(result.vector).toBeDefined();
-    expect(result.keyword).toBeUndefined();
   });
 
   // Issue #100 — multi-query batching + type filter.
@@ -570,7 +539,6 @@ describe("search edge cases", () => {
     // in ripgrep and skew this test.
     const result = (await tool("search").execute({
       query: ["electron", "redox"],
-      mode: "keyword",
     })) as {
       keyword: { hits: Array<{ source_path: string; match_count: number }> };
     };
@@ -591,9 +559,6 @@ describe("search edge cases", () => {
   });
 
   it("type='file' filters keyword hits to source files only", async () => {
-    // Seed a source file. Watcher indexes it as type='file'; without
-    // the filter both wikis and sources can match, with type='file'
-    // only the source survives.
     writeFileSync(
       join(testDir, "type-filter-source.txt"),
       "type-filter-source mentions electron in passing.",
@@ -610,7 +575,6 @@ describe("search edge cases", () => {
     const result = (await tool("search").execute({
       query: "electron",
       type: "file",
-      mode: "keyword",
     })) as {
       keyword: { hits: Array<{ type: string; source_path: string }> };
     };
@@ -630,39 +594,15 @@ describe("search edge cases", () => {
       tool("search").execute({
         query: "electron",
         type: "bogus",
-        mode: "keyword",
       }),
     ).rejects.toThrow(/search:.*bogus/);
   });
 
-  it("rejects an oversized query array with a clear error (not silent empty hits)", async () => {
-    // The Zod schema caps at 10, but direct callers bypass Zod. The
-    // tool layer enforces the cap explicitly so the failure surfaces
-    // as a real error rather than getting swallowed by the inner
-    // Promise.allSettled into an empty-hits response.
+  it("rejects an oversized query array with a clear error", async () => {
     const queries = Array.from({ length: 11 }, (_, i) => `pattern${i}`);
     await expect(
-      tool("search").execute({ query: queries, mode: "keyword" }),
+      tool("search").execute({ query: queries }),
     ).rejects.toThrow(/search: too many query patterns \(11\); max is 10/);
-  });
-
-  it("vector namespace echoes the embedded query via query_used", async () => {
-    // Multi-pattern keyword search runs ripgrep with all patterns,
-    // but vector embeds only the first one. The tool layer surfaces
-    // that as `vector.query_used` so a consumer can see — at a
-    // glance — which form drove the semantic ranking.
-    const result = (await tool("search").execute({
-      query: ["redox", "electron"],
-    })) as { vector?: { query_used?: string } };
-    expect(result.vector?.query_used).toBe("redox");
-
-    // Single-string queries also include query_used so consumers
-    // don't have to branch on shape.
-    const single = (await tool("search").execute({
-      query: "electron",
-      mode: "vector",
-    })) as { vector?: { query_used?: string } };
-    expect(single.vector?.query_used).toBe("electron");
   });
 });
 
