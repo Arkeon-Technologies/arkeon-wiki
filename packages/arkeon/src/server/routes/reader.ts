@@ -31,6 +31,7 @@ import type { AppBindings } from "../types.js";
 import { ApiError } from "../lib/errors.js";
 import { createSql } from "../lib/sql.js";
 import { safeResolve } from "../lib/file-edits.js";
+import { shouldIgnorePath } from "../lib/fs-watcher.js";
 import {
   instrumentArticle,
   renderArticleIndex,
@@ -136,6 +137,9 @@ readerRouter.get("/:space/wiki/*", async (c) => {
   if (!articlePath || !articlePath.startsWith("wiki/")) {
     throw new ApiError(400, "validation_error", "missing wiki path");
   }
+  if (shouldIgnorePath(articlePath)) {
+    return c.html(renderNotFound(space, articlePath), 404);
+  }
 
   let abs: string;
   try {
@@ -165,6 +169,12 @@ readerRouter.get("/:space/*", async (c) => {
   const relPath = extractSpacePath(c.req.url, space);
   if (!relPath) {
     throw new ApiError(400, "validation_error", "missing file path");
+  }
+  // The reader never serves anything under hidden / ignored directories
+  // (`.arkeon`, `.git`, `node_modules`, dot-prefixed files, …). Same set
+  // the watcher refuses to index — see `shouldIgnorePath`.
+  if (shouldIgnorePath(relPath)) {
+    return c.html(renderNotFound(space, relPath), 404);
   }
 
   let abs: string;

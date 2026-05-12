@@ -37,6 +37,21 @@ beforeAll(async () => {
   mkdirSync(join(workdir, "wiki/biology"), { recursive: true });
   mkdirSync(join(workdir, "sources"), { recursive: true });
   mkdirSync(join(workdir, "images"), { recursive: true });
+  // Hidden / ignored directories the reader must refuse to serve, even
+  // though they physically exist inside the watch dir.
+  mkdirSync(join(workdir, ".arkeon"), { recursive: true });
+  mkdirSync(join(workdir, ".git"), { recursive: true });
+  mkdirSync(join(workdir, "node_modules/secret-pkg"), { recursive: true });
+  writeFileSync(
+    join(workdir, ".arkeon/state.json"),
+    `{"api_url":"http://localhost:0","space_name":"reader-demo"}`,
+  );
+  writeFileSync(join(workdir, ".git/config"), "[core]\n  repo = secret\n");
+  writeFileSync(join(workdir, ".env"), "OPENAI_API_KEY=sk-fake-secret\n");
+  writeFileSync(
+    join(workdir, "node_modules/secret-pkg/leak.txt"),
+    "dependency internal\n",
+  );
 
   writeFileSync(
     join(workdir, "wiki/photosynthesis.html"),
@@ -215,6 +230,34 @@ describe("Phase 2 reader", () => {
 
   it("GET /:space/ for an unknown space returns 404", async () => {
     const res = await fetch(`${baseUrl}/no-such-space/`);
+    expect(res.status).toBe(404);
+  });
+
+  it("refuses to serve hidden / ignored directories (.arkeon, .git, node_modules, dotfiles)", async () => {
+    const hiddenPaths = [
+      ".arkeon/state.json",
+      ".git/config",
+      ".env",
+      "node_modules/secret-pkg/leak.txt",
+    ];
+    for (const path of hiddenPaths) {
+      const res = await fetch(`${baseUrl}/${SPACE}/${path}`);
+      expect(res.status, `expected 404 for ${path}`).toBe(404);
+      const body = await res.text();
+      // Make sure nothing from the actual file leaked into the body —
+      // the renderNotFound page echoes the requested path but not the
+      // file contents.
+      expect(body).not.toContain("sk-fake-secret");
+      expect(body).not.toContain("repo = secret");
+      expect(body).not.toContain("dependency internal");
+      expect(body).not.toContain('"api_url"');
+    }
+  });
+
+  it("refuses hidden paths under the wiki/ prefix too", async () => {
+    // No actual file needed — the filter rejects the request before
+    // touching the filesystem.
+    const res = await fetch(`${baseUrl}/${SPACE}/wiki/.hidden.html`);
     expect(res.status).toBe(404);
   });
 
