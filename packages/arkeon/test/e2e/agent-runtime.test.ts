@@ -149,14 +149,41 @@ describe("read-gate", () => {
 
     await exec(create, {
       path: "wiki/new.html",
-      label: "New",
-      short_description: "y",
-      body: "<h1>New</h1><p>x</p>",
+      html: `<!DOCTYPE html>
+<html>
+<head><title>New</title><meta name="label" content="New"></head>
+<body><h1>New</h1><p>x</p></body>
+</html>`,
     });
 
     expect(existsSync(join(workdir, "wiki/new.html"))).toBe(true);
     // Gate is untouched (create doesn't pre-load it).
     expect(ctx.readPaths.has(readGateKey(SPACE.name, "wiki/new.html"))).toBe(false);
+  });
+
+  it("create_file rejects fragments without a wrapper and surfaces the template", async () => {
+    const ctx = makeContext(SPACE, "writer");
+    const create = getTool("create_file", ctx);
+
+    await expect(
+      exec(create, {
+        path: "wiki/frag.html",
+        html: "<h1>Frag</h1><p>no wrapper</p>",
+      }),
+    ).rejects.toThrow(/must be a complete HTML document.*<!DOCTYPE html>/s);
+    expect(existsSync(join(workdir, "wiki/frag.html"))).toBe(false);
+  });
+
+  it("create_file rejects a document missing <title>", async () => {
+    const ctx = makeContext(SPACE, "writer");
+    const create = getTool("create_file", ctx);
+
+    await expect(
+      exec(create, {
+        path: "wiki/notitle.html",
+        html: `<!DOCTYPE html><html><head></head><body><h1>X</h1></body></html>`,
+      }),
+    ).rejects.toThrow(/must contain a <title>/);
   });
 
   it("insert_at_line invalidates the read (line numbers shifted)", async () => {

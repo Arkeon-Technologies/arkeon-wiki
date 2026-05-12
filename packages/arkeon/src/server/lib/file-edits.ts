@@ -37,6 +37,8 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
 
+import { parse as parseHtml } from "node-html-parser";
+
 import {
   clearEditContext,
   setEditContext,
@@ -194,66 +196,49 @@ function countOccurrences(haystack: string, needle: string): number {
 }
 
 /**
- * Compose an HTML wiki shell from structured fields. Called by the
- * `create_file` tool. The agent provides `body` as the inner HTML
- * (typically starting with `<h1>`); the tool wraps it with `<head>`
- * containing `<title>` + `<meta>` so sync can extract metadata.
+ * Validate that a string of HTML is a complete, usable wiki document.
+ * Returns `null` on success or a discriminated reason on failure. The
+ * `create_file` tool turns each reason into a specific error with the
+ * canonical template attached, so the model can recover on retry.
  *
- * Properties beyond `label`/`short_description` go in `extra`, which
- * gets emitted as additional `<meta name="..." content="...">` tags.
- */
-export interface WikiShellFields {
-  label: string;
-  short_description: string;
-  body: string;
-  extra?: Record<string, string>;
-}
-
-/**
- * Tokens that would terminate or corrupt the outer shell if they appeared
- * in `body`. The tool contract is "no <html>/<head>/<body>/<!DOCTYPE> in
- * body", and the writer's prompt repeats this — but a model is free to
- * ignore the prompt. Guard at the chokepoint instead of trusting the
- * agent.
+ * The three requirements:
  *
- * Matched case-insensitively because HTML tags are case-insensitive.
+ *   1. The document must start with `<!DOCTYPE>` or `<html>` (case-
+ *      insensitive, leading whitespace ignored). Fragments are rejected
+ *      because the model has no business deciding when to omit the
+ *      envelope — and the smoke run showed that "envelope or no
+ *      envelope" was where the model wasted tool calls.
+ *
+ *   2. The document must contain a `<title>` with non-empty trimmed
+ *      text. Without one, `syncFile` falls back to the filename slug,
+ *      which silently destroys searchability. Required for the same
+ *      reason a wiki without a label is broken — strict here is mercy.
+ *
+ *   3. The document must contain a `<body>` element. Articles without
+ *      a body don't sync any inline `<a href>` edges, which defeats
+ *      the relationship graph that makes this a wiki at all.
+ *
+ * Everything else — `<meta>` tags, charset, content shape — is the
+ * prompt's concern, not the tool's. The tool stays lenient on style
+ * and strict on structure.
  */
-const FORBIDDEN_BODY_TOKENS_RE =
-  /<\/?(?:html|head|body)\b|<!doctype\b|<title\b|<meta\b/i;
+export type WikiHtmlValidationFailure =
+  | { reason: "missing-wrapper" }
+  | { reason: "missing-title" }
+  | { reason: "empty-title" }
+  | { reason: "missing-body" };
 
-export function composeWikiHtmlShell(fields: WikiShellFields): string {
-  if (FORBIDDEN_BODY_TOKENS_RE.test(fields.body)) {
-    throw new Error(
-      `create_file: body contains a shell tag (<html>, <head>, <body>, <!DOCTYPE>, <title>, or <meta>). ` +
-        `The tool composes the envelope — put only content tags (<h1>…<p>…<a>…) in body.`,
-    );
+export function validateWikiHtmlDocument(
+  html: string,
+): WikiHtmlValidationFailure | null {
+  const trimmed = html.trimStart();
+  if (!/^<!doctype\b/i.test(trimmed) && !/^<html\b/i.test(trimmed)) {
+    return { reason: "missing-wrapper" };
   }
-  const metas = [
-    `<meta name="label" content="${escapeAttr(fields.label)}">`,
-    `<meta name="short_description" content="${escapeAttr(fields.short_description)}">`,
-  ];
-  for (const [name, content] of Object.entries(fields.extra ?? {})) {
-    if (name === "label" || name === "short_description") continue;
-    metas.push(`<meta name="${escapeAttr(name)}" content="${escapeAttr(content)}">`);
-  }
-  // <meta charset> declares the encoding so browsers don't default to
-  // Latin-1 and mojibake smart quotes / em-dashes / non-ASCII. Per HTML5,
-  // the charset meta must appear within the first 1024 bytes of the
-  // document; putting it as the first child of <head> guarantees that.
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>${escapeAttr(fields.label)}</title>
-${metas.join("\n")}
-</head>
-<body>
-${fields.body}
-</body>
-</html>
-`;
-}
-
-function escapeAttr(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  const root = parseHtml(html);
+  const title = root.querySelector("title");
+  if (!title) return { reason: "missing-title" };
+  if (title.text.trim() === "") return { reason: "empty-title" };
+  if (!root.querySelector("body")) return { reason: "missing-body" };
+  return null;
 }

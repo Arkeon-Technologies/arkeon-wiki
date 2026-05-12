@@ -106,7 +106,7 @@ The bundled `writer` role (`packages/arkeon/src/server/agents/templates/writer.y
 2. Reads the most interesting source or 1-2 of the articles that want a red-link target defined.
 3. Articulates the driving question.
 4. Searches for an existing article addressing it.
-5. Either **extends** the existing article via `edit_file` (`insert_at_line` or `str_replace`, both read-gated) or **creates** a new one via `create_file` (HTML shell composed from `label` + `short_description` + `body`).
+5. Either **extends** the existing article via `edit_file` (`insert_at_line` or `str_replace`, both read-gated) or **creates** a new one via `create_file` (the agent authors a complete HTML document — `<!DOCTYPE>`/`<html>` wrapper, non-empty `<title>`, `<body>` — and the tool validates structure and writes it verbatim).
 
 Default model: `gpt-5.4-mini`, `reasoning_effort: low`. Override via `.arkeon/agents.yaml` if you want a different model or schedule.
 
