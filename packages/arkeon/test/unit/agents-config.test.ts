@@ -686,6 +686,18 @@ describe("loadBundledTemplates", () => {
     expect(t.tools?.length, "writer.tools").toBeGreaterThan(0);
     expect(t.cron, "writer.cron").toBeTruthy();
   });
+
+  it("auto-loads cataloger from disk with no config present", () => {
+    // The cataloger is the second bundled role — it processes the
+    // source queue, the writer processes the red-link queue. Both
+    // ship as YAML templates, both must load on a clean install.
+    const templates = loadBundledTemplates();
+    expect(Object.keys(templates)).toContain("cataloger");
+    const t = templates.cataloger;
+    expect(t.system, "cataloger.system").toBeTruthy();
+    expect(t.tools?.length, "cataloger.tools").toBeGreaterThan(0);
+    expect(t.cron, "cataloger.cron").toBeTruthy();
+  });
 });
 
 // ── fillTemplate ─────────────────────────────────────────────────

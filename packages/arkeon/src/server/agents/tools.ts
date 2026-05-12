@@ -212,7 +212,12 @@ const listEntitiesTool = defineTool("list_entities", {
     "sources (type=file inbound_max=0 → 'nothing links to this file yet'), " +
     "or surface recently-updated articles. Each row carries `space_name`, " +
     "`source_path`, `type`, `label`, `properties`, and optional " +
-    "`counts.inbound`/`counts.outbound`.",
+    "`counts.inbound`/`counts.outbound`. `properties` is the bag of " +
+    "every `<meta name=\"X\" content=\"Y\">` from the wiki — by " +
+    "convention `properties.short_description` (one-sentence summary) " +
+    "is present on most articles, and `properties.kind` distinguishes " +
+    "special wikis like `kind=plan` for cataloger output. Treat the " +
+    "listing as the corpus's table of contents.",
   inputSchema: z.object({
     type: z
       .string()
