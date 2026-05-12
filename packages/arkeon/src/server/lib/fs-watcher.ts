@@ -2,14 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Filesystem watcher for automatic sync.
+ * Filesystem watcher.
  *
- * Watches registered space directories for changes and automatically
- * syncs files to Postgres. Uses node:fs.watch with recursive option
- * (FSEvents on macOS, ReadDirectoryChangesW on Windows).
+ * Watches registered space directories for changes and keeps the
+ * SQLite mirror in sync. node:fs.watch with the recursive option
+ * (FSEvents on macOS, ReadDirectoryChangesW on Windows) covers the
+ * platforms we care about.
+ *
+ * The watcher's only job is keeping the index live. Agents are
+ * cron-paced — they query entities directly on each tick.
  */
 
-import { watch, type FSWatcher, existsSync, readdirSync, statSync } from "node:fs";
+import { watch, type FSWatcher, existsSync, readdirSync } from "node:fs";
 import { join, extname } from "node:path";
 
 import { startScheduler } from "../agents/scheduler.js";
@@ -17,24 +21,20 @@ import { syncFile, syncDirectory, removeByPath, type Space } from "./sync.js";
 
 type SchedulerHandle = Awaited<ReturnType<typeof startScheduler>>;
 
-// Directories to ignore when watching/walking
+// Directories to skip during walk + watch.
 const IGNORE_DIRS = new Set([".arkeon", ".git", "node_modules", ".claude", "__pycache__", ".venv"]);
 
-// File extensions to index
+// File extensions we index. Anything else is invisible to the system.
 const INDEX_EXTENSIONS = new Set([".md", ".txt", ".json", ".csv", ".xml", ".html", ".rst"]);
 
-// Active watchers + per-space agent schedulers
 const watchers = new Map<string, FSWatcher>();
 const schedulers = new Map<string, SchedulerHandle>();
-
-// Debounce timers keyed by absolute file path
 const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 const DEBOUNCE_MS = 500;
 
 function shouldIgnorePath(relativePath: string): boolean {
   const parts = relativePath.split("/");
-  // Ignore dotfiles and ignored directories
   for (const part of parts) {
     if (part.startsWith(".") && part !== ".") return true;
     if (IGNORE_DIRS.has(part)) return true;
@@ -49,7 +49,8 @@ function isEligibleFile(relativePath: string): boolean {
 }
 
 /**
- * Walk a directory tree and return all eligible file paths (space-relative).
+ * Walk a directory tree and return all eligible file paths
+ * (space-relative).
  */
 export function walkEligibleFiles(root: string, prefix = ""): string[] {
   const results: string[] = [];
@@ -86,7 +87,7 @@ export function walkEligibleFiles(root: string, prefix = ""): string[] {
  * a live watcher for incremental changes.
  */
 export async function startWatching(space: Space): Promise<void> {
-  if (watchers.has(space.id)) {
+  if (watchers.has(space.name)) {
     console.log(`[watcher] Already watching space ${space.name}`);
     return;
   }
@@ -96,21 +97,17 @@ export async function startWatching(space: Space): Promise<void> {
     return;
   }
 
-  // Reconcile: walk the directory and sync all eligible files
   console.log(`[watcher] Reconciling space "${space.name}" (${space.watch_dir})`);
   const files = walkEligibleFiles(space.watch_dir);
   const summary = await syncDirectory(space, files);
   console.log(
     `[watcher] Reconciled: ${summary.created} created, ${summary.updated} updated, ` +
-    `${summary.unchanged} unchanged, ${summary.removed} removed`,
+      `${summary.unchanged} unchanged, ${summary.removed} removed`,
   );
 
-  // Start the per-space cron scheduler. Agents fire on their declared
-  // cron expressions; the watcher no longer notifies it on file events
-  // (the watcher's only job is keeping the SQLite mirror live).
   try {
     const scheduler = await startScheduler({ space });
-    schedulers.set(space.id, scheduler);
+    schedulers.set(space.name, scheduler);
   } catch (err) {
     console.error(
       `[watcher] Failed to start agent scheduler for space "${space.name}":`,
@@ -118,17 +115,13 @@ export async function startWatching(space: Space): Promise<void> {
     );
   }
 
-  // Start the live watcher
   try {
-    const watcher = watch(space.watch_dir, { recursive: true }, (eventType, filename) => {
+    const watcher = watch(space.watch_dir, { recursive: true }, (_eventType, filename) => {
       if (!filename) return;
 
-      // Normalize path separators (Windows)
       const relativePath = filename.replace(/\\/g, "/");
-
       if (!isEligibleFile(relativePath)) return;
 
-      // Debounce: coalesce rapid events (editor save → temp write → rename)
       const absPath = join(space.watch_dir, relativePath);
       const existing = debounceTimers.get(absPath);
       if (existing) clearTimeout(existing);
@@ -146,7 +139,7 @@ export async function startWatching(space: Space): Promise<void> {
       console.error(`[watcher] Error in space "${space.name}":`, err.message);
     });
 
-    watchers.set(space.id, watcher);
+    watchers.set(space.name, watcher);
     console.log(`[watcher] Watching space "${space.name}" (${files.length} files)`);
   } catch (err) {
     console.error(`[watcher] Failed to start watching space "${space.name}":`, (err as Error).message);
@@ -157,9 +150,6 @@ async function handleFileEvent(space: Space, relativePath: string): Promise<void
   const absPath = join(space.watch_dir, relativePath);
 
   if (existsSync(absPath)) {
-    // File added or modified. The watcher's job ends at the SQLite
-    // mirror — agents are cron-paced and pick up new files at their
-    // next tick by querying entities directly.
     try {
       const result = await syncFile(space, relativePath);
       if (result.action !== "unchanged") {
@@ -169,10 +159,9 @@ async function handleFileEvent(space: Space, relativePath: string): Promise<void
       console.error(`[watcher] Error syncing ${relativePath}:`, (err as Error).message);
     }
   } else {
-    // File deleted
     try {
-      const removedId = await removeByPath(space.id, relativePath);
-      if (removedId) {
+      const removed = await removeByPath(space, relativePath);
+      if (removed) {
         console.log(`[watcher] removed: ${relativePath}`);
       }
     } catch (err) {
@@ -181,50 +170,39 @@ async function handleFileEvent(space: Space, relativePath: string): Promise<void
   }
 }
 
-/**
- * Stop watching a space.
- */
-export async function stopWatching(spaceId: string): Promise<void> {
-  const watcher = watchers.get(spaceId);
+export async function stopWatching(spaceName: string): Promise<void> {
+  const watcher = watchers.get(spaceName);
   if (watcher) {
     watcher.close();
-    watchers.delete(spaceId);
+    watchers.delete(spaceName);
   }
-  const scheduler = schedulers.get(spaceId);
+  const scheduler = schedulers.get(spaceName);
   if (scheduler) {
     await scheduler.stop();
-    schedulers.delete(spaceId);
+    schedulers.delete(spaceName);
   }
 }
 
-/**
- * Stop all watchers and their schedulers.
- */
 export async function stopAllWatchers(): Promise<void> {
-  for (const [id, watcher] of watchers) {
+  for (const [name, watcher] of watchers) {
     watcher.close();
-    watchers.delete(id);
+    watchers.delete(name);
   }
-  for (const [id, scheduler] of schedulers) {
+  for (const [name, scheduler] of schedulers) {
     await scheduler.stop();
-    schedulers.delete(id);
+    schedulers.delete(name);
   }
-  // Clear any pending debounce timers
   for (const timer of debounceTimers.values()) {
     clearTimeout(timer);
   }
   debounceTimers.clear();
 }
 
-/**
- * Start watchers for all registered spaces.
- * Called on server startup.
- */
 export async function startAllWatchers(): Promise<void> {
   const { createSql } = await import("./sql.js");
   const sql = createSql();
   const spaces = await sql`
-    SELECT id, name, watch_dir FROM spaces WHERE watch_dir IS NOT NULL
+    SELECT name, watch_dir FROM spaces WHERE watch_dir IS NOT NULL
   `;
 
   for (const space of spaces) {

@@ -2,17 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Generic entity listing — the read primitive that powers /entities and
- * the agent runtime's `list_entities` tool. One query covers wikis and
- * source files (a "placeholder" is a wiki with `source_hash IS NULL`,
- * surfaced via the derived `unresolved` field — see `?unresolved=true`).
- * Filters on type, frontmatter, link counts, recency, last-edit role,
- * and resolution status.
+ * Generic entity listing + red-link aggregation.
  *
- * The query nests so the outer SELECT can filter on computed columns
- * (inbound/outbound counts, has_unresolved_outbound). Direct column
- * filters apply in the inner SELECT to avoid scanning more rows than
- * necessary.
+ * The two writer-input queries live here:
+ *   - `listEntities` — wikis and source files, filterable by type,
+ *     inbound/outbound counts, recency, last-edit role, label substring.
+ *     Powers `GET /{space}/entities` and the `list_entities` tool.
+ *   - `listRedLinks` — link targets without a matching entity row,
+ *     aggregated with demand count. Powers `GET /{space}/redlinks` and
+ *     the `list_redlinks` tool. The query is structurally asymmetric
+ *     to `listEntities` — red links live in `relationships.target_path`
+ *     with no `entities` row by design (no placeholders), so they
+ *     cannot be served by the listing endpoint no matter how it's
+ *     filtered.
  */
 
 import { ApiError } from "./errors.js";
@@ -22,51 +24,25 @@ export type EntityType = "wiki" | "file";
 export type EntitySort = "updated_at" | "label" | "inbound" | "outbound";
 
 export interface ListEntitiesOptions {
-  /** Restrict to a single space. Omitted → all spaces.
-   *  If `space_ids` is also set, `space_ids` wins. */
-  space_id?: string;
-  /** Restrict to a specific set of spaces. Used by the agent runtime
-   *  to fan out across a role's allowed-space scope. Empty/undefined
-   *  = any space. */
-  space_ids?: string[];
-  /** Restrict to one or more entity types. Empty/undefined = any. */
+  /** Restrict to a single space by name. */
+  space_name?: string;
+  /** Restrict to one or more entity types. */
   types?: EntityType[];
-  /** Filter on `properties.subject_type` (frontmatter). */
-  subject_type?: string;
-  /** Filter on `properties.status` (frontmatter; free-form string). */
-  status?: string;
   /** Case-insensitive substring match on `label`. */
   label_contains?: string;
-  /** Inclusive lower bound on inbound relationship count. */
+  /** Case-insensitive substring match on `source_path`. */
+  path_contains?: string;
   inbound_min?: number;
-  /** Inclusive upper bound on inbound relationship count. */
   inbound_max?: number;
-  /** Inclusive lower bound on outbound relationship count. */
   outbound_min?: number;
-  /** Inclusive upper bound on outbound relationship count. */
   outbound_max?: number;
-  /** Filter to entities with at least one outbound link to a placeholder
-   *  (a wiki with `source_hash IS NULL`). */
-  has_unresolved_outbound?: boolean;
-  /** Filter on placeholder status of the entity itself. True → only
-   *  placeholder wikis (source_hash IS NULL); false → only realized
-   *  rows (source_hash IS NOT NULL, i.e. file exists on disk). */
-  unresolved?: boolean;
   /** ISO timestamp; only entities with `updated_at >= this`. */
   updated_since?: string;
-  /** Filter on the entity's most recent edit's `by_role` (via
-   *  entity_latest_edit view from 004-edits-and-triggers.sql). */
+  /** Filter on the entity's most recent edit's `by_role`. */
   edited_by_role?: string;
-  /** `updated_at` (default), `label`, `inbound`, or `outbound`. */
   sort?: string;
-  /** Attach `counts.inbound` and `counts.outbound`. Default false. */
   include_counts?: boolean;
-  /** Attach a top-level `relationships` array of all edges touching
-   *  the matched entities. Default false. */
-  include_relationships?: boolean;
-  /** Default 100, capped at 10_000. */
   limit?: number;
-  /** Default 0. */
   offset?: number;
 }
 
@@ -76,34 +52,16 @@ export interface EntityCounts {
 }
 
 export interface EntityListRow {
-  id: string;
-  space_id: string;
-  type: EntityType;
-  label: string;
+  space_name: string;
   source_path: string;
+  type: EntityType;
+  label: string | null;
   properties: Record<string, unknown> | string;
   created_at: string;
   updated_at: string;
   counts?: EntityCounts;
-  /** True if any outbound edge from this entity targets a placeholder
-   *  (a wiki with `source_hash IS NULL`). */
-  has_unresolved_outbound: boolean;
-  /** True if this row itself is a placeholder — type='wiki' with no file
-   *  on disk yet (source_hash IS NULL). Realized wikis and source files
-   *  are always false. */
-  unresolved: boolean;
-  /** Role/actor that made the most recent edit, or null if no edits
-   *  have been recorded (e.g. placeholders that were never written to). */
+  /** Most recent edit's by_role, or null if no edits recorded yet. */
   last_edited_by: string | null;
-}
-
-export interface RelationshipRow {
-  id: string;
-  source_id: string;
-  target_id: string;
-  predicate: string;
-  link_text: string | null;
-  link_path: string | null;
 }
 
 export interface ListEntitiesResult {
@@ -111,7 +69,6 @@ export interface ListEntitiesResult {
   total: number;
   limit: number;
   offset: number;
-  relationships?: RelationshipRow[];
 }
 
 const SORT_COLUMNS: Record<EntitySort, string> = {
@@ -142,58 +99,39 @@ export async function listEntities(
 
   const sql = createSql();
 
-  // Inner-WHERE filters apply before the count subqueries fire, so they
-  // only run for rows that survived the direct-column filter.
   const innerConditions: string[] = [];
   const innerParams: unknown[] = [];
 
-  if (opts.space_ids && opts.space_ids.length > 0) {
-    const placeholders = opts.space_ids.map(() => "?").join(",");
-    innerConditions.push(`e.space_id IN (${placeholders})`);
-    innerParams.push(...opts.space_ids);
-  } else if (opts.space_id) {
-    innerConditions.push("e.space_id = ?");
-    innerParams.push(opts.space_id);
+  if (opts.space_name) {
+    innerConditions.push("e.space_name = ?");
+    innerParams.push(opts.space_name);
   }
   if (opts.types && opts.types.length > 0) {
     const placeholders = opts.types.map(() => "?").join(",");
     innerConditions.push(`e.type IN (${placeholders})`);
     innerParams.push(...opts.types);
   }
-  if (opts.subject_type) {
-    innerConditions.push("json_extract(e.properties, '$.subject_type') = ?");
-    innerParams.push(opts.subject_type);
-  }
-  if (opts.status) {
-    innerConditions.push("json_extract(e.properties, '$.status') = ?");
-    innerParams.push(opts.status);
-  }
   if (opts.label_contains) {
     const escaped = opts.label_contains.replace(/[\\%_]/g, "\\$&");
     innerConditions.push("e.label LIKE ? ESCAPE '\\' COLLATE NOCASE");
+    innerParams.push(`%${escaped}%`);
+  }
+  if (opts.path_contains) {
+    const escaped = opts.path_contains.replace(/[\\%_]/g, "\\$&");
+    innerConditions.push("e.source_path LIKE ? ESCAPE '\\' COLLATE NOCASE");
     innerParams.push(`%${escaped}%`);
   }
   if (opts.updated_since) {
     innerConditions.push("e.updated_at >= ?");
     innerParams.push(opts.updated_since);
   }
-  if (opts.unresolved !== undefined) {
-    if (opts.unresolved) {
-      // Placeholder wikis only — no file on disk yet. Source files
-      // always have source_hash, so this implicitly narrows to wikis.
-      innerConditions.push("e.type = 'wiki' AND e.source_hash IS NULL");
-    } else {
-      innerConditions.push("e.source_hash IS NOT NULL");
-    }
-  }
-
-  // Last-edit filter via the entity_latest_edit view. The LEFT JOIN
-  // is unconditional when this filter is present so the WHERE can
-  // reference le.last_edited_by.
-  let lastEditJoin = "";
   if (opts.edited_by_role) {
-    lastEditJoin = "LEFT JOIN entity_latest_edit le ON le.entity_id = e.id";
-    innerConditions.push("le.last_edited_by = ?");
+    // Latest-edit filter via a correlated subquery against entity_edits.
+    innerConditions.push(`
+      (SELECT by_role FROM entity_edits ed
+        WHERE ed.space_name = e.space_name AND ed.entity_path = e.source_path
+        ORDER BY ed.at DESC LIMIT 1) = ?
+    `);
     innerParams.push(opts.edited_by_role);
   }
 
@@ -220,10 +158,6 @@ export async function listEntities(
     outerConditions.push("outbound <= ?");
     outerParams.push(opts.outbound_max);
   }
-  if (opts.has_unresolved_outbound !== undefined) {
-    outerConditions.push("has_unresolved_outbound = ?");
-    outerParams.push(opts.has_unresolved_outbound ? 1 : 0);
-  }
 
   const outerWhere = outerConditions.length
     ? `WHERE ${outerConditions.join(" AND ")}`
@@ -231,22 +165,16 @@ export async function listEntities(
 
   const baseSelect = `
     SELECT
-      e.id, e.space_id, e.type, e.label, e.source_path, e.properties,
+      e.space_name, e.source_path, e.type, e.label, e.properties,
       e.created_at, e.updated_at,
-      (e.type = 'wiki' AND e.source_hash IS NULL) AS unresolved,
-      (SELECT COUNT(*) FROM relationships r WHERE r.target_id = e.id) AS inbound,
-      (SELECT COUNT(*) FROM relationships r WHERE r.source_id = e.id) AS outbound,
-      EXISTS (
-        SELECT 1 FROM relationships r
-        JOIN entities t ON t.id = r.target_id
-        WHERE r.source_id = e.id
-          AND t.type = 'wiki'
-          AND t.source_hash IS NULL
-      ) AS has_unresolved_outbound,
-      (SELECT le2.last_edited_by FROM entity_latest_edit le2
-        WHERE le2.entity_id = e.id) AS last_edited_by
+      (SELECT COUNT(*) FROM relationships r
+        WHERE r.space_name = e.space_name AND r.target_path = e.source_path) AS inbound,
+      (SELECT COUNT(*) FROM relationships r
+        WHERE r.space_name = e.space_name AND r.source_path = e.source_path) AS outbound,
+      (SELECT by_role FROM entity_edits ed
+        WHERE ed.space_name = e.space_name AND ed.entity_path = e.source_path
+        ORDER BY ed.at DESC LIMIT 1) AS last_edited_by
     FROM entities e
-    ${lastEditJoin}
     ${innerWhere}
   `;
 
@@ -258,20 +186,15 @@ export async function listEntities(
   `;
 
   interface RawEntityRow {
-    id: string;
-    space_id: string;
-    type: EntityType;
-    label: string;
+    space_name: string;
     source_path: string;
+    type: EntityType;
+    label: string | null;
     properties: Record<string, unknown> | string;
     created_at: string;
     updated_at: string;
     inbound: number;
     outbound: number;
-    // SQLite's EXISTS / boolean expressions yield 0/1 — coerce at the
-    // boundary.
-    unresolved: number;
-    has_unresolved_outbound: number;
     last_edited_by: string | null;
   }
 
@@ -291,19 +214,16 @@ export async function listEntities(
     ...outerParams,
   ])) as unknown as Array<{ total: number }>;
 
-  const result: ListEntitiesResult = {
+  return {
     entities: rawRows.map((row) => {
       const entity: EntityListRow = {
-        id: row.id,
-        space_id: row.space_id,
+        space_name: row.space_name,
+        source_path: row.source_path,
         type: row.type,
         label: row.label,
-        source_path: row.source_path,
         properties: row.properties,
         created_at: row.created_at,
         updated_at: row.updated_at,
-        unresolved: Boolean(row.unresolved),
-        has_unresolved_outbound: Boolean(row.has_unresolved_outbound),
         last_edited_by: row.last_edited_by,
       };
       if (opts.include_counts) {
@@ -318,33 +238,117 @@ export async function listEntities(
     limit,
     offset,
   };
+}
 
-  if (opts.include_relationships) {
-    const ids = rawRows.map((e) => e.id);
-    if (ids.length > 0) {
-      const placeholders = ids.map(() => "?").join(",");
-      result.relationships = (await sql.query(
-        `SELECT id, source_id, target_id, predicate, link_text, link_path
-         FROM relationships
-         WHERE source_id IN (${placeholders}) OR target_id IN (${placeholders})`,
-        [...ids, ...ids],
-      )) as unknown as RelationshipRow[];
-    } else {
-      result.relationships = [];
-    }
-  }
+export interface ListRedLinksOptions {
+  space_name: string;
+  /** Default 100. */
+  limit?: number;
+  offset?: number;
+}
 
-  return result;
+export interface RedLinkRow {
+  target_path: string;
+  demand: number;
+  /** Last 3 source paths that link to this target (most recent first). */
+  linked_from: string[];
+}
+
+export interface ListRedLinksResult {
+  redlinks: RedLinkRow[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/**
+ * Link targets in this space that have no corresponding entity row.
+ * Aggregated by target_path with `demand` (count) and `linked_from`
+ * (the last 3 source_paths that pointed at this target). Sorted by
+ * demand descending — the next thing the writer should fill in.
+ */
+export async function listRedLinks(
+  opts: ListRedLinksOptions,
+): Promise<ListRedLinksResult> {
+  const limit = Math.min(opts.limit ?? 100, MAX_LIMIT);
+  const offset = opts.offset ?? 0;
+
+  const sql = createSql();
+
+  // Single-pass aggregation: a CTE that pre-windows the linker rows
+  // (newest 3 per target_path by rowid DESC) joined back to the
+  // grouped-and-counted parent. The inner CTE produces (target_path,
+  // source_path, rn) for every red-link edge in this space; the
+  // outer SELECT groups by target_path, counts demand, and
+  // GROUP_CONCATs the source_paths where rn <= 3.
+  //
+  // Replaces the previous N+1 form (aggregate query + per-row linkers
+  // fetch). Same shape out, one round-trip instead of (1 + N).
+  const redlinksSql = `
+    WITH red AS (
+      SELECT
+        r.target_path,
+        r.source_path,
+        ROW_NUMBER() OVER (
+          PARTITION BY r.target_path
+          ORDER BY r.rowid DESC
+        ) AS rn
+      FROM relationships r
+      LEFT JOIN entities e
+        ON e.space_name = r.space_name AND e.source_path = r.target_path
+      WHERE r.space_name = ? AND e.source_path IS NULL
+    )
+    SELECT
+      target_path,
+      COUNT(*) AS demand,
+      GROUP_CONCAT(
+        CASE WHEN rn <= 3 THEN source_path END,
+        char(31)
+      ) AS linked_from_concat
+    FROM red
+    GROUP BY target_path
+    ORDER BY demand DESC, target_path ASC
+    LIMIT ? OFFSET ?
+  `;
+  const aggRows = (await sql.query(redlinksSql, [opts.space_name, limit, offset])) as unknown as Array<{
+    target_path: string;
+    demand: number;
+    linked_from_concat: string | null;
+  }>;
+
+  const totalSql = `
+    SELECT COUNT(DISTINCT r.target_path) AS total
+    FROM relationships r
+    LEFT JOIN entities e
+      ON e.space_name = r.space_name AND e.source_path = r.target_path
+    WHERE r.space_name = ? AND e.source_path IS NULL
+  `;
+  const totalRow = (await sql.query(totalSql, [opts.space_name])) as unknown as Array<{
+    total: number;
+  }>;
+
+  // GROUP_CONCAT result is delimited by char(31) (ASCII Unit Separator)
+  // — chosen because no realistic source_path contains a control
+  // character. NULLs from the CASE expression (rows where rn > 3) are
+  // skipped by GROUP_CONCAT by design.
+  const SEP = String.fromCharCode(31);
+  const redlinks: RedLinkRow[] = aggRows.map((row) => ({
+    target_path: row.target_path,
+    demand: Number(row.demand),
+    linked_from: row.linked_from_concat ? row.linked_from_concat.split(SEP) : [],
+  }));
+
+  return {
+    redlinks,
+    total: totalRow[0]?.total ?? 0,
+    limit,
+    offset,
+  };
 }
 
 /**
  * Parse a comma-separated list of entity types, validating each one.
  * Used by route handlers to coerce `?type=wiki,file` into the typed array.
- * Returns `undefined` for empty/missing input (= no type filter).
- *
- * `?type=stub` is no longer accepted — placeholder wikis are surfaced via
- * `?unresolved=true` (a wiki with no file on disk yet has type='wiki' and
- * source_hash IS NULL). The error message points callers at that.
  */
 export function parseEntityTypes(raw: string | undefined): EntityType[] | undefined {
   if (!raw) return undefined;
@@ -352,15 +356,6 @@ export function parseEntityTypes(raw: string | undefined): EntityType[] | undefi
   for (const part of raw.split(",")) {
     const t = part.trim();
     if (!t) continue;
-    if (t === "stub") {
-      throw new ApiError(
-        400,
-        "validation_error",
-        `Entity type "stub" was removed in 006-collapse-stubs. ` +
-          `Placeholders are now wikis with no file on disk; use ` +
-          `?unresolved=true (optionally combined with type=wiki).`,
-      );
-    }
     if (t !== "wiki" && t !== "file") {
       throw new ApiError(
         400,
@@ -371,4 +366,58 @@ export function parseEntityTypes(raw: string | undefined): EntityType[] | undefi
     out.push(t);
   }
   return out.length > 0 ? out : undefined;
+}
+
+/**
+ * Fetch a single entity by (space_name, source_path) including outbound
+ * relationships. Returns null if the entity does not exist.
+ */
+export interface EntityDetail extends EntityListRow {
+  outbound: Array<{ target_path: string; link_text: string | null }>;
+  inbound: Array<{ source_path: string; link_text: string | null }>;
+}
+
+export async function getEntity(
+  space_name: string,
+  source_path: string,
+): Promise<EntityDetail | null> {
+  const sql = createSql();
+  const rows = await sql`
+    SELECT space_name, source_path, type, label, properties, created_at, updated_at,
+      (SELECT by_role FROM entity_edits ed
+        WHERE ed.space_name = entities.space_name AND ed.entity_path = entities.source_path
+        ORDER BY ed.at DESC LIMIT 1) AS last_edited_by
+    FROM entities
+    WHERE space_name = ${space_name} AND source_path = ${source_path}
+  `;
+  if (rows.length === 0) return null;
+  const row = rows[0];
+
+  const outbound = await sql`
+    SELECT target_path, link_text FROM relationships
+    WHERE space_name = ${space_name} AND source_path = ${source_path}
+  `;
+  const inbound = await sql`
+    SELECT source_path, link_text FROM relationships
+    WHERE space_name = ${space_name} AND target_path = ${source_path}
+  `;
+
+  return {
+    space_name: row.space_name as string,
+    source_path: row.source_path as string,
+    type: row.type as EntityType,
+    label: row.label as string | null,
+    properties: row.properties as Record<string, unknown> | string,
+    created_at: row.created_at as string,
+    updated_at: row.updated_at as string,
+    last_edited_by: row.last_edited_by as string | null,
+    outbound: outbound.map((r) => ({
+      target_path: r.target_path as string,
+      link_text: r.link_text as string | null,
+    })),
+    inbound: inbound.map((r) => ({
+      source_path: r.source_path as string,
+      link_text: r.link_text as string | null,
+    })),
+  };
 }

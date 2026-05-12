@@ -8,16 +8,10 @@
  * filesystem-driven edit (e.g. a human saving a wiki in their editor),
  * which has no registered context and is attributed to "human".
  *
- * Why a registry rather than threading parameters through syncFile:
- * the watcher independently calls syncFile on every file event, which
- * happens both when applyEdit just wrote the file AND when an external
- * editor did. The watcher has no knowledge of who wrote the file —
- * only the chokepoint that produced the write does. So the chokepoint
- * (applyEdit) deposits its context here before writing, and any
- * subsequent syncFile call for the same path during the lifetime of
- * that write reads the same context. The registry is cleared when
- * applyEdit returns, so further filesystem-driven syncs land as
- * "human".
+ * Orthogonal to the agent runtime's read-gate, which lives on
+ * `AgentContext.readPaths` and gates tool-call discipline. This
+ * registry is purely about attribution on the resulting `entity_edits`
+ * row.
  *
  * The registry is process-local. All daemon writes flow through this
  * process, so no cross-process coordination is needed.
@@ -25,11 +19,9 @@
 
 export type EditKind =
   | "create"
-  | "append"
-  | "replace"
-  | "annotate"
+  | "insert_at_line"
+  | "str_replace"
   | "delete"
-  | "delete_section"
   | "resync";
 
 export interface EditContext {
@@ -40,20 +32,20 @@ export interface EditContext {
 
 const inflight = new Map<string, EditContext>();
 
-function key(spaceId: string, relativePath: string): string {
-  return `${spaceId}::${relativePath}`;
+function key(spaceName: string, relativePath: string): string {
+  return `${spaceName}::${relativePath}`;
 }
 
 export function setEditContext(
-  spaceId: string,
+  spaceName: string,
   relativePath: string,
   ctx: EditContext,
 ): void {
-  inflight.set(key(spaceId, relativePath), ctx);
+  inflight.set(key(spaceName, relativePath), ctx);
 }
 
-export function clearEditContext(spaceId: string, relativePath: string): void {
-  inflight.delete(key(spaceId, relativePath));
+export function clearEditContext(spaceName: string, relativePath: string): void {
+  inflight.delete(key(spaceName, relativePath));
 }
 
 /**
@@ -61,10 +53,10 @@ export function clearEditContext(spaceId: string, relativePath: string): void {
  * calls during a single applyEdit lifetime see the same value.
  */
 export function getEditContext(
-  spaceId: string,
+  spaceName: string,
   relativePath: string,
 ): EditContext | undefined {
-  return inflight.get(key(spaceId, relativePath));
+  return inflight.get(key(spaceName, relativePath));
 }
 
 /** For tests: clear all in-flight entries. */

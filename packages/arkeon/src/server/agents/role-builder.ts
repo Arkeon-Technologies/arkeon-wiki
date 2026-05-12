@@ -23,7 +23,12 @@
  */
 
 import type { ModelConfig } from "./model.js";
-import type { AgentConfig, PhaseConfig, RoleConfig } from "./config.js";
+import type {
+  AgentConfig,
+  PhaseConfig,
+  ReasoningEffort,
+  RoleConfig,
+} from "./config.js";
 import { loadBundledTemplates } from "./templates.js";
 import {
   type AgentInput,
@@ -72,6 +77,13 @@ export function buildAgentRole(name: string, config: AgentConfig): AgentRole {
 
   const maxSteps =
     fromConfig.max_steps ?? builtin.max_steps ?? defaults.max_steps ?? 10;
+
+  // Most-specific-wins for reasoning_effort, same precedence as model.
+  // Per-phase overrides happen below.
+  const reasoningEffort =
+    fromConfig.reasoning_effort ??
+    builtin.reasoning_effort ??
+    defaults.reasoning_effort;
 
   // Prompt resolution: system replaces, instructions layer.
   const baseSystem = fromConfig.system ?? builtin.system;
@@ -138,6 +150,7 @@ export function buildAgentRole(name: string, config: AgentConfig): AgentRole {
       promptTemplate: p.prompt,
       tools: phaseTools,
       maxSteps: p.max_steps ?? maxSteps,
+      reasoningEffort: p.reasoning_effort ?? reasoningEffort,
       // Per-phase model overrides keep the role's provider, base_url,
       // and api_key — same provider only.
       model: toModelConfig(provider, phaseModelId, baseUrl, apiKey),
@@ -180,6 +193,7 @@ export function buildAgentRole(name: string, config: AgentConfig): AgentRole {
           model: p.model,
           tools: p.tools,
           maxSteps: p.maxSteps,
+          reasoningEffort: p.reasoningEffort,
         }),
       ),
     }),
@@ -193,6 +207,7 @@ interface ResolvedPhase {
   tools: string[];
   maxSteps: number;
   model: ModelConfig;
+  reasoningEffort: ReasoningEffort | undefined;
 }
 
 // ── Prompt template ──────────────────────────────────────────────
@@ -204,8 +219,6 @@ export function promptVars(
   return {
     role_name: roleName,
     trigger_path: input.triggerPath ?? "",
-    trigger_entity_id: input.triggerEntityId ?? "",
-    space_id: input.space.id,
     space_name: input.space.name,
     space_watch_dir: input.space.watch_dir,
   };
@@ -226,9 +239,9 @@ export function defaultConcurrencyKey(
   roleName: string,
 ): (input: AgentInput) => string {
   return (input: AgentInput) =>
-    input.triggerEntityId
-      ? `${roleName}::${input.space.id}::${input.triggerEntityId}`
-      : `${roleName}::${input.space.id}`;
+    input.triggerPath
+      ? `${roleName}::${input.space.name}::${input.triggerPath}`
+      : `${roleName}::${input.space.name}`;
 }
 
 // ── Provider/key plumbing ────────────────────────────────────────

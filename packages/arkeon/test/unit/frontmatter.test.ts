@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, it, expect } from "vitest";
-import { parseFrontmatter, serializeFrontmatter } from "../../src/server/lib/frontmatter.js";
+import { parseFrontmatter } from "../../src/server/lib/frontmatter.js";
 
 describe("parseFrontmatter", () => {
   it("parses valid YAML frontmatter", () => {
@@ -138,67 +138,3 @@ Body.`;
   });
 });
 
-describe("serializeFrontmatter", () => {
-  it("serializes properties and body", () => {
-    const result = serializeFrontmatter({ label: "Test", count: 42 }, "\nBody content.");
-    expect(result.startsWith("---\n")).toBe(true);
-    expect(result).toContain("label: Test");
-    expect(result).toContain("count: 42");
-    expect(result).toContain("Body content.");
-  });
-
-  it("round-trips through parse and serialize", () => {
-    const original = {
-      id: "01ABC",
-      label: "Round Trip",
-      tags: ["a", "b"],
-    };
-    const body = "\nSome body content.\n\nWith paragraphs.\n";
-
-    const serialized = serializeFrontmatter(original, body);
-    const parsed = parseFrontmatter(serialized);
-
-    expect(parsed.properties).toEqual(original);
-    expect(parsed.body).toBe(body);
-  });
-
-  it("auto-quotes ID-shaped strings so they round-trip as strings", () => {
-    // ULIDs (e.g. 01JSG…), digit-only strings, and YAML 1.1 boolean-likes
-    // must always round-trip as strings. js-yaml's dump handles this
-    // defensively when it detects ambiguity.
-    const cases = [
-      "01JSG7H3K8FZ4PV6XAY5DR9MQT",
-      "0123456789",
-      "99999999999",
-      "01234",
-      "YES",
-      "no",
-      "on",
-      "true",
-      "null",
-    ];
-    for (const id of cases) {
-      const serialized = serializeFrontmatter({ id, label: "T" }, "\nbody");
-      const parsed = parseFrontmatter(serialized);
-      expect(typeof parsed.properties.id).toBe("string");
-      expect(parsed.properties.id).toBe(id);
-    }
-  });
-
-  it("preserves key insertion order", () => {
-    const result = serializeFrontmatter(
-      { id: "01ABC", label: "Test", subject_type: "person" },
-      "\nbody",
-    );
-    const idIdx = result.indexOf("id:");
-    const labelIdx = result.indexOf("label:");
-    const typeIdx = result.indexOf("subject_type:");
-    expect(idIdx).toBeLessThan(labelIdx);
-    expect(labelIdx).toBeLessThan(typeIdx);
-  });
-
-  it("adds leading newline to body if missing", () => {
-    const result = serializeFrontmatter({ label: "Test" }, "Body without leading newline.");
-    expect(result).toContain("---\n\nBody without leading newline.");
-  });
-});

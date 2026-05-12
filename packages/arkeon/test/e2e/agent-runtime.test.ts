@@ -2,195 +2,361 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * End-to-end tests for the agent runtime infrastructure: tool registry
- * (each tool's execute path).
+ * E2e tests for the agent runtime — focused on the contracts the
+ * design hinges on:
  *
- * These tests don't call an LLM. They exercise the parts of the runtime
- * that the AI SDK doesn't already test: our tool wiring and the
- * integration between tools and applyEdit.
+ *   - Read-gate: edit_file refuses paths not read_file'd in this run;
+ *     reads invalidate after every successful edit.
+ *   - Scheduler: cron-bearing roles fire on schedule and run through
+ *     the per-space mutex.
+ *
+ * These don't boot the HTTP API — they exercise the runtime directly
+ * against a fresh SQLite + tmp space.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { mkdirSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { randomBytes } from "node:crypto";
+import { join } from "node:path";
 
+import { runMigrations } from "../../src/schema/migrate.js";
+import { closeDb, createSql, initDb } from "../../src/server/lib/sql.js";
+import { removeByPath, syncFile, type Space } from "../../src/server/lib/sync.js";
+import { _clearRecentMovesForTest } from "../../src/server/lib/recent-moves.js";
 import { ALL_TOOLS } from "../../src/server/agents/tools.js";
-import { makeContext } from "../../src/server/agents/runtime.js";
-import { createSql } from "../../src/server/lib/sql.js";
-import type { Space } from "../../src/server/lib/sync.js";
+import { makeContext, readGateKey } from "../../src/server/agents/runtime.js";
+import { startScheduler } from "../../src/server/agents/scheduler.js";
+import type { Tool } from "ai";
 
-const API_PORT = 18796;
+let workdir: string;
+let dbPath: string;
+const SPACE: Space = { name: "rt-test", watch_dir: "" };
 
-let testDir: string;
-let stateDir: string;
-let serverHandle: { stop: () => Promise<void> } | null = null;
-let space: Space;
+async function setupWorkdir() {
+  workdir = mkdtempSync(join(tmpdir(), "arkeon-rt-"));
+  dbPath = join(workdir, "arke.db");
+  SPACE.watch_dir = workdir;
 
-interface ExecutableTool {
-  execute: (input: unknown) => Promise<unknown>;
+  mkdirSync(join(workdir, "wiki"), { recursive: true });
+
+  await runMigrations({ dbPath });
+  initDb(dbPath);
+
+  const sql = createSql();
+  await sql`INSERT INTO spaces(name, watch_dir) VALUES(${SPACE.name}, ${workdir})`;
 }
 
-beforeAll(async () => {
-  const base = join(tmpdir(), `arkeon-agent-rt-${randomBytes(4).toString("hex")}`);
-  testDir = join(base, "repo");
-  stateDir = join(base, "state");
-  mkdirSync(testDir, { recursive: true });
-  mkdirSync(join(stateDir, "data"), { recursive: true });
-  mkdirSync(join(testDir, "wiki"), { recursive: true });
+beforeEach(async () => {
+  _clearRecentMovesForTest();
+  await setupWorkdir();
+});
 
-  process.env.ARKEON_WIKI_HOME = stateDir;
+afterEach(() => {
+  closeDb();
+  if (workdir) rmSync(workdir, { recursive: true, force: true });
+});
 
-  const dbFile = join(stateDir, "data", "arke.db");
-  const { runMigrations } = await import("../../src/schema/index.js");
-  await runMigrations({ dbPath: dbFile });
-
-  const { startApi } = await import("../../src/server/server.js");
-  const apiHandle = await startApi({ port: API_PORT, dbPath: dbFile });
-  serverHandle = { stop: async () => apiHandle.stop() };
-
-  const spaceRes = await fetch(`http://localhost:${API_PORT}/spaces`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name: "agent-rt-space", watch_dir: testDir }),
-  });
-  const json = (await spaceRes.json()) as { id: string };
-
-  space = { id: json.id, name: "agent-rt-space", watch_dir: testDir };
-}, 30_000);
-
-afterAll(async () => {
-  if (serverHandle) await serverHandle.stop();
-  if (testDir && existsSync(testDir)) {
-    rmSync(testDir.substring(0, testDir.lastIndexOf("/")), {
-      recursive: true,
-      force: true,
-    });
+describe("read-gate", () => {
+  function getTool(name: string, ctx: ReturnType<typeof makeContext>): Tool {
+    const factory = ALL_TOOLS[name];
+    if (!factory) throw new Error(`unknown tool: ${name}`);
+    return factory(ctx);
   }
-}, 30_000);
 
-describe("read_file tool", () => {
-  it("reads a markdown file and returns parsed frontmatter", async () => {
-    mkdirSync(join(testDir, "wiki/person"), { recursive: true });
-    writeFileSync(
-      join(testDir, "wiki/person/turing.md"),
-      "---\nlabel: Alan Turing\nsubject_type: person\n---\n\nMathematician.\n",
-    );
+  async function exec<T = unknown>(tool: Tool, input: unknown): Promise<T> {
+    // The AI SDK's Tool surface carries provider-specific generics that
+    // hide `execute` from the public type; call it directly. The runtime
+    // contract is what defineTool wires up.
+    type Exec = (input: unknown, ctx: { toolCallId: string; messages: unknown[] }) => Promise<T>;
+    const fn = (tool as unknown as { execute: Exec }).execute;
+    return fn(input, { toolCallId: "test", messages: [] });
+  }
 
-    const ctx = makeContext(space, "test");
-    const tool = ALL_TOOLS.read_file(ctx) as ExecutableTool;
-    const result = (await tool.execute({ path: "wiki/person/turing.md" })) as {
-      path: string;
-      frontmatter: { label: string; subject_type: string };
-      body: string;
-    };
+  it("edit_file refuses a path that wasn't read in this run", async () => {
+    writeFileSync(join(workdir, "wiki/x.html"), `<!doctype html>
+<meta charset="utf-8"><title>X</title>
+<meta name="label" content="X">
+<body><h1>X</h1><p>One.</p></body>`);
+    await syncFile(SPACE, "wiki/x.html");
 
-    expect(result.path).toBe("wiki/person/turing.md");
-    expect(result.frontmatter.label).toBe("Alan Turing");
-    expect(result.frontmatter.subject_type).toBe("person");
-    expect(result.body).toContain("Mathematician.");
+    const ctx = makeContext(SPACE, "writer");
+    const edit = getTool("edit_file", ctx);
+
+    await expect(
+      exec(edit, {
+        mode: "str_replace",
+        path: "wiki/x.html",
+        old_string: "One.",
+        new_string: "Two.",
+      }),
+    ).rejects.toThrow(/must read_file/);
   });
 
-  it("throws when the file does not exist", async () => {
-    const ctx = makeContext(space, "test");
-    const tool = ALL_TOOLS.read_file(ctx) as ExecutableTool;
-    await expect(tool.execute({ path: "wiki/missing.md" })).rejects.toThrow(/does not exist/);
-  });
-});
+  it("edit_file succeeds after a read, then fails on the next edit without a re-read", async () => {
+    writeFileSync(join(workdir, "wiki/x.html"), `<!doctype html>
+<meta charset="utf-8"><title>X</title>
+<meta name="label" content="X">
+<body><h1>X</h1><p>One.</p></body>`);
+    await syncFile(SPACE, "wiki/x.html");
 
-describe("edit_file tool — CREATE mode", () => {
-  it("creates a new file and accumulates the edit on the context", async () => {
-    const ctx = makeContext(space, "test");
-    const tool = ALL_TOOLS.edit_file(ctx) as ExecutableTool;
-    const result = (await tool.execute({
-      mode: "create",
-      path: "wiki/concept/note.md",
-      content: "---\nlabel: Note\nsubject_type: concept\n---\n\nbody\n",
-    })) as { path: string; mode: string };
+    const ctx = makeContext(SPACE, "writer");
+    const read = getTool("read_file", ctx);
+    const edit = getTool("edit_file", ctx);
 
-    expect(result.mode).toBe("create");
-    expect(existsSync(join(testDir, "wiki/concept/note.md"))).toBe(true);
-    expect(ctx.edits).toHaveLength(1);
-    expect(ctx.edits[0].path).toBe("wiki/concept/note.md");
-  });
-});
+    await exec(read, { path: "wiki/x.html" });
+    expect(ctx.readPaths.has(readGateKey(SPACE.name, "wiki/x.html"))).toBe(true);
 
-describe("edit_file tool", () => {
-  it("applies a SEARCH/REPLACE that matches exactly once", async () => {
-    mkdirSync(join(testDir, "wiki/person"), { recursive: true });
-    writeFileSync(
-      join(testDir, "wiki/person/lovelace.md"),
-      "---\nlabel: Ada Lovelace\nsubject_type: person\n---\n\nA mathematician.\n",
-    );
+    // First edit: ok.
+    await exec(edit, {
+      mode: "str_replace",
+      path: "wiki/x.html",
+      old_string: "One.",
+      new_string: "Two.",
+    });
+    // Successful edit invalidates the read.
+    expect(ctx.readPaths.has(readGateKey(SPACE.name, "wiki/x.html"))).toBe(false);
 
-    const ctx = makeContext(space, "test");
-    const tool = ALL_TOOLS.edit_file(ctx) as ExecutableTool;
-    await tool.execute({
-      mode: "replace",
-      path: "wiki/person/lovelace.md",
-      search: "A mathematician.",
-      replace: "A mathematician who wrote the first algorithm.",
+    // Second edit without re-reading: fails.
+    await expect(
+      exec(edit, {
+        mode: "str_replace",
+        path: "wiki/x.html",
+        old_string: "Two.",
+        new_string: "Three.",
+      }),
+    ).rejects.toThrow(/must read_file/);
+
+    // Re-read, then second edit succeeds.
+    await exec(read, { path: "wiki/x.html" });
+    await exec(edit, {
+      mode: "str_replace",
+      path: "wiki/x.html",
+      old_string: "Two.",
+      new_string: "Three.",
     });
 
-    const updated = readFileSync(join(testDir, "wiki/person/lovelace.md"), "utf-8");
-    expect(updated).toContain("first algorithm");
+    expect(readFileSync(join(workdir, "wiki/x.html"), "utf-8")).toContain("Three.");
   });
 
-  it("rejects an edit whose SEARCH matches multiple times", async () => {
-    mkdirSync(join(testDir, "wiki/concept"), { recursive: true });
-    writeFileSync(
-      join(testDir, "wiki/concept/dup.md"),
-      "---\nlabel: Dup\n---\n\nfoo\nfoo\n",
-    );
+  it("create_file is terminal — no prior read required, doesn't touch the gate", async () => {
+    const ctx = makeContext(SPACE, "writer");
+    const create = getTool("create_file", ctx);
 
-    const ctx = makeContext(space, "test");
-    const tool = ALL_TOOLS.edit_file(ctx) as ExecutableTool;
-    await expect(
-      tool.execute({ mode: "replace", path: "wiki/concept/dup.md", search: "foo", replace: "bar" }),
-    ).rejects.toThrow(/matched 2 times/);
+    await exec(create, {
+      path: "wiki/new.html",
+      label: "New",
+      short_description: "y",
+      body: "<h1>New</h1><p>x</p>",
+    });
+
+    expect(existsSync(join(workdir, "wiki/new.html"))).toBe(true);
+    // Gate is untouched (create doesn't pre-load it).
+    expect(ctx.readPaths.has(readGateKey(SPACE.name, "wiki/new.html"))).toBe(false);
   });
 
-  it("rejects an edit whose SEARCH does not match", async () => {
-    mkdirSync(join(testDir, "wiki/concept"), { recursive: true });
+  it("insert_at_line invalidates the read (line numbers shifted)", async () => {
     writeFileSync(
-      join(testDir, "wiki/concept/miss.md"),
-      "---\nlabel: Miss\n---\n\nbody\n",
+      join(workdir, "wiki/x.html"),
+      `<!doctype html>
+<meta charset="utf-8"><title>X</title>
+<meta name="label" content="X">
+<body>
+<h1>X</h1>
+<p>One.</p>
+</body>`,
     );
+    await syncFile(SPACE, "wiki/x.html");
 
-    const ctx = makeContext(space, "test");
-    const tool = ALL_TOOLS.edit_file(ctx) as ExecutableTool;
+    const ctx = makeContext(SPACE, "writer");
+    const read = getTool("read_file", ctx);
+    const edit = getTool("edit_file", ctx);
+
+    await exec(read, { path: "wiki/x.html" });
+    await exec(edit, {
+      mode: "insert_at_line",
+      path: "wiki/x.html",
+      line_number: 7,
+      content: "<p>Inserted.</p>",
+    });
+
+    expect(ctx.readPaths.has(readGateKey(SPACE.name, "wiki/x.html"))).toBe(false);
+
+    // Second edit must fail until re-read.
     await expect(
-      tool.execute({ mode: "replace", path: "wiki/concept/miss.md", search: "absent", replace: "x" }),
-    ).rejects.toThrow(/did not match/);
+      exec(edit, {
+        mode: "insert_at_line",
+        path: "wiki/x.html",
+        line_number: 8,
+        content: "<p>Another.</p>",
+      }),
+    ).rejects.toThrow(/must read_file/);
   });
 });
 
-describe("search tool", () => {
-  it("returns hits for matching content in the space", async () => {
-    mkdirSync(join(testDir, "wiki/person"), { recursive: true });
+describe("move detection (#118)", () => {
+  it("delete-then-create rename rewires inbound edges to the new path", async () => {
+    // Two articles: A links to B. B gets renamed. A's edge should
+    // follow B to its new path automatically.
+    const bContent = `<!doctype html>
+<meta charset="utf-8"><title>B</title>
+<meta name="label" content="B">
+<body><h1>B</h1></body>`;
+
+    writeFileSync(join(workdir, "wiki/b.html"), bContent);
     writeFileSync(
-      join(testDir, "wiki/person/curie.md"),
-      "---\nlabel: Marie Curie\nsubject_type: person\n---\n\nDiscovered radium and polonium.\n",
+      join(workdir, "wiki/a.html"),
+      `<!doctype html>
+<meta charset="utf-8"><title>A</title>
+<meta name="label" content="A">
+<body><h1>A</h1><p>see <a href="b.html">B</a></p></body>`,
+    );
+    await syncFile(SPACE, "wiki/b.html");
+    await syncFile(SPACE, "wiki/a.html");
+
+    const sql = createSql();
+    let edge = await sql`
+      SELECT target_path FROM relationships
+      WHERE space_name = ${SPACE.name} AND source_path = 'wiki/a.html'
+    `;
+    expect(edge).toHaveLength(1);
+    expect(edge[0].target_path).toBe("wiki/b.html");
+
+    // Rename: delete old, create new with identical hash.
+    rmSync(join(workdir, "wiki/b.html"));
+    await removeByPath(SPACE, "wiki/b.html");
+    writeFileSync(join(workdir, "wiki/b-renamed.html"), bContent);
+    await syncFile(SPACE, "wiki/b-renamed.html");
+
+    edge = await sql`
+      SELECT target_path FROM relationships
+      WHERE space_name = ${SPACE.name} AND source_path = 'wiki/a.html'
+    `;
+    expect(edge).toHaveLength(1);
+    expect(edge[0].target_path).toBe("wiki/b-renamed.html");
+
+    // And the red-link queue should not surface it.
+    const reds = await sql`
+      SELECT r.target_path
+      FROM relationships r
+      LEFT JOIN entities e ON e.space_name = r.space_name AND e.source_path = r.target_path
+      WHERE r.space_name = ${SPACE.name} AND e.source_path IS NULL
+    `;
+    expect(reds).toHaveLength(0);
+  });
+
+  it("create-then-delete ordering (watcher reorder) still rewires correctly", async () => {
+    const bContent = `<!doctype html>
+<meta charset="utf-8"><title>B</title>
+<meta name="label" content="B">
+<body><h1>B</h1></body>`;
+
+    writeFileSync(join(workdir, "wiki/b.html"), bContent);
+    writeFileSync(
+      join(workdir, "wiki/a.html"),
+      `<!doctype html>
+<meta charset="utf-8"><title>A</title>
+<meta name="label" content="A">
+<body><h1>A</h1><p>see <a href="b.html">B</a></p></body>`,
+    );
+    await syncFile(SPACE, "wiki/b.html");
+    await syncFile(SPACE, "wiki/a.html");
+
+    // Create-then-delete: a watcher could reorder these. We simulate
+    // by creating the new file + sync first, then deleting the old.
+    writeFileSync(join(workdir, "wiki/b-renamed.html"), bContent);
+    await syncFile(SPACE, "wiki/b-renamed.html");
+    rmSync(join(workdir, "wiki/b.html"));
+    await removeByPath(SPACE, "wiki/b.html");
+
+    const sql = createSql();
+    const edge = await sql`
+      SELECT target_path FROM relationships
+      WHERE space_name = ${SPACE.name} AND source_path = 'wiki/a.html'
+    `;
+    expect(edge).toHaveLength(1);
+    expect(edge[0].target_path).toBe("wiki/b-renamed.html");
+  });
+
+  it("genuine deletion (no matching create) leaves inbound edges as red links", async () => {
+    const bContent = `<!doctype html>
+<meta charset="utf-8"><title>B</title>
+<meta name="label" content="B">
+<body><h1>B</h1></body>`;
+    writeFileSync(join(workdir, "wiki/b.html"), bContent);
+    writeFileSync(
+      join(workdir, "wiki/a.html"),
+      `<!doctype html>
+<meta charset="utf-8"><title>A</title>
+<meta name="label" content="A">
+<body><h1>A</h1><p>see <a href="b.html">B</a></p></body>`,
+    );
+    await syncFile(SPACE, "wiki/b.html");
+    await syncFile(SPACE, "wiki/a.html");
+
+    // Just delete; no replacement.
+    rmSync(join(workdir, "wiki/b.html"));
+    await removeByPath(SPACE, "wiki/b.html");
+
+    const sql = createSql();
+    const reds = await sql`
+      SELECT r.target_path
+      FROM relationships r
+      LEFT JOIN entities e ON e.space_name = r.space_name AND e.source_path = r.target_path
+      WHERE r.space_name = ${SPACE.name} AND e.source_path IS NULL
+    `;
+    expect(reds.map((r) => r.target_path)).toEqual(["wiki/b.html"]);
+  });
+});
+
+describe("scheduler", () => {
+  it("fires a cron-bearing role on schedule and invokes runAgent", async () => {
+    // cron-parser supports a 6-field form where the first field is
+    // seconds. `* * * * * *` → fire every second. Good enough to
+    // observe one tick within the test's budget.
+    const cron = "* * * * * *";
+
+    // Per-space agents.yaml at .arkeon/agents.yaml drives the
+    // scheduler's role list. Drop a minimal config that gives the
+    // built-in `writer` template a fast cron and an API key so
+    // buildAgentRole resolves cleanly.
+    process.env.OPENAI_API_KEY = "sk-test-fake";
+    mkdirSync(join(workdir, ".arkeon"), { recursive: true });
+    writeFileSync(
+      join(workdir, ".arkeon/agents.yaml"),
+      `roles:\n  writer:\n    cron: "${cron}"\n`,
     );
 
-    // Wait briefly for watcher to sync.
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline) {
-      const sql = createSql();
-      const rows =
-        await sql`SELECT id FROM entities WHERE space_id = ${space.id} AND source_path = ${"wiki/person/curie.md"}`;
-      if (rows.length > 0) break;
-      await new Promise((r) => setTimeout(r, 200));
-    }
-
-    const ctx = makeContext(space, "test");
-    const tool = ALL_TOOLS.search(ctx) as ExecutableTool;
-    const result = (await tool.execute({ query: "polonium" })) as {
-      keyword: { hits: Array<{ label: string; source_path: string }> };
+    let invocations = 0;
+    type RunAgentFn = Parameters<typeof startScheduler>[0]["runAgentFn"];
+    const fakeRunAgent: RunAgentFn = async () => {
+      invocations++;
+      return { skipped: false, edits: [], text: "ok", steps: 1 };
     };
 
-    expect(result.keyword.hits.length).toBeGreaterThan(0);
-    expect(result.keyword.hits[0].label).toBe("Marie Curie");
-  });
+    const handle = await startScheduler({
+      space: SPACE,
+      scheduleRoles: ["writer"],
+      runAgentFn: fakeRunAgent,
+      gracePeriodMs: 200,
+    });
+
+    try {
+      // Wait up to 2.5s — should see at least one firing.
+      const deadline = Date.now() + 2500;
+      while (Date.now() < deadline && invocations === 0) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      expect(invocations).toBeGreaterThanOrEqual(1);
+    } finally {
+      await handle.stop();
+      delete process.env.OPENAI_API_KEY;
+    }
+  }, 10_000);
 });

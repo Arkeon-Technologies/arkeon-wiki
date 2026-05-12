@@ -1,224 +1,111 @@
 // Copyright (c) 2026 Arkeon Technologies, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-/**
- * Pure unit tests for the helpers in file-edits.ts that don't depend
- * on the filesystem or the SQLite index. Anything that requires
- * applyEdit to write a file and propagate via syncFile lives in
- * test/e2e/file-edits-modes.test.ts.
- */
+import { describe, it, expect } from "vitest";
 
-import { describe, expect, it } from "vitest";
+import { composeWikiHtmlShell, safeResolve } from "../../src/server/lib/file-edits.js";
 
-import { removeSection } from "../../src/server/lib/file-edits.js";
-
-describe("removeSection", () => {
-  it("removes a section through the next same-level heading", () => {
-    const input = [
-      "Lead paragraph.",
-      "",
-      "## Keep me",
-      "",
-      "Keep this body.",
-      "",
-      "## Drop me",
-      "",
-      "Drop this body.",
-      "",
-      "## Keep me too",
-      "",
-      "And this body.",
-      "",
-    ].join("\n");
-    const out = removeSection(input, "## Drop me", "wiki/x.md");
-    expect(out).not.toContain("Drop me");
-    expect(out).not.toContain("Drop this body");
-    expect(out).toContain("## Keep me");
-    expect(out).toContain("Keep this body.");
-    expect(out).toContain("## Keep me too");
-    expect(out).toContain("And this body.");
+describe("safeResolve", () => {
+  it("resolves a relative path under the watch dir", () => {
+    const abs = safeResolve("/tmp/space", "wiki/foo.html");
+    expect(abs).toBe("/tmp/space/wiki/foo.html");
   });
 
-  it("removes a section through the next higher-level heading", () => {
-    const input = [
-      "# Top",
-      "",
-      "## Drop me",
-      "",
-      "Drop body.",
-      "",
-      "### A subsection that nests under Drop me",
-      "",
-      "Subsection body.",
-      "",
-      "# Another top",
-      "",
-      "Top-level body.",
-    ].join("\n");
-    const out = removeSection(input, "## Drop me", "wiki/x.md");
-    expect(out).not.toContain("Drop me");
-    expect(out).not.toContain("Drop body");
-    expect(out).not.toContain("A subsection that nests");
-    expect(out).toContain("# Top");
-    expect(out).toContain("# Another top");
-    expect(out).toContain("Top-level body.");
+  it("rejects absolute paths", () => {
+    expect(() => safeResolve("/tmp/space", "/etc/passwd")).toThrow(/absolute/);
   });
 
-  it("removes through EOF when no follower heading exists", () => {
-    const input = [
-      "Lead.",
-      "",
-      "## Final section",
-      "",
-      "Final body.",
-      "",
-    ].join("\n");
-    const out = removeSection(input, "## Final section", "wiki/x.md");
-    expect(out).toBe("Lead.\n\n");
+  it("rejects paths that escape the watch dir", () => {
+    expect(() => safeResolve("/tmp/space", "../escape")).toThrow(/escapes/);
+    expect(() => safeResolve("/tmp/space", "wiki/../../escape")).toThrow(/escapes/);
   });
 
-  it("level-discriminates on uniqueness — same text at different levels counts as different sections", () => {
-    // `### Foo` and `## Foo` are different sections. Asking to delete
-    // `### Foo` finds exactly one match (the H3) and removes only it,
-    // leaving the H2 section intact. The H2 body is preserved verbatim.
-    const input = [
-      "## Foo",
-      "",
-      "h2 body line.",
-      "",
-      "### Foo",
-      "",
-      "h3 body line.",
-      "",
-      "## After",
-      "",
-      "after body.",
-      "",
-    ].join("\n");
-    const out = removeSection(input, "### Foo", "wiki/x.md");
-    expect(out).toContain("## Foo");
-    expect(out).toContain("h2 body line.");
-    expect(out).not.toContain("### Foo");
-    expect(out).not.toContain("h3 body line.");
-    expect(out).toContain("## After");
-    expect(out).toContain("after body.");
+  it("rejects paths containing NUL bytes", () => {
+    expect(() => safeResolve("/tmp/space", "foo\0.html")).toThrow(/NUL/);
+  });
+});
+
+describe("composeWikiHtmlShell", () => {
+  it("emits a well-formed HTML document with charset, title, and meta tags", () => {
+    const html = composeWikiHtmlShell({
+      label: "Photosynthesis",
+      short_description: "How plants convert light.",
+      body: "<h1>Photosynthesis</h1><p>Hi.</p>",
+    });
+    expect(html).toContain("<!DOCTYPE html>");
+    expect(html).toContain(`<meta charset="utf-8">`);
+    expect(html).toContain("<title>Photosynthesis</title>");
+    expect(html).toContain(`<meta name="label" content="Photosynthesis">`);
+    expect(html).toContain(`<meta name="short_description" content="How plants convert light.">`);
+    expect(html).toContain("<h1>Photosynthesis</h1><p>Hi.</p>");
   });
 
-  it("removes nested subsections together with their parent heading", () => {
-    // Deleting `## Drop` removes the H2 plus its nested H3 child — the
-    // H3 is inside the H2's section by markdown convention. The next
-    // same-or-higher heading (the `## Keep`) bounds the deletion.
-    const input = [
-      "## Drop",
-      "",
-      "drop body.",
-      "",
-      "### nested",
-      "",
-      "nested body.",
-      "",
-      "## Keep",
-      "",
-      "keep body.",
-      "",
-    ].join("\n");
-    const out = removeSection(input, "## Drop", "wiki/x.md");
-    expect(out).not.toContain("Drop");
-    expect(out).not.toContain("nested");
-    expect(out).toContain("## Keep");
-    expect(out).toContain("keep body.");
+  it("places <meta charset> within the first 1024 bytes (HTML5 requirement)", () => {
+    const html = composeWikiHtmlShell({
+      label: "X",
+      short_description: "y",
+      body: "<h1>x</h1>",
+    });
+    const charsetPos = html.indexOf(`<meta charset="utf-8">`);
+    expect(charsetPos).toBeGreaterThan(-1);
+    expect(charsetPos).toBeLessThan(1024);
   });
 
-  it("ignores `#` lines inside a fenced code block", () => {
-    const input = [
-      "## Real heading",
-      "",
-      "```",
-      "## Not a heading inside a fence",
-      "```",
-      "",
-      "Body.",
-      "",
-    ].join("\n");
-    const out = removeSection(input, "## Real heading", "wiki/x.md");
-    // Everything from the real heading through EOF is gone.
-    expect(out).toBe("");
+  it("escapes ampersands and quotes in attribute values", () => {
+    const html = composeWikiHtmlShell({
+      label: `Cats & "Dogs"`,
+      short_description: "x",
+      body: "<h1>x</h1>",
+    });
+    expect(html).toContain(`<title>Cats &amp; &quot;Dogs&quot;</title>`);
+    expect(html).toContain(`<meta name="label" content="Cats &amp; &quot;Dogs&quot;">`);
   });
 
-  it("treats fence-open lines as the toggle, not headings", () => {
-    // The fence-tracker must not see the inner '## ...' as a heading
-    // candidate for a different section's deletion.
-    const input = [
-      "## Outer",
-      "",
-      "Outer body.",
-      "",
-      "## Other",
-      "",
-      "```",
-      "## Looks-like-h2",
-      "```",
-      "",
-      "Other body.",
-      "",
-    ].join("\n");
-    const out = removeSection(input, "## Other", "wiki/x.md");
-    // The faux-heading inside the fence should not have been considered
-    // as a follower of '## Other'.
-    expect(out).toContain("## Outer");
-    expect(out).toContain("Outer body.");
-    expect(out).not.toContain("## Other");
-    expect(out).not.toContain("Other body.");
-    expect(out).not.toContain("Looks-like-h2");
+  it("emits extra meta tags from the `extra` map", () => {
+    const html = composeWikiHtmlShell({
+      label: "X",
+      short_description: "y",
+      body: "<h1>X</h1>",
+      extra: { author: "shannon", year: "1948" },
+    });
+    expect(html).toContain(`<meta name="author" content="shannon">`);
+    expect(html).toContain(`<meta name="year" content="1948">`);
   });
 
-  it("throws when the heading is not present", () => {
-    const input = "## Only one\n\nbody\n";
-    expect(() =>
-      removeSection(input, "## Missing", "wiki/x.md"),
-    ).toThrow(/did not match/);
+  it("ignores extra entries that conflict with built-ins (label / short_description)", () => {
+    const html = composeWikiHtmlShell({
+      label: "Real",
+      short_description: "real",
+      body: "<h1>x</h1>",
+      extra: { label: "fake", author: "shannon" },
+    });
+    expect(html.match(/name="label"/g)).toHaveLength(1);
+    expect(html).toContain(`<meta name="label" content="Real">`);
+    expect(html).toContain(`<meta name="author" content="shannon">`);
   });
 
-  it("throws when the heading appears more than once at the same level", () => {
-    const input = [
-      "## Twin",
-      "",
-      "first",
-      "",
-      "## Twin",
-      "",
-      "second",
-      "",
-    ].join("\n");
-    expect(() =>
-      removeSection(input, "## Twin", "wiki/x.md"),
-    ).toThrow(/matched 2 times/);
+  it("rejects bodies that include shell tags (defence against prompt drift)", () => {
+    const cases = [
+      "<html><body>x</body></html>",
+      "<!DOCTYPE html><h1>x</h1>",
+      "<h1>x</h1></body>",
+      "<head><meta name=evil></head>",
+      "<title>sneaky</title>",
+      "<META name=author>", // case-insensitive
+    ];
+    for (const body of cases) {
+      expect(() =>
+        composeWikiHtmlShell({ label: "x", short_description: "y", body }),
+      ).toThrow(/body contains a shell tag/);
+    }
   });
 
-  it("throws on a malformed heading spec", () => {
-    expect(() =>
-      removeSection("## A\n", "Open threads", "wiki/x.md"),
-    ).toThrow(/ATX heading/);
-  });
-
-  it("recognises ATX-closed heading form (`## Title ##`)", () => {
-    // The regex strips trailing `#`s from the matched text. Asking to
-    // delete `## Title` should match a `## Title ##` line, since both
-    // forms describe the same heading.
-    const input = [
-      "## Title ##",
-      "",
-      "body line.",
-      "",
-      "## Other",
-      "",
-      "other body.",
-      "",
-    ].join("\n");
-    const out = removeSection(input, "## Title", "wiki/x.md");
-    expect(out).not.toContain("Title");
-    expect(out).not.toContain("body line.");
-    expect(out).toContain("## Other");
-    expect(out).toContain("other body.");
+  it("accepts ordinary content tags in body", () => {
+    const html = composeWikiHtmlShell({
+      label: "x",
+      short_description: "y",
+      body: `<h1>X</h1><p>Text with <a href="other.html">link</a> and <em>emphasis</em>.</p>`,
+    });
+    expect(html).toContain("<h1>X</h1>");
   });
 });

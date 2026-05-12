@@ -12,7 +12,6 @@ import { dirname, join, resolve } from "node:path";
 
 export type RepoState = {
   api_url: string;
-  space_id: string;
   space_name: string;
   created_at: string;
 };

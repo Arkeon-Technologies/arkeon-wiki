@@ -42,14 +42,28 @@ import { validateCronExpression } from "./cron.js";
  * model swaps only — cross-provider tool-call format translation is
  * out of scope for now.
  */
+/**
+ * OpenAI `reasoning_effort` controls how much hidden reasoning the
+ * model spends before emitting tokens. Maps directly to OpenAI's
+ * `reasoning_effort` (and through Vercel AI SDK as
+ * `providerOptions.openai.reasoningEffort`). Anthropic has a related
+ * `thinking` budget surface — out of scope for v0; if the role's
+ * provider isn't openai the field is silently ignored.
+ *
+ * The bake-off in tasks/v0-agent-harness-edit-primitives.md validated
+ * the writer at `low`. `minimal` is even faster/cheaper but trades
+ * away the structured reasoning the writer benefits from.
+ */
+export const REASONING_EFFORT_VALUES = ["minimal", "low", "medium", "high"] as const;
+export const REASONING_EFFORT_SCHEMA = z.enum(REASONING_EFFORT_VALUES);
+export type ReasoningEffort = z.infer<typeof REASONING_EFFORT_SCHEMA>;
+
 export const PHASE_CONFIG_SCHEMA = z.object({
   /** Optional name, surfaced in logs and traces. */
   name: z.string().optional(),
   /** User-message template added to the conversation when this phase
-   *  starts. Variables: {{space_id}}, {{space_name}}. (For
-   *  cron-driven roles there is no triggering file, so the older
-   *  {{trigger_path}} / {{trigger_entity_id}} variables expand to
-   *  the empty string.) The first phase's prompt is the initial user
+   *  starts. Variables: {{space_name}}, {{space_watch_dir}},
+   *  {{trigger_path}}. The first phase's prompt is the initial user
    *  message; subsequent phase prompts are appended. */
   prompt: z.string(),
   /** Override the role-level model for this phase only (e.g. cheap
@@ -60,6 +74,8 @@ export const PHASE_CONFIG_SCHEMA = z.object({
   tools: z.array(z.string()).optional(),
   /** Per-phase step budget. Defaults to the role-level max_steps. */
   max_steps: z.number().int().positive().max(100).optional(),
+  /** Per-phase reasoning_effort override. Defaults to role-level. */
+  reasoning_effort: REASONING_EFFORT_SCHEMA.optional(),
 });
 
 export const ROLE_CONFIG_SCHEMA = z.object({
@@ -74,6 +90,10 @@ export const ROLE_CONFIG_SCHEMA = z.object({
 
   // Loop bound (also the default per-phase budget)
   max_steps: z.number().int().positive().max(100).optional(),
+
+  /** OpenAI reasoning_effort. Applies to phases as a default unless
+   *  the phase overrides. Silently ignored for non-openai providers. */
+  reasoning_effort: REASONING_EFFORT_SCHEMA.optional(),
 
   // Prompts
   /** Full system prompt. Replaces the built-in template entirely. */

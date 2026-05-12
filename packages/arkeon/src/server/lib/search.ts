@@ -29,27 +29,14 @@ export const MAX_QUERY_PATTERNS = 10;
 export interface KeywordSearchOptions {
   /** Single substring/regex pattern, or up to MAX_QUERY_PATTERNS
    *  patterns run together as one ripgrep invocation (`-e p1 -e p2`).
-   *  Match counts aggregate per file, so multi-pattern hits naturally
-   *  rank higher — this is the right behaviour for variant batching
-   *  ("Shannon", "Claude Shannon", "information theorist"). */
+   *  Match counts aggregate per file. */
   query: string | string[];
-  /** Single-space convenience filter. Equivalent to passing
-   *  `spaceIds: [spaceId]`. If both are set, `spaceIds` wins. */
-  spaceId?: string;
-  /** Restrict the search to a specific set of registered spaces.
-   *  Empty/undefined = every registered space. Used by the agent
-   *  runtime to fan out across a role's allowed-space scope. */
-  spaceIds?: string[];
-  /** Restrict hits to entities of the given type(s). Any combination
-   *  of `wiki`, `file`. Omit/empty = no filter. Ripgrep still scans
-   *  every indexed file; the filter applies post-fetch on the
-   *  entity-join rows so the `unmatched_files` diagnostic counter
-   *  retains its "no entity at all" meaning instead of conflating
-   *  with "filtered out by type". Useful for source-only sweeps
-   *  (`['file']`) or wiki-only sweeps (`['wiki']`). Placeholder wikis
-   *  (`type='wiki'` with `source_hash IS NULL`, post-#104) are not
-   *  separable here — use `/entities?unresolved=true` if you want
-   *  those filtered specifically. */
+  /** Single-space convenience filter (equivalent to spaceNames: [spaceName]). */
+  spaceName?: string;
+  /** Restrict the search to a specific set of registered spaces by name.
+   *  Empty/undefined = every registered space. */
+  spaceNames?: string[];
+  /** Restrict hits to entities of the given type(s). */
   types?: EntityType[];
   limit?: number;
   maxSnippetsPerFile?: number;
@@ -62,11 +49,10 @@ export interface SearchSnippet {
 }
 
 export interface KeywordSearchHit {
-  entity_id: string;
-  space_id: string;
-  type: EntityType;
-  label: string;
+  space_name: string;
   source_path: string;
+  type: EntityType;
+  label: string | null;
   match_count: number;
   snippets: SearchSnippet[];
 }
@@ -245,19 +231,19 @@ export async function searchKeyword(
   const types = opts.types && opts.types.length > 0 ? opts.types : null;
 
   const sql = createSql();
-  const requestedIds =
-    opts.spaceIds && opts.spaceIds.length > 0
-      ? opts.spaceIds
-      : opts.spaceId
-        ? [opts.spaceId]
+  const requestedNames =
+    opts.spaceNames && opts.spaceNames.length > 0
+      ? opts.spaceNames
+      : opts.spaceName
+        ? [opts.spaceName]
         : null;
 
-  const spaces = await (requestedIds
+  const spaces = await (requestedNames
     ? sql.query(
-        `SELECT id, watch_dir FROM spaces WHERE id IN (${requestedIds.map(() => "?").join(",")})`,
-        requestedIds,
+        `SELECT name, watch_dir FROM spaces WHERE name IN (${requestedNames.map(() => "?").join(",")})`,
+        requestedNames,
       )
-    : sql`SELECT id, watch_dir FROM spaces`);
+    : sql`SELECT name, watch_dir FROM spaces`);
 
   if (spaces.length === 0) {
     return { hits: [], total: 0, unmatched_files: 0 };
@@ -268,12 +254,8 @@ export async function searchKeyword(
 
   for (const space of spaces) {
     const watchDir = space.watch_dir as string | null;
-    const spaceId = space.id as string;
+    const spaceName = space.name as string;
     if (!watchDir) continue;
-    // A registered space's directory can vanish out from under us (user
-    // rm'd it, or removable media unmounted). spawn() with a missing cwd
-    // surfaces as ENOENT on the rg path, which looks like a missing
-    // binary — skip cleanly instead.
     if (!existsSync(watchDir)) continue;
 
     const fileResults = await runRipgrep({
@@ -288,10 +270,10 @@ export async function searchKeyword(
     const paths = fileResults.map((r) => r.path);
     const placeholders = paths.map(() => "?").join(",");
     const entityRows = await sql.query(
-      `SELECT id, space_id, type, label, source_path
+      `SELECT space_name, source_path, type, label
        FROM entities
-       WHERE space_id = ? AND source_path IN (${placeholders})`,
-      [spaceId, ...paths],
+       WHERE space_name = ? AND source_path IN (${placeholders})`,
+      [spaceName, ...paths],
     );
     const entityByPath = new Map<string, Record<string, unknown>>();
     for (const e of entityRows) entityByPath.set(e.source_path as string, e);
@@ -302,29 +284,24 @@ export async function searchKeyword(
         unmatched++;
         continue;
       }
-      // Type filter: drop entities whose type isn't in the allowed set.
-      // We filter post-fetch (instead of pushing into SQL) so the
-      // `unmatched_files` diagnostic keeps its meaning — files filtered
-      // out by `types` are not "unmatched", they're explicitly excluded.
       if (types && !types.includes(entity.type as EntityType)) {
         continue;
       }
       hits.push({
-        entity_id: entity.id as string,
-        space_id: entity.space_id as string,
-        type: entity.type as EntityType,
-        label: entity.label as string,
+        space_name: entity.space_name as string,
         source_path: entity.source_path as string,
+        type: entity.type as EntityType,
+        label: entity.label as string | null,
         match_count: fileResult.match_count,
         snippets: fileResult.snippets,
       });
     }
   }
 
-  // Rank by match count desc, tiebreak by entity_id for determinism.
   hits.sort(
     (a, b) =>
-      b.match_count - a.match_count || a.entity_id.localeCompare(b.entity_id),
+      b.match_count - a.match_count ||
+      a.source_path.localeCompare(b.source_path),
   );
 
   const limited = hits.slice(0, limit);

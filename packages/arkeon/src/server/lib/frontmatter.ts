@@ -2,41 +2,44 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * YAML frontmatter parser/serializer.
+ * YAML frontmatter parser for markdown source files.
  *
- * Wiki files use YAML between --- fences for structured metadata:
+ * Wikis post-v0 are HTML and use `<title>` + `<meta>` for metadata
+ * (see `html-meta.ts`). This module only services markdown sources
+ * that already carry YAML frontmatter — e.g. the Augustine corpus
+ * pattern where each section's file has `book: 5, section: 8` etc.
  *
  *   ---
- *   id: 01JSG...
- *   label: Claude Shannon
- *   subject_type: person
- *   fields:
- *     - mathematics
- *     - information theory
+ *   book: 5
+ *   section: 8
  *   ---
  *
- *   Markdown body here...
+ *   Confessions text here...
  *
- * We use js-yaml's JSON_SCHEMA so values map cleanly to JSON-compatible types
- * (string, number, bool, null, array, object) and we don't get the "Norway
- * problem" where `country: NO` becomes the boolean false.
+ * Uses js-yaml's JSON_SCHEMA so values map cleanly to JSON-compatible
+ * types and we don't get the "Norway problem" (`country: NO` →
+ * boolean false).
+ *
+ * Write-back (the old serializeFrontmatter) is gone — sources are
+ * read-only as far as sync is concerned, and wikis don't use YAML.
  */
 
 import yaml from "js-yaml";
 
-export interface ParsedWiki {
-  /** Frontmatter properties (id, label, and arbitrary metadata). */
+export interface ParsedMarkdown {
+  /** Frontmatter properties (arbitrary metadata). */
   properties: Record<string, unknown>;
   /** Markdown body after the frontmatter. */
   body: string;
 }
 
 /**
- * Parse a markdown file with YAML frontmatter.
+ * Parse a markdown file with optional YAML frontmatter.
  * Returns the parsed properties and the body content.
- * Throws if the frontmatter is not valid YAML or is not a mapping.
+ * A file with no frontmatter returns `{ properties: {}, body: content }`.
+ * Throws only on malformed YAML inside a well-formed fence.
  */
-export function parseFrontmatter(content: string): ParsedWiki {
+export function parseFrontmatter(content: string): ParsedMarkdown {
   const trimmed = content.trimStart();
 
   if (!trimmed.startsWith("---")) {
@@ -74,19 +77,4 @@ export function parseFrontmatter(content: string): ParsedWiki {
   }
 
   return { properties: parsed as Record<string, unknown>, body };
-}
-
-/**
- * Serialize properties and body back into a markdown file with YAML frontmatter.
- * Uses block style for readability; preserves insertion order of keys.
- */
-export function serializeFrontmatter(properties: Record<string, unknown>, body: string): string {
-  const yamlStr = yaml.dump(properties, {
-    schema: yaml.JSON_SCHEMA,
-    lineWidth: 100,
-    noRefs: true,
-    sortKeys: false,
-  }).trimEnd();
-  const normalizedBody = body.startsWith("\n") ? body : `\n${body}`;
-  return `---\n${yamlStr}\n---\n${normalizedBody}`;
 }
