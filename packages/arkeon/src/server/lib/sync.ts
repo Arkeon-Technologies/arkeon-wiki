@@ -28,6 +28,11 @@ import { getEditContext, type EditKind } from "./edit-context.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import { parseHtmlMeta } from "./html-meta.js";
 import { extractHtmlLinks } from "./html-links.js";
+import {
+  recordCreateOrMatch,
+  recordDeleteOrMatch,
+  type MoveCandidate,
+} from "./recent-moves.js";
 
 export interface Space {
   name: string;
@@ -77,13 +82,46 @@ export async function syncFile(space: Space, relativePath: string): Promise<Sync
     };
   }
 
+  const isNew = existing.length === 0;
   const result = isWikiPath(relativePath)
     ? await syncWiki(space, relativePath, content, hash, existing[0] ?? null)
     : await syncSource(space, relativePath, content, hash, existing[0] ?? null);
 
+  // Move detection: if this is a brand-new entity whose hash matches a
+  // recently-deleted entity in the same space, rewrite inbound edges
+  // from the old path to the new one. Handles renames in either watcher
+  // event ordering (delete-then-create or create-then-delete).
+  if (isNew) {
+    const move = recordCreateOrMatch(space.name, relativePath, hash);
+    if (move) {
+      await rewireInboundEdges(space.name, move);
+    }
+  }
+
   await recordEntityEdit(space.name, relativePath, hash);
 
   return result;
+}
+
+/**
+ * Move detection: rewrite every inbound `target_path` that pointed at
+ * the old path to point at the new one. Inbound edges had been
+ * orphaned into red links by the delete (since `target_path` has no
+ * FK and doesn't cascade); this restores them.
+ *
+ * `UPDATE OR IGNORE` covers the edge case where the same source
+ * already had an edge to both old and new paths — the PK collision
+ * just drops the duplicate, which is the right behaviour.
+ */
+async function rewireInboundEdges(spaceName: string, move: MoveCandidate): Promise<void> {
+  const sql = createSql();
+  await sql.query(
+    `UPDATE OR IGNORE relationships
+        SET target_path = ?
+      WHERE space_name = ? AND target_path = ?`,
+    [move.newPath, spaceName, move.oldPath],
+  );
+  console.log(`[sync] move detected: ${move.oldPath} → ${move.newPath} (inbound edges rewired)`);
 }
 
 async function syncWiki(
@@ -221,21 +259,34 @@ async function recordEntityEdit(
 }
 
 /**
- * Remove an entity (and cascade its relationships) when the file
- * disappears from disk. Audit history under this path survives — the
- * `entity_edits` table is intentionally not FK'd.
+ * Remove an entity (and cascade its outbound relationships) when the
+ * file disappears from disk. Audit history under this path survives —
+ * the `entity_edits` table is intentionally not FK'd.
  *
- * Returns whether the row existed before deletion. The caller's only
- * use is to log "removed X" iff something was actually removed.
+ * Move detection: the entity's pre-delete `source_hash` is captured
+ * and passed to the recent-moves cache. If a matching create has
+ * already been seen (create-then-delete ordering), the inbound edges
+ * are rewired here. The opposite ordering (delete-then-create) is
+ * handled in syncFile when the new entity arrives.
+ *
+ * Returns whether the row existed before deletion.
  */
 export async function removeByPath(space: Space, relativePath: string): Promise<boolean> {
   const sql = createSql();
   const rows = await sql`
     DELETE FROM entities
     WHERE space_name = ${space.name} AND source_path = ${relativePath}
-    RETURNING source_path
+    RETURNING source_hash
   `;
   if (rows.length === 0) return false;
+
+  const hash = rows[0].source_hash as string | null;
+  if (hash) {
+    const move = recordDeleteOrMatch(space.name, relativePath, hash);
+    if (move) {
+      await rewireInboundEdges(space.name, move);
+    }
+  }
 
   // Audit row for the deletion. We don't know the post-delete content
   // hash (the file is gone), so content_hash stays NULL.

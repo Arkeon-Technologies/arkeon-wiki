@@ -338,6 +338,44 @@ describe("buildAgentRole — bundled writer template", () => {
     expect(role.model.apiKey).toBe("sk-test");
   });
 
+  it("ships reasoning_effort=low on the bundled writer template (bake-off validated)", async () => {
+    const role = buildAgentRole("writer", {});
+    const { phases } = await role.buildPhases({
+      space: { name: "demo", watch_dir: "/tmp" },
+    });
+    expect(phases.length).toBeGreaterThan(0);
+    expect(phases[0].reasoningEffort).toBe("low");
+  });
+
+  it("a role-level reasoning_effort overrides the template", async () => {
+    const role = buildAgentRole("writer", {
+      roles: { writer: { reasoning_effort: "medium" } },
+    });
+    const { phases } = await role.buildPhases({
+      space: { name: "demo", watch_dir: "/tmp" },
+    });
+    expect(phases[0].reasoningEffort).toBe("medium");
+  });
+
+  it("per-phase reasoning_effort overrides role-level", async () => {
+    const role = buildAgentRole("writer", {
+      roles: {
+        writer: {
+          reasoning_effort: "medium",
+          phases: [
+            { prompt: "p1", reasoning_effort: "minimal" },
+            { prompt: "p2" }, // inherits role-level "medium"
+          ],
+        },
+      },
+    });
+    const { phases } = await role.buildPhases({
+      space: { name: "demo", watch_dir: "/tmp" },
+    });
+    expect(phases[0].reasoningEffort).toBe("minimal");
+    expect(phases[1].reasoningEffort).toBe("medium");
+  });
+
   it("ships with a cron expression on the bundled template", () => {
     // The writer is the canonical cron-driven role. Operators override
     // by supplying their own cron in agents.yaml; absence of a cron on

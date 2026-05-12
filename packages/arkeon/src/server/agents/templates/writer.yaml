@@ -1,5 +1,6 @@
 provider: openai
 model: gpt-5.4-mini
+reasoning_effort: low
 tools:
   - read_file
   - list_entities

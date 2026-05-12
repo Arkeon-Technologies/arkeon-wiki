@@ -35,6 +35,7 @@ import type { EditKind } from "../lib/edit-context.js";
 import { withPathLock } from "../lib/path-lock.js";
 import { type Space } from "../lib/sync.js";
 
+import type { ReasoningEffort } from "./config.js";
 import { resolveModel, type ModelConfig } from "./model.js";
 import { resolveAllowedSpaces } from "./space-scope.js";
 import { getTracer, truncateForTrace, type Tracer } from "./tracer.js";
@@ -91,6 +92,10 @@ export interface AgentPhase {
   model: ModelConfig;
   tools: string[];
   maxSteps: number;
+  /** OpenAI reasoning_effort for this phase. Threaded through
+   *  providerOptions.openai.reasoningEffort at generateText time.
+   *  Ignored for non-openai providers. */
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface AgentRole {
@@ -194,12 +199,23 @@ export async function runAgent(
           prompt_preview: truncateForTrace(phase.prompt, 240),
         });
 
+        // reasoning_effort is OpenAI-only at the moment. For other
+        // providers we silently omit it — if/when Anthropic's
+        // `thinking` budget gets first-class config, it lives under
+        // providerOptions.anthropic and the role config will gain its
+        // own field for it.
+        const providerOptions =
+          phase.reasoningEffort && phase.model.provider === "openai"
+            ? { openai: { reasoningEffort: phase.reasoningEffort } }
+            : undefined;
+
         const result = await generateText({
           model,
           system,
           messages: conversation,
           tools,
           stopWhen: stepCountIs(phase.maxSteps),
+          ...(providerOptions ? { providerOptions } : {}),
         });
 
         conversation = [...conversation, ...result.response.messages];

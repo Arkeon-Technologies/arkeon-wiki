@@ -275,57 +275,68 @@ export async function listRedLinks(
 
   const sql = createSql();
 
-  // Two-step: aggregate red-link counts, then pull the last-N linkers
-  // for each in a single follow-up query. Doing this in one CTE/window
-  // expression hits SQLite's window-with-GROUP_CONCAT quirks; the
-  // two-step form is straightforward and cheap.
-  const aggSql = `
-    SELECT r.target_path, COUNT(*) AS demand
-    FROM relationships r
-    LEFT JOIN entities e
-      ON e.space_name = r.space_name AND e.source_path = r.target_path
-    WHERE r.space_name = ? AND e.source_path IS NULL
-    GROUP BY r.target_path
-    ORDER BY demand DESC, r.target_path ASC
-    LIMIT ? OFFSET ?
-  `;
-  const aggRows = (await sql.query(aggSql, [opts.space_name, limit, offset])) as unknown as Array<{
-    target_path: string;
-    demand: number;
-  }>;
-
-  const totalSql = `
-    SELECT COUNT(*) AS total FROM (
-      SELECT r.target_path
+  // Single-pass aggregation: a CTE that pre-windows the linker rows
+  // (newest 3 per target_path by rowid DESC) joined back to the
+  // grouped-and-counted parent. The inner CTE produces (target_path,
+  // source_path, rn) for every red-link edge in this space; the
+  // outer SELECT groups by target_path, counts demand, and
+  // GROUP_CONCATs the source_paths where rn <= 3.
+  //
+  // Replaces the previous N+1 form (aggregate query + per-row linkers
+  // fetch). Same shape out, one round-trip instead of (1 + N).
+  const redlinksSql = `
+    WITH red AS (
+      SELECT
+        r.target_path,
+        r.source_path,
+        ROW_NUMBER() OVER (
+          PARTITION BY r.target_path
+          ORDER BY r.rowid DESC
+        ) AS rn
       FROM relationships r
       LEFT JOIN entities e
         ON e.space_name = r.space_name AND e.source_path = r.target_path
       WHERE r.space_name = ? AND e.source_path IS NULL
-      GROUP BY r.target_path
     )
+    SELECT
+      target_path,
+      COUNT(*) AS demand,
+      GROUP_CONCAT(
+        CASE WHEN rn <= 3 THEN source_path END,
+        char(31)
+      ) AS linked_from_concat
+    FROM red
+    GROUP BY target_path
+    ORDER BY demand DESC, target_path ASC
+    LIMIT ? OFFSET ?
+  `;
+  const aggRows = (await sql.query(redlinksSql, [opts.space_name, limit, offset])) as unknown as Array<{
+    target_path: string;
+    demand: number;
+    linked_from_concat: string | null;
+  }>;
+
+  const totalSql = `
+    SELECT COUNT(DISTINCT r.target_path) AS total
+    FROM relationships r
+    LEFT JOIN entities e
+      ON e.space_name = r.space_name AND e.source_path = r.target_path
+    WHERE r.space_name = ? AND e.source_path IS NULL
   `;
   const totalRow = (await sql.query(totalSql, [opts.space_name])) as unknown as Array<{
     total: number;
   }>;
 
-  const redlinks: RedLinkRow[] = [];
-  for (const row of aggRows) {
-    const linkersSql = `
-      SELECT source_path
-      FROM relationships
-      WHERE space_name = ? AND target_path = ?
-      ORDER BY rowid DESC
-      LIMIT 3
-    `;
-    const linkers = (await sql.query(linkersSql, [opts.space_name, row.target_path])) as unknown as Array<{
-      source_path: string;
-    }>;
-    redlinks.push({
-      target_path: row.target_path,
-      demand: Number(row.demand),
-      linked_from: linkers.map((l) => l.source_path),
-    });
-  }
+  // GROUP_CONCAT result is delimited by char(31) (ASCII Unit Separator)
+  // — chosen because no realistic source_path contains a control
+  // character. NULLs from the CASE expression (rows where rn > 3) are
+  // skipped by GROUP_CONCAT by design.
+  const SEP = String.fromCharCode(31);
+  const redlinks: RedLinkRow[] = aggRows.map((row) => ({
+    target_path: row.target_path,
+    demand: Number(row.demand),
+    linked_from: row.linked_from_concat ? row.linked_from_concat.split(SEP) : [],
+  }));
 
   return {
     redlinks,

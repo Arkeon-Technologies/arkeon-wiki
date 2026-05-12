@@ -223,4 +223,4 @@ Tail with `tail -f <path> | jq` or query with `jq -c 'select(.event=="tool.call"
 - Vector / semantic search — returns at **v0.5** when corpus crosses ~2,000 articles.
 - FTS5 / BM25 ranking (ripgrep gives substring matching only)
 - No auth / API keys
-- Move detection on renames — accept "rename → red links" as the v0 consequence
+- Move detection across content edits — a pure rename keeps inbound edges intact via the content-hash match in `recent-moves.ts`, but a rename combined with a content edit in the same save still orphans them
