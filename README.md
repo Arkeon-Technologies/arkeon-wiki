@@ -1,6 +1,6 @@
 # Arkeon Wiki
 
-A knowledge graph that lives in your filesystem. Point it at a directory, and it watches for changes, indexes files into SQLite, and builds a connected graph from markdown links between them.
+A knowledge graph that lives in your filesystem. Point it at a directory, and it watches for changes, indexes files into SQLite, and builds a connected graph from `<a href>` links between HTML articles.
 
 ## Quick start
 
@@ -24,24 +24,28 @@ This registers the directory as a space. The daemon immediately starts watching 
 
 **3. Add wiki files**
 
-Create markdown files with YAML frontmatter under `wiki/`:
+Create HTML articles under `wiki/`:
 
-```markdown
----
-label: Claude Shannon
-subject_type: person
-birth_year: 1916
----
-
-Claude Shannon was the father of information theory.
-
-He worked at [Bell Labs](../organization/bell-labs.md).
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Claude Shannon</title>
+  <meta name="label" content="Claude Shannon">
+  <meta name="short_description" content="The mathematician who founded information theory.">
+</head>
+<body>
+  <h1>Claude Shannon</h1>
+  <p>Claude Shannon was the father of information theory.</p>
+  <p>He worked at <a href="bell-labs.html">Bell Labs</a>.</p>
+</body>
+</html>
 ```
 
 The system automatically:
-- Detects new files and indexes them
-- Generates stable IDs and writes them back to the frontmatter
-- Resolves markdown links between files into relationship edges in SQLite
+- Detects new files and indexes them by `(space_name, source_path)` — no IDs
+- Extracts `<title>` + `<meta>` tags into searchable properties
+- Resolves `<a href>` links into relationship edges
 - Detects edits and re-syncs
 - Detects deletions and cleans up
 
@@ -50,10 +54,17 @@ No manual sync commands. Just save files.
 **4. Query the graph**
 
 ```bash
-curl "http://localhost:8000/entities?type=wiki"   # list wikis
-curl http://localhost:8000/entities/{id}          # get properties + relationships (any type)
-curl "http://localhost:8000/entities?type=wiki&subject_type=person&include=counts"
-curl "http://localhost:8000/search?q=shannon"     # keyword search (ripgrep)
+# List wikis in your space
+curl "http://localhost:8000/{space}/entities?type=wiki"
+
+# Get one article with relationships
+curl "http://localhost:8000/{space}/entities/wiki/photosynthesis.html"
+
+# Find link targets that don't have an article yet ("red links")
+curl "http://localhost:8000/{space}/redlinks"
+
+# Keyword search via ripgrep
+curl "http://localhost:8000/{space}/search?q=shannon"
 ```
 
 Or from the CLI: `arkeon-wiki search shannon`.
@@ -62,10 +73,10 @@ Or from the CLI: `arkeon-wiki search shannon`.
 
 The filesystem is the source of truth. SQLite is an index.
 
-- **Spaces** are directories registered with the daemon
-- **Entities** are files on disk — wikis (under `wiki/`) have YAML frontmatter, everything else is a source file
-- **Relationships** are standard markdown links (`[text](path.md)`) resolved into edges in SQLite
-- A file watcher detects changes in real-time; a reconciliation pass on startup catches anything missed
+- **Spaces** are directories registered with the daemon (keyed by name).
+- **Entities** are files on disk, identified by `(space_name, source_path)`. HTML files under `wiki/` are `type='wiki'`; anything else is `type='file'`.
+- **Relationships** are `<a href>` links resolved into edges. A link to a target without a matching entity is a **red link** — surfaced via `/{space}/redlinks` for the writer to fill in.
+- A file watcher detects changes in real-time; a reconciliation pass on startup catches anything missed.
 
 ## CLI
 
@@ -85,7 +96,7 @@ arkeon-wiki start              # foreground (for use under pm2/launchd/etc.)
 
 ## Agents (LLM-powered)
 
-arkeon-wiki ships a small AI agent runtime with a single built-in role — `ingestor` — that turns source files into wikis. Configure it in `.arkeon/agents.yaml` (committed) and put your API key in `~/.arkeon-wiki/.env` (per-user, machine-local).
+arkeon-wiki ships a small AI agent runtime with a single built-in role — `writer` — that turns recent sources and red-link demand into HTML articles. Configure it in `.arkeon/agents.yaml` (committed) and put your API key in `~/.arkeon-wiki/.env` (per-user, machine-local).
 
 ```bash
 arkeon-wiki config init                                       # template config

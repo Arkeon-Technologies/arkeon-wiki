@@ -326,18 +326,16 @@ describe("buildAgentRole — bundled writer template", () => {
 
   it("builds a working AgentRole from just defaults", () => {
     const templates = loadBundledTemplates();
-    const role = buildAgentRole("writer", {
-      defaults: { provider: "openai", model: "gpt-5-mini" },
-    });
+    const role = buildAgentRole("writer", {});
 
     expect(role.name).toBe("writer");
     expect(role.maxSteps).toBe(templates.writer.max_steps);
     expect(role.tools).toEqual(templates.writer.tools);
-    expect(role.model).toEqual({
-      provider: "openai",
-      id: "gpt-5-mini",
-      apiKey: "sk-test",
-    });
+    // The bundled writer template specifies its own provider/model
+    // (gpt-5.4-mini per the bake-off in v0-agent-harness-edit-primitives.md).
+    expect(role.model.provider).toBe("openai");
+    expect(role.model.id).toBe(templates.writer.model);
+    expect(role.model.apiKey).toBe("sk-test");
   });
 
   it("ships with a cron expression on the bundled template", () => {
@@ -379,7 +377,7 @@ describe("buildAgentRole — bundled writer template", () => {
     });
 
     const { system } = await role.buildPhases({
-      space: { id: "s1", name: "n", watch_dir: "/tmp" },
+      space: { name: "n", watch_dir: "/tmp" },
     });
 
     expect(system).toContain("writer");                      // template stays
@@ -416,10 +414,14 @@ describe("buildAgentRole — bundled writer template", () => {
   it("openai-compatible can run without an api key (local servers)", () => {
     delete process.env.OPENAI_API_KEY;
     const role = buildAgentRole("writer", {
-      defaults: {
-        provider: "openai-compatible",
-        model: "llama3.1:70b",
-        base_url: "http://localhost:11434/v1",
+      // The bundled template ships provider:openai; override at role-level
+      // since defaults are the lowest-precedence layer.
+      roles: {
+        writer: {
+          provider: "openai-compatible",
+          model: "llama3.1:70b",
+          base_url: "http://localhost:11434/v1",
+        },
       },
     });
     expect(role.model.provider).toBe("openai-compatible");
@@ -428,7 +430,9 @@ describe("buildAgentRole — bundled writer template", () => {
   it("openai-compatible requires base_url", () => {
     expect(() =>
       buildAgentRole("writer", {
-        defaults: { provider: "openai-compatible", model: "x" },
+        roles: {
+          writer: { provider: "openai-compatible", model: "x" },
+        },
       }),
     ).toThrow(/base_url/);
   });
@@ -445,7 +449,7 @@ describe("buildAgentRole — bundled writer template", () => {
       },
     });
     const { phases } = await role.buildPhases({
-      space: { id: "s1", name: "demo-space", watch_dir: "/tmp" },
+      space: { name: "demo-space", watch_dir: "/tmp" },
     });
     expect(phases).toHaveLength(1);
     expect(phases[0].prompt).toContain("demo-space");
@@ -485,7 +489,7 @@ describe("buildAgentRole — multi-phase machinery (custom roles)", () => {
   it("walks every phase in order, preserving names and prompts", async () => {
     const role = buildAgentRole("two-phase", customMultiPhaseConfig());
     const { phases } = await role.buildPhases({
-      space: { id: "s1", name: "demo", watch_dir: "/tmp" },
+      space: { name: "demo", watch_dir: "/tmp" },
     });
     expect(phases).toHaveLength(2);
     expect(phases[0].name).toBe("gather");
@@ -505,7 +509,7 @@ describe("buildAgentRole — multi-phase machinery (custom roles)", () => {
       }),
     );
     const { phases } = await role.buildPhases({
-      space: { id: "s1", name: "n", watch_dir: "/tmp" },
+      space: { name: "n", watch_dir: "/tmp" },
     });
     expect(phases[0].model.id).toBe("gpt-5-mini");
     expect(phases[1].model.id).toBe("gpt-5");
@@ -522,7 +526,7 @@ describe("buildAgentRole — multi-phase machinery (custom roles)", () => {
       }),
     );
     const { phases } = await role.buildPhases({
-      space: { id: "s1", name: "n", watch_dir: "/tmp" },
+      space: { name: "n", watch_dir: "/tmp" },
     });
     expect(phases[0].model.id).toBe("gpt-5.4-mini");
     expect(phases[1].model.id).toBe("gpt-5.4");
@@ -540,7 +544,7 @@ describe("buildAgentRole — multi-phase machinery (custom roles)", () => {
       }),
     );
     const { phases } = await role.buildPhases({
-      space: { id: "s1", name: "n", watch_dir: "/tmp" },
+      space: { name: "n", watch_dir: "/tmp" },
     });
     expect(phases[0].model.id).toBe("from-explicit");
     expect(phases[1].model.id).toBe("from-shorthand");
@@ -700,15 +704,26 @@ describe("default concurrency keys", () => {
     delete process.env.OPENAI_API_KEY;
   });
 
-  it("scopes concurrency to (role, space, triggerEntityId)", () => {
+  it("scopes concurrency to (role, space, triggerPath)", () => {
     const role = buildAgentRole("writer", {
       defaults: { provider: "openai", model: "gpt-5-mini" },
     });
     expect(
       role.concurrencyKey({
-        space: { id: "s1", name: "n", watch_dir: "/tmp" },
-        triggerEntityId: "01ENT",
+        space: { name: "demo", watch_dir: "/tmp" },
+        triggerPath: "wiki/foo.html",
       }),
-    ).toBe("writer::s1::01ENT");
+    ).toBe("writer::demo::wiki/foo.html");
+  });
+
+  it("scopes concurrency to (role, space) when triggerPath is omitted", () => {
+    const role = buildAgentRole("writer", {
+      defaults: { provider: "openai", model: "gpt-5-mini" },
+    });
+    expect(
+      role.concurrencyKey({
+        space: { name: "demo", watch_dir: "/tmp" },
+      }),
+    ).toBe("writer::demo");
   });
 });

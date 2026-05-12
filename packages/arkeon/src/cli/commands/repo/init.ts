@@ -45,7 +45,6 @@ async function runInit(name: string | undefined): Promise<void> {
   const existing = loadRepoState();
   if (existing) {
     console.log(`This directory is already initialized (space: ${existing.space_name}).`);
-    console.log(`Space ID: ${existing.space_id}`);
     return;
   }
 
@@ -63,7 +62,7 @@ async function runInit(name: string | undefined): Promise<void> {
     );
   }
 
-  const space = (await res.json()) as { id: string; name: string; watch_dir: string };
+  const space = (await res.json()) as { name: string; watch_dir: string };
 
   // Write .arkeon/state.json
   const arkeonDir = join(cwd, ".arkeon");
@@ -71,7 +70,6 @@ async function runInit(name: string | undefined): Promise<void> {
 
   const state: RepoState = {
     api_url: apiUrl,
-    space_id: space.id,
     space_name: space.name,
     created_at: new Date().toISOString(),
   };
@@ -111,7 +109,6 @@ async function runInit(name: string | undefined): Promise<void> {
 
   output.result({
     operation: "init",
-    space_id: space.id,
     space_name: space.name,
     watch_dir: resolve(cwd),
     hint: "The daemon is now watching this directory. Any files you add will be synced automatically.",

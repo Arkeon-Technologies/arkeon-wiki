@@ -2,94 +2,75 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Shared e2e test helpers.
- *
- * Direct-SQLite helpers for tests. Pre-/entities, the HTTP API only
- * surfaced wikis, so these helpers were the only way to assert on source
- * files. They remain useful for "look at the row directly" assertions
- * that don't want to go through the route layer.
+ * Shared e2e test helpers. Path-keyed shape: lookups are by
+ * (space_name, source_path), not ULID.
  */
 
 import { createSql } from "../../src/server/lib/sql.js";
 
 export interface EntityRow {
-  id: string;
-  space_id: string;
-  type: "wiki" | "file";
-  label: string;
+  space_name: string;
   source_path: string;
-  /** True when the row is a placeholder wiki (no file on disk yet). */
-  unresolved: boolean;
+  type: "wiki" | "file";
+  label: string | null;
 }
 
-/**
- * Look up an entity by source_path within a space. Returns null if no row
- * exists yet (callers typically poll because the watcher is async).
- */
-export async function getEntityBySourcePath(
-  spaceId: string,
+export async function getEntityByPath(
+  spaceName: string,
   sourcePath: string,
 ): Promise<EntityRow | null> {
   const sql = createSql();
   const rows = await sql`
-    SELECT id, space_id, type, label, source_path,
-           (type = 'wiki' AND source_hash IS NULL) AS unresolved
+    SELECT space_name, source_path, type, label
     FROM entities
-    WHERE space_id = ${spaceId} AND source_path = ${sourcePath}
+    WHERE space_name = ${spaceName} AND source_path = ${sourcePath}
   `;
   if (rows.length === 0) return null;
   const row = rows[0] as Record<string, unknown>;
   return {
-    id: row.id as string,
-    space_id: row.space_id as string,
-    type: row.type as "wiki" | "file",
-    label: row.label as string,
+    space_name: row.space_name as string,
     source_path: row.source_path as string,
-    unresolved: Boolean(row.unresolved),
+    type: row.type as "wiki" | "file",
+    label: row.label as string | null,
   };
 }
 
-/** Poll until an entity with the given source_path exists, or timeout. */
-export async function waitForEntityBySourcePath(
-  spaceId: string,
+export async function waitForEntity(
+  spaceName: string,
   sourcePath: string,
   timeoutMs = 5000,
 ): Promise<EntityRow> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const entity = await getEntityBySourcePath(spaceId, sourcePath);
+    const entity = await getEntityByPath(spaceName, sourcePath);
     if (entity) return entity;
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 100));
   }
-  const final = await getEntityBySourcePath(spaceId, sourcePath);
+  const final = await getEntityByPath(spaceName, sourcePath);
   if (!final) {
     throw new Error(
-      `Timed out waiting for entity at ${sourcePath} in space ${spaceId}`,
+      `Timed out waiting for entity at ${sourcePath} in space ${spaceName}`,
     );
   }
   return final;
 }
 
-/** Count rows in the entities table (filterable by type / space). */
 export async function countEntities(opts: {
-  spaceId?: string;
+  spaceName?: string;
   type?: "wiki" | "file";
 } = {}): Promise<number> {
   const sql = createSql();
   const conditions: string[] = [];
   const params: unknown[] = [];
-  if (opts.spaceId) {
-    conditions.push("space_id = ?");
-    params.push(opts.spaceId);
+  if (opts.spaceName) {
+    conditions.push("space_name = ?");
+    params.push(opts.spaceName);
   }
   if (opts.type) {
     conditions.push("type = ?");
     params.push(opts.type);
   }
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-  const rows = await sql.query(
-    `SELECT COUNT(*) AS n FROM entities ${where}`,
-    params,
-  );
+  const rows = await sql.query(`SELECT COUNT(*) AS n FROM entities ${where}`, params);
   return Number(rows[0]?.n ?? 0);
 }

@@ -2,24 +2,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Universal mutation primitive for wiki files.
+ * Universal mutation primitive for files inside a space.
  *
- * Every routing helper (contribute) and every agent emits `FileEdit`s
- * and runs them through `applyEdit`. One chokepoint gives us one place
- * to wire post-mutation indexing, future audit logging, and the rule
- * that the SQLite mirror is rebuilt from disk after every change.
+ * Every agent edit and CLI helper emits `FileEdit`s and runs them
+ * through `applyEdit`. One chokepoint gives us one place to wire the
+ * SQLite resync, edit-context registration, and edit_kinds audit.
  *
- * Five kinds:
- *   - write           create or overwrite a file with full content
- *   - edit            SEARCH/REPLACE a unique span (Aider-style)
- *   - annotate        splice text after a unique anchor phrase, leaving
- *                     all other bytes verbatim. The phrase-only contract
- *                     is load-bearing — it forces the model to point
- *                     rather than rewrite.
- *   - delete_section  remove an ATX heading and the body underneath it,
- *                     up to (but not including) the next same-or-higher
- *                     heading
- *   - delete          remove a file from disk and the index
+ * Four kinds:
+ *   - create          new file. Fails if the path exists. Path-guarded
+ *                     for wikis: paths under `wiki/` must end in `.html`.
+ *   - insert_at_line  pure additive — insert content BEFORE the given
+ *                     line. Existing content shifts down. Caller is
+ *                     responsible for ensuring `line_number` is in
+ *                     range (1..lines+1). Line numbers shift after this
+ *                     edit; the agent runtime invalidates the read-gate
+ *                     so the LLM re-reads before its next edit.
+ *   - str_replace     SEARCH/REPLACE a unique span (Aider/Claude-Code
+ *                     style). `search` must match exactly once.
+ *   - delete          remove a file from disk and its entity from the
+ *                     index. Used by `delete_wiki`; not in the writer's
+ *                     surface.
+ *
+ * The five-mode legacy union (write/edit/annotate/delete_section) was
+ * collapsed to these two-plus-create-plus-delete in Phase 1 per the
+ * bake-off in tasks/v0-agent-harness-edit-primitives.md.
  */
 
 import {
@@ -36,34 +42,19 @@ import {
   setEditContext,
   type EditKind,
 } from "./edit-context.js";
-import { parseFrontmatter, serializeFrontmatter } from "./frontmatter.js";
 import { removeByPath, syncFile, type Space, type SyncResult } from "./sync.js";
 
 export type FileEdit =
-  | { kind: "write"; path: string; content: string }
-  | { kind: "edit"; path: string; search: string; replace: string }
+  | { kind: "create"; path: string; content: string }
   | {
-      kind: "annotate";
+      kind: "insert_at_line";
       path: string;
-      insert_after_phrase: string;
-      insert_text: string;
+      line_number: number;
+      content: string;
     }
-  | { kind: "delete_section"; path: string; heading: string }
+  | { kind: "str_replace"; path: string; old_string: string; new_string: string }
   | { kind: "delete"; path: string };
 
-/**
- * Caller-supplied attribution for a single applyEdit() call. The role
- * is stamped into the file's frontmatter (for .md targets) so a human
- * reading the file sees who last touched it, and is also threaded
- * into the edit-context registry so syncFile() inserts the right
- * `by_role` into entity_edits when it observes the resulting write.
- *
- * `edit_kind` is the semantic kind of edit (more granular than the
- * FileEdit kind — e.g. a `kind: "write"` FileEdit can be a CREATE or
- * an APPEND depending on whether the target already existed).
- *
- * `note` is an optional one-line summary surfaced by /entities/{id}/history.
- */
 export interface EditOpts {
   role: string;
   edit_kind: EditKind;
@@ -71,16 +62,18 @@ export interface EditOpts {
 }
 
 /**
- * Resolve a relative path against a watch dir, rejecting absolute paths
- * and `..` escapes. The returned path is guaranteed to be inside the
- * watch dir. Used wherever path strings cross a trust boundary (LLM
- * tool input, HTTP body, etc.).
+ * Resolve a relative path against a watch dir, rejecting absolute
+ * paths and `..` escapes. Used wherever path strings cross a trust
+ * boundary (LLM tool input, HTTP body, etc.).
  */
 export function safeResolve(watchDir: string, relativePath: string): string {
   if (isAbsolute(relativePath)) {
     throw new Error(
       `path '${relativePath}' is absolute; must be relative to the watch dir`,
     );
+  }
+  if (relativePath.includes("\0")) {
+    throw new Error(`path '${relativePath}' contains a NUL byte`);
   }
   const baseAbs = resolve(watchDir);
   const candidate = resolve(baseAbs, relativePath);
@@ -95,165 +88,99 @@ export function safeResolve(watchDir: string, relativePath: string): string {
 export type ApplyEditResult =
   | {
       path: string;
-      kind: "write" | "edit" | "annotate" | "delete_section";
+      kind: "create" | "insert_at_line" | "str_replace";
       sync: SyncResult;
     }
-  | { path: string; kind: "delete"; removedEntityId: string | null };
+  | { path: string; kind: "delete"; removed: boolean };
 
-/**
- * Apply a single edit and propagate the change into the SQLite index.
- *
- * For write/edit kinds on .md files, the file's YAML frontmatter is
- * stamped with `edited_by: <role>` (and `edit_note` if supplied) so a
- * human reader of the file can see who last touched it. The same
- * attribution is registered in the edit-context registry for the
- * lifetime of the call so syncFile() can record an entity_edits row
- * with the correct `by_role`.
- *
- * Throws on edit semantics violations: missing files for `edit`/`delete`,
- * and SEARCH that doesn't match exactly once for `edit`.
- */
 export async function applyEdit(
   space: Space,
   edit: FileEdit,
   opts: EditOpts,
 ): Promise<ApplyEditResult> {
   const absPath = safeResolve(space.watch_dir, edit.path);
-  const isMarkdown = edit.path.endsWith(".md");
 
-  setEditContext(space.id, edit.path, {
+  setEditContext(space.name, edit.path, {
     role: opts.role,
     edit_kind: opts.edit_kind,
     note: opts.note,
   });
 
   try {
-    if (edit.kind === "write") {
-      const stamped = isMarkdown
-        ? stampFrontmatter(edit.content, opts.role, opts.note)
-        : edit.content;
+    if (edit.kind === "create") {
+      if (existsSync(absPath)) {
+        throw new Error(
+          `create_file: ${edit.path} already exists — use edit_file to modify it`,
+        );
+      }
+      if (edit.path.startsWith("wiki/") && !edit.path.endsWith(".html")) {
+        throw new Error(
+          `create_file: wiki paths must end in .html (got '${edit.path}')`,
+        );
+      }
       mkdirSync(dirname(absPath), { recursive: true });
-      writeFileSync(absPath, stamped, "utf-8");
+      writeFileSync(absPath, edit.content, "utf-8");
       const sync = await syncFile(space, edit.path);
-      return { path: edit.path, kind: "write", sync };
+      return { path: edit.path, kind: "create", sync };
     }
 
-    if (edit.kind === "edit") {
+    if (edit.kind === "insert_at_line") {
       if (!existsSync(absPath)) {
         throw new Error(`edit_file: ${edit.path} does not exist`);
       }
-      if (edit.search.length === 0) {
-        throw new Error(`edit_file: search must be non-empty`);
-      }
       const original = readFileSync(absPath, "utf-8");
-      const matches = countOccurrences(original, edit.search);
-      if (matches === 0) {
-        throw new Error(`edit_file: search did not match in ${edit.path}`);
-      }
-      if (matches > 1) {
+      const lines = original.split("\n");
+      if (edit.line_number < 1 || edit.line_number > lines.length + 1) {
         throw new Error(
-          `edit_file: search matched ${matches} times in ${edit.path} (must be unique)`,
+          `insert_at_line: line ${edit.line_number} out of range ` +
+            `(file has ${lines.length} lines)`,
         );
       }
-      let updated = original.replace(edit.search, edit.replace);
-      if (isMarkdown) {
-        updated = stampFrontmatter(updated, opts.role, opts.note);
-      }
-      writeFileSync(absPath, updated, "utf-8");
+      const inserted = edit.content.split("\n");
+      if (inserted[inserted.length - 1] === "") inserted.pop();
+      lines.splice(edit.line_number - 1, 0, ...inserted);
+      writeFileSync(absPath, lines.join("\n"), "utf-8");
       const sync = await syncFile(space, edit.path);
-      return { path: edit.path, kind: "edit", sync };
+      return { path: edit.path, kind: "insert_at_line", sync };
     }
 
-    if (edit.kind === "annotate") {
+    if (edit.kind === "str_replace") {
       if (!existsSync(absPath)) {
         throw new Error(`edit_file: ${edit.path} does not exist`);
       }
-      if (edit.insert_after_phrase.length === 0) {
-        throw new Error(`edit_file: insert_after_phrase must be non-empty`);
+      if (edit.old_string.length === 0) {
+        throw new Error(`str_replace: old_string must be non-empty`);
       }
       const original = readFileSync(absPath, "utf-8");
-      const matches = countOccurrences(original, edit.insert_after_phrase);
+      const matches = countOccurrences(original, edit.old_string);
       if (matches === 0) {
         throw new Error(
-          `edit_file: insert_after_phrase did not match in ${edit.path}`,
+          `str_replace: old_string did not match in ${edit.path}. ` +
+            `Tip: copy bytes verbatim from a recent read_file (no line-number prefixes).`,
         );
       }
       if (matches > 1) {
         throw new Error(
-          `edit_file: insert_after_phrase matched ${matches} times in ${edit.path} (must be unique)`,
+          `str_replace: old_string matched ${matches} times in ${edit.path} (must be unique). ` +
+            `Expand the span until it is.`,
         );
       }
-      const idx = original.indexOf(edit.insert_after_phrase);
-      const splice = idx + edit.insert_after_phrase.length;
-      // Annotate writes to the body only. If the anchor phrase falls
-      // inside the YAML frontmatter block, splicing arbitrary text into
-      // it produces malformed YAML on the next sync. Refuse loudly —
-      // frontmatter edits go through mode='replace' on the specific line.
-      if (isMarkdown) {
-        const bodyStart = frontmatterEndOffset(original);
-        if (bodyStart > 0 && idx < bodyStart) {
-          throw new Error(
-            `edit_file: annotate splice point falls inside YAML frontmatter at ${edit.path} — annotate writes to the body only. Use mode='replace' to edit a frontmatter line.`,
-          );
-        }
-      }
-      let updated =
-        original.slice(0, splice) + edit.insert_text + original.slice(splice);
-      if (isMarkdown) {
-        updated = stampFrontmatter(updated, opts.role, opts.note);
-      }
+      const updated = original.replace(edit.old_string, edit.new_string);
       writeFileSync(absPath, updated, "utf-8");
       const sync = await syncFile(space, edit.path);
-      return { path: edit.path, kind: "annotate", sync };
+      return { path: edit.path, kind: "str_replace", sync };
     }
 
-    if (edit.kind === "delete_section") {
-      if (!existsSync(absPath)) {
-        throw new Error(`edit_file: ${edit.path} does not exist`);
-      }
-      const original = readFileSync(absPath, "utf-8");
-      const updated = removeSection(original, edit.heading, edit.path);
-      const stamped = isMarkdown
-        ? stampFrontmatter(updated, opts.role, opts.note)
-        : updated;
-      writeFileSync(absPath, stamped, "utf-8");
-      const sync = await syncFile(space, edit.path);
-      return { path: edit.path, kind: "delete_section", sync };
-    }
-
+    // delete
     if (!existsSync(absPath)) {
       throw new Error(`delete_file: ${edit.path} does not exist`);
     }
     unlinkSync(absPath);
-    const removedEntityId = await removeByPath(space.id, edit.path);
-    return { path: edit.path, kind: "delete", removedEntityId };
+    const removed = await removeByPath(space, edit.path);
+    return { path: edit.path, kind: "delete", removed };
   } finally {
-    clearEditContext(space.id, edit.path);
+    clearEditContext(space.name, edit.path);
   }
-}
-
-/**
- * Stamp `edited_by` (and optionally `edit_note`) into the file's YAML
- * frontmatter. No-op when the input content doesn't already have a
- * frontmatter block — we only annotate files whose authors opted in
- * to YAML metadata, never invent it. Wiki bodies always start with
- * `---\n`, so stamping applies to wiki CREATE / APPEND / REPLACE.
- * A future tool that writes a non-wiki .md (e.g. README.md without
- * frontmatter) gets no surprise stamp.
- *
- * If `edit_note` is empty/missing, any prior note is removed so an
- * old note doesn't linger past the next edit.
- */
-function stampFrontmatter(content: string, role: string, note?: string): string {
-  if (!content.trimStart().startsWith("---")) return content;
-  const { properties, body } = parseFrontmatter(content);
-  properties.edited_by = role;
-  if (note != null && note.trim().length > 0) {
-    properties.edit_note = note;
-  } else {
-    delete properties.edit_note;
-  }
-  return serializeFrontmatter(properties, body);
 }
 
 function countOccurrences(haystack: string, needle: string): number {
@@ -267,128 +194,48 @@ function countOccurrences(haystack: string, needle: string): number {
 }
 
 /**
- * Byte offset where the markdown body begins (the line after the
- * closing `---` of the YAML frontmatter). Returns 0 if the file has
- * no frontmatter — caller treats that as "no boundary, the whole file
- * is body."
+ * Compose an HTML wiki shell from structured fields. Called by the
+ * `create_file` tool. The agent provides `body` as the inner HTML
+ * (typically starting with `<h1>`); the tool wraps it with `<head>`
+ * containing `<title>` + `<meta>` so sync can extract metadata.
  *
- * CRLF tolerated: a `---\r` line still matches the closing fence.
+ * Properties beyond `label`/`short_description` go in `extra`, which
+ * gets emitted as additional `<meta name="..." content="...">` tags.
  */
-function frontmatterEndOffset(content: string): number {
-  if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) return 0;
-  // Skip the opening fence line. The next line is the first frontmatter line.
-  const afterOpen = content.indexOf("\n", 3) + 1;
-  let i = afterOpen;
-  while (i < content.length) {
-    const lineEnd = content.indexOf("\n", i);
-    const endIdx = lineEnd === -1 ? content.length : lineEnd;
-    const raw = content.slice(i, endIdx);
-    const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
-    if (line === "---") {
-      return lineEnd === -1 ? content.length : lineEnd + 1;
-    }
-    if (lineEnd === -1) break;
-    i = lineEnd + 1;
-  }
-  // Unterminated frontmatter — treat as no frontmatter and let
-  // downstream parsers fail loudly when they're handed the file.
-  return 0;
+export interface WikiShellFields {
+  label: string;
+  short_description: string;
+  body: string;
+  extra?: Record<string, string>;
 }
 
-const HEADING_RE = /^(#{1,6})\s+(.+?)\s*#*\s*$/;
-
-interface HeadingHit {
-  level: number;
-  text: string;
-  /** Byte offset of the start of the heading line. */
-  start: number;
-  /** Byte offset of the start of the line *after* the heading line. */
-  endOfLine: number;
+export function composeWikiHtmlShell(fields: WikiShellFields): string {
+  const metas = [
+    `<meta name="label" content="${escapeAttr(fields.label)}">`,
+    `<meta name="short_description" content="${escapeAttr(fields.short_description)}">`,
+  ];
+  for (const [name, content] of Object.entries(fields.extra ?? {})) {
+    if (name === "label" || name === "short_description") continue;
+    metas.push(`<meta name="${escapeAttr(name)}" content="${escapeAttr(content)}">`);
+  }
+  // <meta charset> declares the encoding so browsers don't default to
+  // Latin-1 and mojibake smart quotes / em-dashes / non-ASCII. Per HTML5,
+  // the charset meta must appear within the first 1024 bytes of the
+  // document; putting it as the first child of <head> guarantees that.
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>${escapeAttr(fields.label)}</title>
+${metas.join("\n")}
+</head>
+<body>
+${fields.body}
+</body>
+</html>
+`;
 }
 
-/**
- * Locate every ATX heading line in `content` outside of fenced code
- * blocks. Returns one record per heading with its level, cleaned text,
- * and byte offsets. Setext headings and `#` lines inside ``` fences
- * are not treated as headings.
- */
-function findHeadings(content: string): HeadingHit[] {
-  const hits: HeadingHit[] = [];
-  let inFence = false;
-  let lineStart = 0;
-  for (let i = 0; i <= content.length; i++) {
-    const isEnd = i === content.length;
-    const ch = isEnd ? "\n" : content[i];
-    if (ch !== "\n") continue;
-
-    const line = content.slice(lineStart, i);
-    const fenceOpen = /^\s*```/.test(line);
-    if (fenceOpen) {
-      inFence = !inFence;
-    } else if (!inFence) {
-      const m = HEADING_RE.exec(line);
-      if (m) {
-        hits.push({
-          level: m[1].length,
-          text: m[2].trim(),
-          start: lineStart,
-          endOfLine: i + 1, // include the newline
-        });
-      }
-    }
-    lineStart = i + 1;
-  }
-  return hits;
-}
-
-/**
- * Remove an ATX heading and the body underneath it. Removes from the
- * start of the heading line through (but not including) the next
- * heading at the same level or a higher level (lower number). If no
- * such follower exists, removes through end of file.
- *
- * `headingSpec` is the literal heading line — `## Open threads`. We
- * match on `<level marker> + text` (not just text) so a delete for
- * `## Foo` doesn't accidentally remove a subsection `### Foo`.
- *
- * Loud-fail on 0 or 2+ matches, same discipline as REPLACE / ANNOTATE.
- *
- * Exported so it can be unit-tested without a database / filesystem.
- */
-export function removeSection(
-  content: string,
-  headingSpec: string,
-  pathForError: string,
-): string {
-  const specMatch = HEADING_RE.exec(headingSpec.trim());
-  if (!specMatch) {
-    throw new Error(
-      `edit_file: delete_section heading must be an ATX heading like '## Open threads', got '${headingSpec}'`,
-    );
-  }
-  const targetLevel = specMatch[1].length;
-  const targetText = specMatch[2].trim();
-
-  const all = findHeadings(content);
-  const matches = all.filter(
-    (h) => h.level === targetLevel && h.text === targetText,
-  );
-  if (matches.length === 0) {
-    throw new Error(
-      `edit_file: delete_section heading '${headingSpec}' did not match in ${pathForError}`,
-    );
-  }
-  if (matches.length > 1) {
-    throw new Error(
-      `edit_file: delete_section heading '${headingSpec}' matched ${matches.length} times in ${pathForError} (must be unique)`,
-    );
-  }
-
-  const target = matches[0];
-  const successor = all.find(
-    (h) => h.start > target.start && h.level <= target.level,
-  );
-  const sliceEnd = successor ? successor.start : content.length;
-
-  return content.slice(0, target.start) + content.slice(sliceEnd);
+function escapeAttr(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }

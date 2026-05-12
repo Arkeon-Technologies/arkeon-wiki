@@ -2,23 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Resolves a role's `spaces:` config (names / ids / "self" / "*") into
- * the concrete Space[] the agent context will expose to tools.
+ * Resolves a role's `spaces:` config (names / "self" / "*") into the
+ * concrete Space[] the agent context will expose to tools.
  *
- * Resolution rules:
  *   - "self"   → the triggering space.
  *   - "*"      → every registered space. Mutually exclusive with named
- *                entries (mixing them is almost always a config bug; we
- *                accept "*" alone or with `self` and ignore other names
- *                if `*` is present).
- *   - id       → matched against `spaces.id` first. Exact, unambiguous.
- *   - name     → matched against `spaces.name`. If multiple spaces share
- *                the name, throw with the candidate ids — the operator
- *                must disambiguate by id.
+ *                entries except for "self".
+ *   - name     → matched against `spaces.name` (now the PK, so always
+ *                unique). Unknown names throw.
  *
  * The triggering space is always present in the result, even if not
- * mentioned explicitly. Operators rarely want a role that can't see its
- * own space.
+ * mentioned explicitly. Operators rarely want a role that can't see
+ * its own space.
  *
  * Output is deduplicated and order-preserving (own space first, then
  * additional entries in YAML order).
@@ -31,7 +26,6 @@ import type { Space } from "../lib/sync.js";
 export const DEFAULT_SCOPE: readonly string[] = ["self"];
 
 interface SpaceRow {
-  id: string;
   name: string;
   watch_dir: string;
 }
@@ -41,18 +35,6 @@ export interface ResolveScopeOptions {
   sql?: SqlClient;
 }
 
-/**
- * Resolve the configured scope into the concrete Space[] the agent
- * is allowed to read from. The triggering space is implicitly
- * included.
- *
- * Throws on:
- *   - unknown name/id
- *   - ambiguous name (multiple spaces with the same name)
- *
- * The error messages are written for operators reading daemon logs —
- * agents don't see them.
- */
 export async function resolveAllowedSpaces(
   scope: readonly string[] | undefined,
   ownSpace: Space,
@@ -61,12 +43,6 @@ export async function resolveAllowedSpaces(
   const sql = options.sql ?? createSql();
   const requested = scope && scope.length > 0 ? scope : DEFAULT_SCOPE;
 
-  // "*" wins, but only when it's *unambiguous*. Mixing `*` with named
-  // entries silently inverts operator intent: an operator who wrote
-  // `["*", "data-mining"]` thinking they were narrowing scope would
-  // instead get every space. Reject the mixed form so a typo at config
-  // time is loud instead of silent. `self` is the one allowed
-  // companion since it doesn't change the result set.
   if (requested.includes("*")) {
     const noisy = requested.filter((e) => e !== "*" && e !== "self");
     if (noisy.length > 0) {
@@ -77,111 +53,59 @@ export async function resolveAllowedSpaces(
       );
     }
     const rows = (await sql`
-      SELECT id, name, watch_dir FROM spaces
+      SELECT name, watch_dir FROM spaces
       WHERE watch_dir IS NOT NULL
     `) as unknown as SpaceRow[];
     return orderResult(ownSpace, rows);
   }
 
-  // Build a stable index for name/id lookups in one pass.
   const allRows = (await sql`
-    SELECT id, name, watch_dir FROM spaces
+    SELECT name, watch_dir FROM spaces
     WHERE watch_dir IS NOT NULL
   `) as unknown as SpaceRow[];
 
-  const byId = new Map<string, SpaceRow>();
-  const byName = new Map<string, SpaceRow[]>();
-  for (const row of allRows) {
-    byId.set(row.id, row);
-    const list = byName.get(row.name);
-    if (list) {
-      list.push(row);
-    } else {
-      byName.set(row.name, [row]);
-    }
-  }
+  const byName = new Map<string, SpaceRow>();
+  for (const row of allRows) byName.set(row.name, row);
 
   const picked: SpaceRow[] = [];
   const seen = new Set<string>();
 
-  // Always include the triggering space first. The "self" alias maps
-  // here; explicit ids/names that match it dedupe via `seen`.
-  if (!seen.has(ownSpace.id)) {
-    picked.push({
-      id: ownSpace.id,
-      name: ownSpace.name,
-      watch_dir: ownSpace.watch_dir,
-    });
-    seen.add(ownSpace.id);
-  }
+  // Always include the triggering space first. "self" resolves here.
+  picked.push({ name: ownSpace.name, watch_dir: ownSpace.watch_dir });
+  seen.add(ownSpace.name);
 
   for (const entry of requested) {
-    if (entry === "self") continue; // already covered
-
-    // Try id match first. Ids are ULIDs (26 chars, alnum) so the
-    // namespace is effectively disjoint from human names; an id-shaped
-    // string that happens to also be a name is a non-issue in practice.
-    const idHit = byId.get(entry);
-    if (idHit) {
-      if (!seen.has(idHit.id)) {
-        picked.push(idHit);
-        seen.add(idHit.id);
-      }
-      continue;
-    }
-
-    const nameHits = byName.get(entry) ?? [];
-    if (nameHits.length === 0) {
+    if (entry === "self") continue;
+    const hit = byName.get(entry);
+    if (!hit) {
       throw new Error(
-        `agents.yaml spaces: '${entry}' did not match any registered space ` +
-          `(neither id nor name). Run 'arkeon-wiki ls' to see registered spaces.`,
+        `agents.yaml spaces: '${entry}' did not match any registered space. ` +
+          `Run 'arkeon-wiki ls' to see registered spaces.`,
       );
     }
-    if (nameHits.length > 1) {
-      const ids = nameHits.map((r) => r.id).join(", ");
-      throw new Error(
-        `agents.yaml spaces: name '${entry}' is ambiguous — ` +
-          `${nameHits.length} registered spaces share that name. ` +
-          `Use one of the following ids instead: ${ids}.`,
-      );
-    }
-    const hit = nameHits[0];
-    if (!seen.has(hit.id)) {
+    if (!seen.has(hit.name)) {
       picked.push(hit);
-      seen.add(hit.id);
+      seen.add(hit.name);
     }
   }
 
-  return picked.map(toSpace);
+  return picked;
 }
 
 function orderResult(ownSpace: Space, rows: SpaceRow[]): Space[] {
-  const own: Space = {
-    id: ownSpace.id,
-    name: ownSpace.name,
-    watch_dir: ownSpace.watch_dir,
-  };
+  const own: Space = { name: ownSpace.name, watch_dir: ownSpace.watch_dir };
   const others: Space[] = [];
   for (const row of rows) {
-    if (row.id === ownSpace.id) continue;
-    others.push(toSpace(row));
+    if (row.name === ownSpace.name) continue;
+    others.push(row);
   }
   return [own, ...others];
 }
 
-function toSpace(row: SpaceRow): Space {
-  return { id: row.id, name: row.name, watch_dir: row.watch_dir };
-}
-
 /**
- * Resolve a tool's `space` argument — accepting either a space name or
- * an id — against the agent's allowed set. Returns the matched Space
- * or throws with a tool-friendly error message (the agent sees these).
- *
- * Ambiguous names within the allowed set are flagged with the candidate
- * ids so the agent can re-issue the call disambiguating by id. This
- * mirrors the operator-facing behavior in resolveAllowedSpaces but at
- * the per-call layer where the LLM gets the feedback.
+ * Resolve a tool's `space` argument against the agent's allowed set.
+ * Returns the matched Space or throws with a tool-friendly error
+ * message (the agent sees these).
  */
 export function resolveSpaceArg(
   arg: string,
@@ -193,29 +117,15 @@ export function resolveSpaceArg(
       `space argument cannot be empty. Allowed spaces: ${describeAllowed(allowed)}.`,
     );
   }
-  const idHit = allowed.find((s) => s.id === trimmed);
-  if (idHit) return idHit;
-  const nameHits = allowed.filter((s) => s.name === trimmed);
-  if (nameHits.length === 1) return nameHits[0];
-  if (nameHits.length > 1) {
-    const ids = nameHits.map((s) => s.id).join(", ");
-    throw new Error(
-      `space '${trimmed}' is ambiguous — ${nameHits.length} allowed spaces ` +
-        `share that name. Pass one of these ids instead: ${ids}.`,
-    );
-  }
+  const hit = allowed.find((s) => s.name === trimmed);
+  if (hit) return hit;
   throw new Error(
     `space '${trimmed}' is not in the allowed set for this role. ` +
       `Allowed: ${describeAllowed(allowed)}.`,
   );
 }
 
-/**
- * Compact "name (id)" listing of the allowed set, suitable for
- * embedding in tool error messages and tool descriptions so the LLM
- * sees what's available.
- */
 export function describeAllowed(allowed: readonly Space[]): string {
   if (allowed.length === 0) return "(none)";
-  return allowed.map((s) => `${s.name} (${s.id})`).join(", ");
+  return allowed.map((s) => s.name).join(", ");
 }

@@ -204,8 +204,6 @@ export function promptVars(
   return {
     role_name: roleName,
     trigger_path: input.triggerPath ?? "",
-    trigger_entity_id: input.triggerEntityId ?? "",
-    space_id: input.space.id,
     space_name: input.space.name,
     space_watch_dir: input.space.watch_dir,
   };
@@ -226,9 +224,9 @@ export function defaultConcurrencyKey(
   roleName: string,
 ): (input: AgentInput) => string {
   return (input: AgentInput) =>
-    input.triggerEntityId
-      ? `${roleName}::${input.space.id}::${input.triggerEntityId}`
-      : `${roleName}::${input.space.id}`;
+    input.triggerPath
+      ? `${roleName}::${input.space.name}::${input.triggerPath}`
+      : `${roleName}::${input.space.name}`;
 }
 
 // ── Provider/key plumbing ────────────────────────────────────────
