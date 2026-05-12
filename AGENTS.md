@@ -45,6 +45,17 @@ Default base URL: `http://localhost:8000`. No auth. JSON in, JSON out. Routes ar
 | `GET` | `/health` | Liveness. |
 | `GET` | `/ready` | Readiness — `200` if SQLite responds. |
 
+The daemon also serves a small browser-facing reader (Phase 2). These return HTML, not JSON:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/` | HTML list of spaces + entity counts. |
+| `GET` | `/{space}/` | HTML alphabetical article index (only `type='wiki'`). |
+| `GET` | `/{space}/wiki/*` | The article HTML from disk, with `<div id="arkeon-chrome">` injected and link classes tagged (`arkeon-wiki`, `arkeon-file`, `arkeon-redlink`). |
+| `GET` | `/{space}/*` | Static-file fallback (sources, PDFs, images, …) with the right `Content-Type`. |
+
+URL structure mirrors disk structure: `wiki/foo.html` on disk → `/{space}/wiki/foo.html` over HTTP. Articles also work directly over `file://` because hrefs are never rewritten.
+
 ## Wiki file format
 
 Wikis are HTML under `wiki/` (subfolders allowed for organization, no `subject_type` namespacing). The shell:

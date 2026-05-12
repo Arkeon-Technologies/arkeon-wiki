@@ -10,18 +10,12 @@ import { mapDatabaseError } from "./lib/db-errors.js";
 import { createSql } from "./lib/sql.js";
 import { spacesRouter } from "./routes/spaces.js";
 import { spaceScopedRouter } from "./routes/space-scoped.js";
+import { readerRouter } from "./routes/reader.js";
 
 export function createApp() {
   const app = new Hono<AppBindings>();
 
   app.use("*", requestContextMiddleware);
-
-  app.get("/", (c) =>
-    c.json({
-      name: "arkeon-wiki",
-      status: "ok",
-    }),
-  );
 
   app.get("/health", (c) => c.json({ status: "ok" }));
 
@@ -37,6 +31,9 @@ export function createApp() {
 
   app.route("/spaces", spacesRouter);
   app.route("/", spaceScopedRouter);
+  // The reader is mounted last because its `/:space/*` fallback should
+  // only match URLs no other route has claimed.
+  app.route("/", readerRouter);
 
   app.notFound((c) => {
     const requestId = c.get("requestId");

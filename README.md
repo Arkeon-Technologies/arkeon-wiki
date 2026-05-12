@@ -51,7 +51,13 @@ The system automatically:
 
 No manual sync commands. Just save files.
 
-**4. Query the graph**
+**4. Read in the browser**
+
+Open `http://localhost:8000/` to see the list of registered spaces. Click through to an article — the daemon serves the HTML straight off disk, injects a small back-link strip, and tags missing link targets in red so red links are obvious as you read.
+
+URL structure mirrors disk structure within a space (`wiki/foo.html` on disk → `http://localhost:8000/{space}/wiki/foo.html`). Relative hrefs in articles resolve the same way over HTTP and `file://`, so the writer's output stays portable — copy the directory, open the HTML, links work.
+
+**5. Query the graph**
 
 ```bash
 # List wikis in your space
