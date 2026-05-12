@@ -62,24 +62,25 @@ There is no YAML frontmatter on wikis, no `[[wikilink]]` syntax, no placeholder 
 
 Source files (anywhere outside `wiki/`) are indexed as `type='file'`. Markdown sources (`.md`) have their YAML frontmatter parsed into `properties` (the Augustine corpus pattern — `book: 5, section: 8`). Other source types (`.txt`, `.json`, `.csv`, `.xml`, `.rst`, `.html` outside `wiki/`) get only `{file_type: <ext>}`.
 
-## Writing (the `writer` role)
+## Writing (the `cataloger` + `writer` roles)
 
-A single agent role — `writer` — turns recent sources into HTML articles on a recurring cron schedule. Every tick, the writer:
+Two agent roles divide writing into producer and consumer halves of the same growth engine:
 
-1. Surveys two queues:
-   - **Unprocessed sources**: `list_entities?type=file&inbound_max=0` — files no article cites yet
-   - **Red links**: `list_redlinks` — link targets ranked by demand (how many existing articles want this concept defined)
-2. Picks one piece of work: a high-demand red link, or a recently-arrived source.
-3. Reads the relevant files (the source, or 1-2 articles that want the red-link target defined).
-4. Articulates the driving question.
-5. Searches existing articles via keyword search (`search(query=[...]&type=wiki)`).
-6. Either **extends** the existing article via `edit_file` (`insert_at_line` or `str_replace`) or **creates** a new one via `create_file`.
+**`cataloger`** — drains the source queue. Each tick:
+1. Picks one unprocessed source (`list_entities?type=file&inbound_max=0` — a file no wiki cites yet).
+2. Reads it; surveys the corpus via `list_entities` (with `properties.short_description` as TOC context) and `list_redlinks`.
+3. EXTENDS any existing article the source contributes new material to (`edit_file`).
+4. CREATES a single plan wiki at `wiki/_plans/<source-basename>.html` that summarizes the source and red-links to articles worth writing. Plan wikis carry `<meta name="kind" content="plan">` so they're distinguishable from real articles.
 
-Articles are horizontal: one article spans many sources, growing as the corpus grows. The default body convention is four sections — `<h2>Question</h2>` / `<h2>Current answer</h2>` / `<h2>Evidence</h2>` / `<h2>Open threads</h2>` — but it's a soft convention. Operators reshape it via `instructions:` in their `agents.yaml`.
+**`writer`** — drains the red-link queue. Each tick:
+1. Picks the highest-`demand` red link from `list_redlinks`.
+2. Reads the plan wiki(s) and any other articles in `linked_from` to understand what the red link wants.
+3. Reads the sources those plan wikis recommend.
+4. Writes the article via `create_file`, dropping 1-2 NEW forward-looking red links of its own. That's how the queue stays alive after the source-side is drained.
 
-The trigger is **purely cron-driven**. The watcher's job ends at the SQLite mirror; agents pick up new state at their next scheduled tick. Per-space serialization is enforced by an in-process mutex — at most one role can run in a given space at any time.
+**Synthesis happens via the demand signal.** When N plan wikis red-link the same question (e.g. both Book IV's and Book IX's plan wikis link to `why-grief-feels-sweet.html`), the writer reads N plan wikis and weaves N books into one article. No "decide create-vs-extend" runtime judgment is needed in the writer — the cataloger already settled that by picking which slugs to converge on.
 
-The bundled writer template ships `cron: "*/15 * * * *"` with `model: gpt-5.4-mini`, `reasoning_effort: low`, `max_steps: 12`. **First-run cost note**: a fresh `arkeon-wiki up` against a corpus with `OPENAI_API_KEY` set will start spending API credit within 15 minutes. Operators who want to inspect the writer's behavior before letting it run should override the cadence in `.arkeon/agents.yaml` (`cron: "0 0 31 2 *"` is the canonical "never fire" idiom — Feb 31 doesn't exist).
+The trigger is **purely cron-driven**. Bundled defaults: `cataloger: "0 */2 * * *"` (every 2 hours), `writer: "*/15 * * * *"` (every 15 min — faster because the red-link queue grows). Per-space mutex serializes — at most one role runs in a given space at a time. **First-run cost note**: a fresh `arkeon-wiki up` against a corpus with `OPENAI_API_KEY` will start spending credit within 15 minutes. Override either role's cadence in `.arkeon/agents.yaml` to inspect first.
 
 **Downtime → missed ticks are dropped.** No persistence of last-fire times. The cron model lets each role decide its own work from current state — new behaviors (reflector picking articles with open threads, bridger rotating across spaces) need only a different prompt + cron, no scheduler changes.
 

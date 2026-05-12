@@ -98,17 +98,17 @@ curl "$API/$SPACE/redlinks?limit=20"
 curl "$API/$SPACE/entities?type=file&inbound_max=0&include=counts"
 ```
 
-## The writer agent
+## The cataloger + writer agents
 
-The bundled `writer` role (`packages/arkeon/src/server/agents/templates/writer.yaml`) runs on a cron schedule (`*/15 * * * *` by default). Each tick it:
+Two bundled roles divide writing into producer and consumer halves.
 
-1. Surveys two queues: unprocessed sources (`list_entities?type=file&inbound_max=0`) and red links (`list_redlinks`).
-2. Reads the most interesting source or 1-2 of the articles that want a red-link target defined.
-3. Articulates the driving question.
-4. Searches for an existing article addressing it.
-5. Either **extends** the existing article via `edit_file` (`insert_at_line` or `str_replace`, both read-gated) or **creates** a new one via `create_file` (the agent authors a complete HTML document — `<!DOCTYPE>`/`<html>` wrapper, non-empty `<title>`, `<body>` — and the tool validates structure and writes it verbatim).
+**`cataloger`** (`templates/cataloger.yaml`, default cron `0 */2 * * *`) drains the source queue. Each tick it picks one unprocessed file (`list_entities?type=file&inbound_max=0`), reads it, surveys the corpus, EDITS any existing article the source extends, and CREATES one plan wiki at `wiki/_plans/<source-basename>.html` that summarizes the source and red-links to articles worth writing.
 
-Default model: `gpt-5.4-mini`, `reasoning_effort: low`. Override via `.arkeon/agents.yaml` if you want a different model or schedule.
+**`writer`** (`templates/writer.yaml`, default cron `*/15 * * * *`) drains the red-link queue. Each tick it picks the highest-`demand` red link, reads the plan wiki(s) and sources that motivated it, writes the article via `create_file` (full HTML document), and drops 1-2 forward-looking red links of its own. Forward refs keep the queue alive after the source side is drained.
+
+Synthesis happens via the demand signal: when N plan wikis red-link the same question, the writer reads N plan wikis and weaves N books — no runtime "create vs. extend" judgment is required of the writer.
+
+Default model: `gpt-5.4-mini`, `reasoning_effort: low`. Override either role's model/schedule in `.arkeon/agents.yaml`.
 
 **First-run cost**: a fresh `arkeon-wiki up` against a corpus with `OPENAI_API_KEY` set will start spending API credit within 15 minutes. Override the cadence in `.arkeon/agents.yaml` (`cron: "0 0 31 2 *"` is the canonical "never fire") to inspect behavior before letting it run.
 
