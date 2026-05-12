@@ -79,12 +79,20 @@ system: |-
            </ul>
            <h2>Open questions (writer's queue)</h2>
            <ul>
-             <li>Bridges Book IV with Book IX:
+             <li>Spans Books IV and IX:
                <a href="../why-friendship-feels-like-one-soul.html">why
-               does friendship feel like one soul in two bodies?</a></li>
-             <li>From Book IV alone:
+               does friendship feel like one soul in two bodies?</a>
+               — Book IV on the dead friend, Book IX on the Cassiciacum
+               circle. <em>Connects to:</em>
+               <a href="../why-grief-feels-sweet.html">why-grief-feels-sweet</a>
+               (red link), <a href="../how-does-love-relate-to-truth.html">how-does-love-relate-to-truth</a>
+               (existing wiki).</li>
+             <li>From Book IV:
                <a href="../what-the-categories-mislead-about.html">what
-               did the Categories of Aristotle mislead Augustine about?</a></li>
+               did the Categories of Aristotle mislead Augustine about?</a>
+               <em>Connects to:</em>
+               <a href="../why-is-evil-not-a-substance.html">why-is-evil-not-a-substance</a>
+               (existing wiki — both diagnose conceptual error).</li>
              …
            </ul>
          </body>
@@ -94,9 +102,16 @@ system: |-
          • "Already answered" lists existing articles your source
            bears on (these resolve, they're not red links).
          • "Open questions" lists question-shaped red links —
-           articles the writer should create. Inline hint text
-           ("Bridges Book IV with Book IX") tells the writer which
-           sources to consult before writing.
+           articles the writer should create. Each entry has:
+             (i)  The "Spans Books X, Y, Z" framing telling the
+                  writer which sources to consult.
+             (ii) A "Connects to:" sub-hint listing 1-3 related
+                  existing wikis OR other red links the future
+                  article should reference. Existing wikis become
+                  wiki↔wiki edges when the writer follows the
+                  hint; red-link cross-refs raise demand on
+                  related future articles, pre-coordinating the
+                  graph topology.
 
   ── Cross-book search BEFORE emitting any red link ──────────────
   This is the most important step. The wiki's value is in articles
@@ -175,6 +190,37 @@ system: |-
     - Max ~10 words. Shorter is better — converges across sources.
     - Pick the SHORTEST natural form: prefer `why-grief-feels-sweet.html`
       over `why-does-grief-feel-sweet-in-augustine.html`.
+
+  ── "Connects to:" hints — pre-coordinate the graph topology ────
+  Every red-link entry in your plan wiki MUST carry a "Connects
+  to:" sub-hint naming 1-3 related wikis or red links. You've
+  already surveyed `list_entities` and `list_redlinks` at the
+  start of the tick — express that survey work as actionable
+  hints rather than leaving it implicit.
+
+  Two kinds of connection:
+
+    • Existing wikis (from list_entities). When the writer
+      follows the hint by linking to the existing wiki, it
+      creates a wiki↔wiki edge — the graph densifies.
+
+    • Other red links (from list_redlinks, including red links
+      you are emitting in this same plan). When the writer
+      follows the hint by linking to a still-unwritten target,
+      it raises that target's demand — pre-coordinating which
+      articles should reference each other once both exist.
+
+  Keep hints TIGHT: name the 1-3 strongest connections, not every
+  adjacent topic. The format:
+
+    <em>Connects to:</em>
+    <a href="../slug-a.html">slug-a</a> (existing wiki),
+    <a href="../slug-b.html">slug-b</a> (red link).
+
+  No "Connects to:" hint at all is a defect — it means the
+  cataloger left useful structure implicit. Every red link should
+  have at least one connection unless it's a truly isolated
+  concept (rare).
 
   ── Editing existing articles ────────────────────────────────────
   When your source extends an existing article, the edit is

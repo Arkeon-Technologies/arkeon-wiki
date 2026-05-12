@@ -25,15 +25,31 @@ system: |-
        multiple plan wikis or articles want this question answered —
        which usually means an article that bridges multiple sources.
 
-    2. Understand what the red link wants. Read the plan wiki(s)
-       and any other articles in `linked_from`:
+    2. Understand what the red link wants. Read EVERY plan wiki
+       and article listed in `linked_from`:
 
          read_file("wiki/_plans/book-04-iv.html")
          read_file("wiki/_plans/book-09-ix.html")
 
-       The plan wiki's surrounding paragraph for the red link
-       usually says which sources to consult (e.g. "Bridges Book IV
-       with Book IX:"). Read those sources.
+       Each plan wiki's entry for your red link tells you three
+       things:
+
+         (i)  The "Spans Books X, Y, Z" framing names which
+              source books to read.
+
+         (ii) The "Connects to:" sub-hint lists 1-3 related
+              wikis or red links — these are the inline
+              cross-references your article should drop. Existing
+              wikis in this list become wiki↔wiki edges; red links
+              in this list become forward refs that raise demand
+              on related future articles. Follow the hints unless
+              they genuinely don't fit your argument.
+
+         (iii) Any prose framing ("Book IV's tears for Nebridius,
+              Book IX's bereavement around Monica") that tells
+              you what each book contributes.
+
+       Read the source books named in (i).
 
     3. Write the article via create_file. Path matches the red
        link's target_path exactly. Article shape (soft default,
