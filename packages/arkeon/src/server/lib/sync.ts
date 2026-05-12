@@ -206,9 +206,12 @@ async function recordEntityEdit(
   const editKind: EditKind = ctx?.edit_kind ?? "resync";
   const note = ctx?.note ?? null;
   const sql = createSql();
-  // PK is (space_name, entity_path, at). Two writes in the same second
-  // would collide; OR IGNORE drops the second silently. Real workflows
-  // don't bursts edits to the same path within a second.
+  // PK is (space_name, entity_path, at). `at` defaults to strftime('%f')
+  // millisecond precision (see 001-foundation.sql), so realistic
+  // workflows don't collide. OR IGNORE is the last-line defence for
+  // the pathological case of two writes in the same millisecond — the
+  // file state is correct regardless; we'd just lose attribution on
+  // the second one.
   await sql.query(
     `INSERT OR IGNORE INTO entity_edits
      (space_name, entity_path, by_role, edit_kind, edit_note, content_hash)

@@ -209,7 +209,25 @@ export interface WikiShellFields {
   extra?: Record<string, string>;
 }
 
+/**
+ * Tokens that would terminate or corrupt the outer shell if they appeared
+ * in `body`. The tool contract is "no <html>/<head>/<body>/<!DOCTYPE> in
+ * body", and the writer's prompt repeats this — but a model is free to
+ * ignore the prompt. Guard at the chokepoint instead of trusting the
+ * agent.
+ *
+ * Matched case-insensitively because HTML tags are case-insensitive.
+ */
+const FORBIDDEN_BODY_TOKENS_RE =
+  /<\/?(?:html|head|body)\b|<!doctype\b|<title\b|<meta\b/i;
+
 export function composeWikiHtmlShell(fields: WikiShellFields): string {
+  if (FORBIDDEN_BODY_TOKENS_RE.test(fields.body)) {
+    throw new Error(
+      `create_file: body contains a shell tag (<html>, <head>, <body>, <!DOCTYPE>, <title>, or <meta>). ` +
+        `The tool composes the envelope — put only content tags (<h1>…<p>…<a>…) in body.`,
+    );
+  }
   const metas = [
     `<meta name="label" content="${escapeAttr(fields.label)}">`,
     `<meta name="short_description" content="${escapeAttr(fields.short_description)}">`,

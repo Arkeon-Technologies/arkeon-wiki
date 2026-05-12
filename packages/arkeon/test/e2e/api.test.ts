@@ -190,4 +190,36 @@ describe("Phase 1 API shape", () => {
     const res = await fetch(`${baseUrl}/nonexistent/entities`);
     expect(res.status).toBe(404);
   });
+
+  it("POST /spaces returns 409 on duplicate name (PK constraint → mapDatabaseError)", async () => {
+    const res = await fetch(`${baseUrl}/spaces`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: SPACE, watch_dir: "/tmp/some-other-dir" }),
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("conflict");
+  });
+
+  it("POST /spaces rejects names with slashes / dots / spaces", async () => {
+    const badNames = ["foo/bar", "..", "../escape", "with space", "#hash", "?query", ".hidden"];
+    for (const name of badNames) {
+      const res = await fetch(`${baseUrl}/spaces`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name, watch_dir: "/tmp/x" }),
+      });
+      expect(res.status, `expected 400 for name ${JSON.stringify(name)}`).toBe(400);
+    }
+  });
+
+  it("POST /spaces rejects names over 100 chars", async () => {
+    const res = await fetch(`${baseUrl}/spaces`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "a".repeat(101), watch_dir: "/tmp/x" }),
+    });
+    expect(res.status).toBe(400);
+  });
 });

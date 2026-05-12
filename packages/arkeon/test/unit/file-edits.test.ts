@@ -83,4 +83,29 @@ describe("composeWikiHtmlShell", () => {
     expect(html).toContain(`<meta name="label" content="Real">`);
     expect(html).toContain(`<meta name="author" content="shannon">`);
   });
+
+  it("rejects bodies that include shell tags (defence against prompt drift)", () => {
+    const cases = [
+      "<html><body>x</body></html>",
+      "<!DOCTYPE html><h1>x</h1>",
+      "<h1>x</h1></body>",
+      "<head><meta name=evil></head>",
+      "<title>sneaky</title>",
+      "<META name=author>", // case-insensitive
+    ];
+    for (const body of cases) {
+      expect(() =>
+        composeWikiHtmlShell({ label: "x", short_description: "y", body }),
+      ).toThrow(/body contains a shell tag/);
+    }
+  });
+
+  it("accepts ordinary content tags in body", () => {
+    const html = composeWikiHtmlShell({
+      label: "x",
+      short_description: "y",
+      body: `<h1>X</h1><p>Text with <a href="other.html">link</a> and <em>emphasis</em>.</p>`,
+    });
+    expect(html).toContain("<h1>X</h1>");
+  });
 });
