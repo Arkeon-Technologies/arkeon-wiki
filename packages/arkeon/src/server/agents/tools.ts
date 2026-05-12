@@ -11,7 +11,7 @@
  *   - list_redlinks (link targets without a matching entity)
  *   - search        (keyword via ripgrep)
  *   - edit_file     (insert_at_line | str_replace; read-gated)
- *   - create_file   (new wiki — HTML shell composed from structured fields)
+ *   - create_file   (new wiki — accepts full HTML or inner fragment)
  *   - delete_wiki   (guarded full-file deletion; not in writer's whitelist)
  */
 
@@ -19,7 +19,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 
 import { z } from "zod";
 
-import { composeWikiHtmlShell, safeResolve } from "../lib/file-edits.js";
+import { safeResolve, validateWikiHtmlDocument } from "../lib/file-edits.js";
 import { MAX_QUERY_PATTERNS, searchKeyword } from "../lib/search.js";
 import {
   listEntities,
@@ -436,33 +436,44 @@ const editFileTool = defineTool("edit_file", {
 
 // ── create_file ───────────────────────────────────────────────────
 
+const CREATE_FILE_TEMPLATE = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Article title as a question</title>
+  <meta name="label" content="Article title as a question">
+  <meta name="short_description" content="One-sentence summary.">
+</head>
+<body>
+  <h1>Article title as a question</h1>
+  <p>Article content with inline <a href="../sources/foo.md">citations</a>.</p>
+</body>
+</html>`;
+
 const createFileTool = defineTool("create_file", {
   description:
-    "Create a new wiki article. Path must start with `wiki/` and end in " +
-    "`.html` (subfolders are allowed for organization). The tool composes " +
-    "the HTML shell — `<head>` with `<title>` and `<meta name=\"label\">` + " +
-    "`<meta name=\"short_description\">` — from your structured fields, then " +
-    "wraps `body` in `<body>`. Do NOT include `<html>`/`<head>`/`<body>`/" +
-    "`<!DOCTYPE>` in `body`. Fails if the path exists.",
+    "Create a new wiki article from a complete HTML document. Path must " +
+    "start with `wiki/` and end in `.html` (subfolders allowed). `html` " +
+    "must be a full document beginning with `<!DOCTYPE html>` or `<html>`, " +
+    "containing a `<meta charset>` declaration, a non-empty `<title>`, and " +
+    "a `<body>`. Recommended: `<meta name=\"label\">` and " +
+    "`<meta name=\"short_description\">` in `<head>` for better metadata. " +
+    "Other `<meta name=\"...\">` tags are indexed as entity properties. " +
+    "Fails if the path exists or if the HTML is structurally incomplete.",
   inputSchema: z.object({
     path: z
       .string()
       .describe("Relative path under `wiki/`, ending in `.html`. E.g. `wiki/photosynthesis.html`."),
-    label: z.string().describe("Human-readable title (becomes <title> and <meta name=\"label\">)."),
-    short_description: z
+    html: z
       .string()
       .describe(
-        "One-sentence summary. Used for listing previews and search " +
-          "snippets. Aim for under 200 chars.",
-      ),
-    body: z
-      .string()
-      .describe(
-        "HTML body content (typically starting with <h1>). The tool wraps " +
-          "this in <body>...</body>; do NOT include the outer HTML envelope.",
+        "Complete HTML document. Must start with `<!DOCTYPE html>` or `<html>`, " +
+          "declare a `<meta charset>`, and contain a non-empty `<title>` and a " +
+          "`<body>`. Example:\n" +
+          CREATE_FILE_TEMPLATE,
       ),
   }),
-  call: async ({ path, label, short_description, body }, ctx) => {
+  call: async ({ path, html }, ctx) => {
     if (!path.startsWith("wiki/")) {
       throw new Error(
         `create_file: path '${path}' must be under wiki/ — only wiki articles can be created via this tool.`,
@@ -473,7 +484,10 @@ const createFileTool = defineTool("create_file", {
         `create_file: wiki paths must end in .html (got '${path}')`,
       );
     }
-    const html = composeWikiHtmlShell({ label, short_description, body });
+    const failure = validateWikiHtmlDocument(html);
+    if (failure) {
+      throw new Error(formatCreateFileValidationError(failure, html));
+    }
     const result = await ctx.applyEdit(
       { kind: "create", path, content: html },
       { edit_kind: "create" },
@@ -482,6 +496,24 @@ const createFileTool = defineTool("create_file", {
   },
   summarize: (r) => ({ path: r.path, mode: r.mode }),
 });
+
+function formatCreateFileValidationError(
+  failure: ReturnType<typeof validateWikiHtmlDocument>,
+  html: string,
+): string {
+  const preview = html.trimStart().slice(0, 120).replace(/\s+/g, " ");
+  const head =
+    failure?.reason === "missing-wrapper"
+      ? `create_file: html must be a complete HTML document — expected '<!DOCTYPE html>' or '<html>' at the top. Got: "${preview}…"`
+      : failure?.reason === "missing-charset"
+      ? `create_file: html must declare its encoding via <meta charset="utf-8"> in <head>. Without it, browsers default to Latin-1 and mojibake non-ASCII characters.`
+      : failure?.reason === "missing-title"
+      ? `create_file: html must contain a <title> element inside <head>.`
+      : failure?.reason === "empty-title"
+      ? `create_file: <title> element is empty — supply a non-empty title (becomes entities.label).`
+      : `create_file: html must contain a <body> element.`;
+  return `${head}\n\nUse this template:\n${CREATE_FILE_TEMPLATE}`;
+}
 
 // ── delete_wiki ───────────────────────────────────────────────────
 

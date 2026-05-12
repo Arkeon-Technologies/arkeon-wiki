@@ -93,7 +93,7 @@ The writer's tool surface, validated by a 75-trial bake-off (see `tasks/v0-agent
 - `search(query, type?, ...)` — ripgrep keyword search; OR up to 10 patterns in one pass.
 - `edit_file mode='insert_at_line' {path, line_number, content}` — pure additive insert BEFORE the given line. Lines shift down.
 - `edit_file mode='str_replace' {path, old_string, new_string}` — exact-match SEARCH/REPLACE. `old_string` must match exactly once.
-- `create_file(path, label, short_description, body)` — new wiki. Tool composes the HTML `<head>`/`<body>` envelope from the structured fields; path must start with `wiki/` and end in `.html`.
+- `create_file(path, html)` — new wiki from a complete HTML document. Path must start with `wiki/` and end in `.html`. `html` must begin with `<!DOCTYPE>` or `<html>` and contain a non-empty `<title>` plus a `<body>`. The agent authors the whole document, envelope and all — symmetric with how a human writes a wiki. Recommended (not enforced): `<meta name="label">` and `<meta name="short_description">`. Any other `<meta name="...">` tags land in `entities.properties`. Each validation failure returns the canonical template inline so the model can retry in one shot.
 - `delete_wiki(path, reason)` — guarded full-file deletion (only `wiki/**`, required reason). Not in the writer's whitelist; available for operator scripts or future curator roles.
 
 **The read-gate.** `edit_file` refuses to mutate a path the agent hasn't `read_file`-ed in this run. Successful edits invalidate the path — the agent must re-read before its next edit on the same file. This catches "editing from stale memory" errors before they corrupt a file. It lives on `AgentContext.readPaths` in `runtime.ts`.
@@ -121,7 +121,7 @@ No auth, no actors, no versioning.
 - `src/server/lib/html-meta.ts` — `parseHtmlMeta(html)` → `{title, properties}`.
 - `src/server/lib/html-links.ts` — `extractHtmlLinks(html, fromPath)` + `resolveHref(href, fromPath)`. Drops external URLs, server-absolute paths, fragments, escaping `..`.
 - `src/server/lib/fs-watcher.ts` — `node:fs.watch` recursive + 500ms debounce, calls `syncFile()` on changes, `removeByPath()` on deletes. Also bootstraps the per-space agent scheduler.
-- `src/server/lib/file-edits.ts` — `applyEdit(space, edit, opts)`: the mutation chokepoint. Four kinds: `create`, `insert_at_line`, `str_replace`, `delete`. Exports `composeWikiHtmlShell` for `create_file`.
+- `src/server/lib/file-edits.ts` — `applyEdit(space, edit, opts)`: the mutation chokepoint. Four kinds: `create`, `insert_at_line`, `str_replace`, `delete`. Exports `validateWikiHtmlDocument` for `create_file` (structural validation: `<!DOCTYPE>`/`<html>` + non-empty `<title>` + `<body>`).
 - `src/server/lib/entities.ts` — `listEntities()` + `listRedLinks()` + `getEntity()`. Pure SQL, parameterized.
 - `src/server/lib/search.ts` — ripgrep adapter (`@vscode/ripgrep`), spawns per-space, parses `--json` events, joins back to entities by path.
 - `src/server/agents/` — declarative `.arkeon/agents.yaml` config (Zod-validated), bundled role templates (`templates/*.yaml`), role-builder, tool registry, `runAgent` loop (Vercel AI SDK), per-space cron scheduler.

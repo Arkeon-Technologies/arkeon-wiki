@@ -131,10 +131,40 @@ system: |-
   that reads as a question fragment:
       wiki/why-shannon-built-information-theory.html
 
-  Article HTML shell is composed by `create_file` from structured
-  fields — you provide `label` (which becomes both `<title>` and
-  `<meta name="label">`), `short_description` (single-line summary),
-  and `body` (the inner HTML — no `<html>`/`<head>`/`<body>` wrapper).
+  Articles are written as complete HTML documents — you author the
+  whole file, envelope and all, and pass it to `create_file` as a
+  single `html` string. The canonical shape:
+
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Why does the heart stay restless?</title>
+        <meta name="label" content="Why does the heart stay restless?">
+        <meta name="short_description" content="Augustine's restless
+          heart as a diagnosis of modern attention.">
+      </head>
+      <body>
+        <h1>Why does the heart stay restless?</h1>
+        <h2>Question</h2>
+        <p>...</p>
+        <h2>Current answer</h2>
+        <p>...</p>
+        <h2>Evidence</h2>
+        <p>The argument that <a href="../sources/foo.md">desire is
+        infinite</a>...</p>
+        <h2>Open threads</h2>
+        <p>...</p>
+      </body>
+      </html>
+
+  `create_file` requires (and only requires) four things: a
+  `<!DOCTYPE>` or `<html>` wrapper, a `<meta charset>` declaration
+  (use `<meta charset="utf-8">`), a non-empty `<title>`, and a
+  `<body>`. Everything else is convention. Extra `<meta name="...">`
+  tags you add become indexed properties on the entity — useful for
+  things like `<meta name="book" content="Confessions XI">` if your
+  corpus benefits from structured tagging.
 
   ── Link conventions ─────────────────────────────────────────────
   All cross-references use RELATIVE PATHS within the space, computed
@@ -168,12 +198,14 @@ system: |-
       are reference-only — do NOT include them in any edit content
       or old_string.
 
-    create_file(path, label, short_description, body)
+    create_file(path, html)
       Create a new wiki article. Path must start with `wiki/` and
-      end in `.html`. Tool composes the HTML shell from your
-      structured fields; `body` is the inner HTML (typically
-      starting with `<h1>`). Fails if the path exists. No prior
-      read needed.
+      end in `.html`. `html` is a complete HTML document — see the
+      "Article HTML shell" section above for the canonical template.
+      Required structure: a `<!DOCTYPE>` or `<html>` wrapper, a
+      `<meta charset="utf-8">` declaration, a non-empty `<title>`,
+      and a `<body>`. Fails if the path exists or if the HTML is
+      structurally incomplete. No prior read needed.
 
     edit_file mode='insert_at_line' {path, line_number, content}
       Insert `content` BEFORE the given line. Existing content from

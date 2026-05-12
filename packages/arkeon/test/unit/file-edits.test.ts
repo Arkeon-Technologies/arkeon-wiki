@@ -3,7 +3,7 @@
 
 import { describe, it, expect } from "vitest";
 
-import { composeWikiHtmlShell, safeResolve } from "../../src/server/lib/file-edits.js";
+import { safeResolve, validateWikiHtmlDocument } from "../../src/server/lib/file-edits.js";
 
 describe("safeResolve", () => {
   it("resolves a relative path under the watch dir", () => {
@@ -25,87 +25,73 @@ describe("safeResolve", () => {
   });
 });
 
-describe("composeWikiHtmlShell", () => {
-  it("emits a well-formed HTML document with charset, title, and meta tags", () => {
-    const html = composeWikiHtmlShell({
-      label: "Photosynthesis",
-      short_description: "How plants convert light.",
-      body: "<h1>Photosynthesis</h1><p>Hi.</p>",
-    });
-    expect(html).toContain("<!DOCTYPE html>");
-    expect(html).toContain(`<meta charset="utf-8">`);
-    expect(html).toContain("<title>Photosynthesis</title>");
-    expect(html).toContain(`<meta name="label" content="Photosynthesis">`);
-    expect(html).toContain(`<meta name="short_description" content="How plants convert light.">`);
-    expect(html).toContain("<h1>Photosynthesis</h1><p>Hi.</p>");
+describe("validateWikiHtmlDocument", () => {
+  const wellFormed = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Photosynthesis</title>
+  <meta name="label" content="Photosynthesis">
+</head>
+<body>
+  <h1>Photosynthesis</h1>
+  <p>Plants convert light.</p>
+</body>
+</html>`;
+
+  it("accepts a well-formed document with <!DOCTYPE>, charset, <title>, and <body>", () => {
+    expect(validateWikiHtmlDocument(wellFormed)).toBe(null);
   });
 
-  it("places <meta charset> within the first 1024 bytes (HTML5 requirement)", () => {
-    const html = composeWikiHtmlShell({
-      label: "X",
-      short_description: "y",
-      body: "<h1>x</h1>",
-    });
-    const charsetPos = html.indexOf(`<meta charset="utf-8">`);
-    expect(charsetPos).toBeGreaterThan(-1);
-    expect(charsetPos).toBeLessThan(1024);
+  it("accepts a document that opens with <html> (no DOCTYPE)", () => {
+    const html = `<html><head><meta charset="utf-8"><title>X</title></head><body><h1>X</h1></body></html>`;
+    expect(validateWikiHtmlDocument(html)).toBe(null);
   });
 
-  it("escapes ampersands and quotes in attribute values", () => {
-    const html = composeWikiHtmlShell({
-      label: `Cats & "Dogs"`,
-      short_description: "x",
-      body: "<h1>x</h1>",
-    });
-    expect(html).toContain(`<title>Cats &amp; &quot;Dogs&quot;</title>`);
-    expect(html).toContain(`<meta name="label" content="Cats &amp; &quot;Dogs&quot;">`);
+  it("accepts uppercase tag names — HTML is case-insensitive", () => {
+    const html = `<!DOCTYPE HTML><HTML><HEAD><META CHARSET="UTF-8"><TITLE>X</TITLE></HEAD><BODY><H1>X</H1></BODY></HTML>`;
+    expect(validateWikiHtmlDocument(html)).toBe(null);
   });
 
-  it("emits extra meta tags from the `extra` map", () => {
-    const html = composeWikiHtmlShell({
-      label: "X",
-      short_description: "y",
-      body: "<h1>X</h1>",
-      extra: { author: "shannon", year: "1948" },
-    });
-    expect(html).toContain(`<meta name="author" content="shannon">`);
-    expect(html).toContain(`<meta name="year" content="1948">`);
+  it("tolerates leading whitespace before the wrapper", () => {
+    const html = `\n   \t<!DOCTYPE html><html><head><meta charset="utf-8"><title>X</title></head><body>x</body></html>`;
+    expect(validateWikiHtmlDocument(html)).toBe(null);
   });
 
-  it("ignores extra entries that conflict with built-ins (label / short_description)", () => {
-    const html = composeWikiHtmlShell({
-      label: "Real",
-      short_description: "real",
-      body: "<h1>x</h1>",
-      extra: { label: "fake", author: "shannon" },
+  it("rejects fragments (no <!DOCTYPE> or <html> wrapper)", () => {
+    expect(validateWikiHtmlDocument("<h1>X</h1><p>y</p>")).toEqual({
+      reason: "missing-wrapper",
     });
-    expect(html.match(/name="label"/g)).toHaveLength(1);
-    expect(html).toContain(`<meta name="label" content="Real">`);
-    expect(html).toContain(`<meta name="author" content="shannon">`);
+    expect(validateWikiHtmlDocument("<head><title>X</title></head><body>x</body>")).toEqual({
+      reason: "missing-wrapper",
+    });
   });
 
-  it("rejects bodies that include shell tags (defence against prompt drift)", () => {
-    const cases = [
-      "<html><body>x</body></html>",
-      "<!DOCTYPE html><h1>x</h1>",
-      "<h1>x</h1></body>",
-      "<head><meta name=evil></head>",
-      "<title>sneaky</title>",
-      "<META name=author>", // case-insensitive
-    ];
-    for (const body of cases) {
-      expect(() =>
-        composeWikiHtmlShell({ label: "x", short_description: "y", body }),
-      ).toThrow(/body contains a shell tag/);
-    }
+  it("rejects a document with no <meta charset> (mojibake-prevention guard)", () => {
+    const html = `<!DOCTYPE html><html><head><title>X</title></head><body>x</body></html>`;
+    expect(validateWikiHtmlDocument(html)).toEqual({ reason: "missing-charset" });
   });
 
-  it("accepts ordinary content tags in body", () => {
-    const html = composeWikiHtmlShell({
-      label: "x",
-      short_description: "y",
-      body: `<h1>X</h1><p>Text with <a href="other.html">link</a> and <em>emphasis</em>.</p>`,
-    });
-    expect(html).toContain("<h1>X</h1>");
+  it("accepts any <meta charset> value — existence is what we check, not the encoding", () => {
+    // We don't care if someone declares iso-8859-1; that's their footgun.
+    // The validator just enforces "you thought about encoding," which is
+    // enough to defeat the Latin-1-default browser fallback.
+    const html = `<!DOCTYPE html><html><head><meta charset="iso-8859-1"><title>X</title></head><body>x</body></html>`;
+    expect(validateWikiHtmlDocument(html)).toBe(null);
+  });
+
+  it("rejects a document with no <title>", () => {
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><h1>X</h1></body></html>`;
+    expect(validateWikiHtmlDocument(html)).toEqual({ reason: "missing-title" });
+  });
+
+  it("rejects a document whose <title> is whitespace-only", () => {
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>   </title></head><body><h1>X</h1></body></html>`;
+    expect(validateWikiHtmlDocument(html)).toEqual({ reason: "empty-title" });
+  });
+
+  it("rejects a document with no <body>", () => {
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>X</title></head></html>`;
+    expect(validateWikiHtmlDocument(html)).toEqual({ reason: "missing-body" });
   });
 });
