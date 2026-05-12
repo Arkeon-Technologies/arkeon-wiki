@@ -118,7 +118,7 @@ Default model: `gpt-5.4-mini`, `reasoning_effort: low`. Override via `.arkeon/ag
 - **Filesystem is truth.** Don't `INSERT` into SQLite directly — your changes will be overwritten on the next reconciliation.
 - **Keyword-only search.** No vector / semantic search in v0. Returns when corpus crosses ~2,000 articles.
 - **One package, one process.** The CLI and server are the same binary. Use `--name` to keep parallel instances separate.
-- **Renames keep inbound links** if the content is byte-identical. Watchers see `unlink`+`add` events within a short window; if the new file's content hash matches the deleted one (in the same space), sync automatically rewires inbound edges from the old path to the new. A rename + content edit in the same save would still orphan the edges — but a pure rename works without the redlinks queue surfacing it.
+- **Renames become red links.** Deleting `foo.html` (whether genuinely or as half of a rename) leaves every existing `<a href="foo.html">` in other articles pointing at a missing target — the index reflects that as a red link, ranked into the writer's queue. Filesystem is truth, so the index never rewrites links the articles themselves still spell the old way; a real rename is an explicit, file-editing operation that updates the source articles' hrefs.
 
 ## Pointers for working on the codebase itself
 

@@ -222,5 +222,4 @@ Tail with `tail -f <path> | jq` or query with `jq -c 'select(.event=="tool.call"
 - Cross-space link resolution — schema is ready (`relationships.target_path` is unconstrained text; URL scheme `/{other-space}/wiki/...` is committed). Writer prompt updates wait for **v0.5**.
 - Vector / semantic search — returns at **v0.5** when corpus crosses ~2,000 articles.
 - FTS5 / BM25 ranking (ripgrep gives substring matching only)
-- No auth / API keys
-- Move detection across content edits — a pure rename keeps inbound edges intact via the content-hash match in `recent-moves.ts`, but a rename combined with a content edit in the same save still orphans them
+- No auto rename refactor — deleting a wiki leaves its inbound edges as red links by design. A real rename is an explicit file-editing operation that walks every article with `<a href="old">` and rewrites the href; v0 doesn't ship that tool yet

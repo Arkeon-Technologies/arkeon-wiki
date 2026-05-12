@@ -29,7 +29,6 @@ import { join } from "node:path";
 import { runMigrations } from "../../src/schema/migrate.js";
 import { closeDb, createSql, initDb } from "../../src/server/lib/sql.js";
 import { removeByPath, syncFile, type Space } from "../../src/server/lib/sync.js";
-import { _clearRecentMovesForTest } from "../../src/server/lib/recent-moves.js";
 import { ALL_TOOLS } from "../../src/server/agents/tools.js";
 import { makeContext, readGateKey } from "../../src/server/agents/runtime.js";
 import { startScheduler } from "../../src/server/agents/scheduler.js";
@@ -54,7 +53,6 @@ async function setupWorkdir() {
 }
 
 beforeEach(async () => {
-  _clearRecentMovesForTest();
   await setupWorkdir();
 });
 
@@ -200,91 +198,14 @@ describe("read-gate", () => {
   });
 });
 
-describe("move detection (#118)", () => {
-  it("delete-then-create rename rewires inbound edges to the new path", async () => {
-    // Two articles: A links to B. B gets renamed. A's edge should
-    // follow B to its new path automatically.
-    const bContent = `<!doctype html>
-<meta charset="utf-8"><title>B</title>
-<meta name="label" content="B">
-<body><h1>B</h1></body>`;
-
-    writeFileSync(join(workdir, "wiki/b.html"), bContent);
-    writeFileSync(
-      join(workdir, "wiki/a.html"),
-      `<!doctype html>
-<meta charset="utf-8"><title>A</title>
-<meta name="label" content="A">
-<body><h1>A</h1><p>see <a href="b.html">B</a></p></body>`,
-    );
-    await syncFile(SPACE, "wiki/b.html");
-    await syncFile(SPACE, "wiki/a.html");
-
-    const sql = createSql();
-    let edge = await sql`
-      SELECT target_path FROM relationships
-      WHERE space_name = ${SPACE.name} AND source_path = 'wiki/a.html'
-    `;
-    expect(edge).toHaveLength(1);
-    expect(edge[0].target_path).toBe("wiki/b.html");
-
-    // Rename: delete old, create new with identical hash.
-    rmSync(join(workdir, "wiki/b.html"));
-    await removeByPath(SPACE, "wiki/b.html");
-    writeFileSync(join(workdir, "wiki/b-renamed.html"), bContent);
-    await syncFile(SPACE, "wiki/b-renamed.html");
-
-    edge = await sql`
-      SELECT target_path FROM relationships
-      WHERE space_name = ${SPACE.name} AND source_path = 'wiki/a.html'
-    `;
-    expect(edge).toHaveLength(1);
-    expect(edge[0].target_path).toBe("wiki/b-renamed.html");
-
-    // And the red-link queue should not surface it.
-    const reds = await sql`
-      SELECT r.target_path
-      FROM relationships r
-      LEFT JOIN entities e ON e.space_name = r.space_name AND e.source_path = r.target_path
-      WHERE r.space_name = ${SPACE.name} AND e.source_path IS NULL
-    `;
-    expect(reds).toHaveLength(0);
-  });
-
-  it("create-then-delete ordering (watcher reorder) still rewires correctly", async () => {
-    const bContent = `<!doctype html>
-<meta charset="utf-8"><title>B</title>
-<meta name="label" content="B">
-<body><h1>B</h1></body>`;
-
-    writeFileSync(join(workdir, "wiki/b.html"), bContent);
-    writeFileSync(
-      join(workdir, "wiki/a.html"),
-      `<!doctype html>
-<meta charset="utf-8"><title>A</title>
-<meta name="label" content="A">
-<body><h1>A</h1><p>see <a href="b.html">B</a></p></body>`,
-    );
-    await syncFile(SPACE, "wiki/b.html");
-    await syncFile(SPACE, "wiki/a.html");
-
-    // Create-then-delete: a watcher could reorder these. We simulate
-    // by creating the new file + sync first, then deleting the old.
-    writeFileSync(join(workdir, "wiki/b-renamed.html"), bContent);
-    await syncFile(SPACE, "wiki/b-renamed.html");
-    rmSync(join(workdir, "wiki/b.html"));
-    await removeByPath(SPACE, "wiki/b.html");
-
-    const sql = createSql();
-    const edge = await sql`
-      SELECT target_path FROM relationships
-      WHERE space_name = ${SPACE.name} AND source_path = 'wiki/a.html'
-    `;
-    expect(edge).toHaveLength(1);
-    expect(edge[0].target_path).toBe("wiki/b-renamed.html");
-  });
-
-  it("genuine deletion (no matching create) leaves inbound edges as red links", async () => {
+describe("deletion semantics", () => {
+  it("deletion leaves inbound edges as red links (no auto-rewire on rename)", async () => {
+    // Filesystem is the source of truth. When a target file is deleted —
+    // whether genuinely gone or "renamed" by the user — the inbound
+    // edges from articles still containing the old <a href> stay in the
+    // index pointing at the now-missing path. They surface as red
+    // links. A real rename is an explicit file-editing operation that
+    // updates the source articles' hrefs; that's not auto-handled in v0.
     const bContent = `<!doctype html>
 <meta charset="utf-8"><title>B</title>
 <meta name="label" content="B">
@@ -300,7 +221,6 @@ describe("move detection (#118)", () => {
     await syncFile(SPACE, "wiki/b.html");
     await syncFile(SPACE, "wiki/a.html");
 
-    // Just delete; no replacement.
     rmSync(join(workdir, "wiki/b.html"));
     await removeByPath(SPACE, "wiki/b.html");
 
@@ -312,6 +232,18 @@ describe("move detection (#118)", () => {
       WHERE r.space_name = ${SPACE.name} AND e.source_path IS NULL
     `;
     expect(reds.map((r) => r.target_path)).toEqual(["wiki/b.html"]);
+
+    // Even if a new file with identical content lands at a different
+    // path right after, the index does NOT auto-rewire. The edge in
+    // a.html still has href="b.html" — that's the source of truth.
+    writeFileSync(join(workdir, "wiki/b-renamed.html"), bContent);
+    await syncFile(SPACE, "wiki/b-renamed.html");
+
+    const edges = await sql`
+      SELECT target_path FROM relationships
+      WHERE space_name = ${SPACE.name} AND source_path = 'wiki/a.html'
+    `;
+    expect(edges.map((e) => e.target_path)).toEqual(["wiki/b.html"]);
   });
 });
 
