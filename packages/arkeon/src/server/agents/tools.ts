@@ -439,6 +439,7 @@ const editFileTool = defineTool("edit_file", {
 const CREATE_FILE_TEMPLATE = `<!DOCTYPE html>
 <html>
 <head>
+  <meta charset="utf-8">
   <title>Article title as a question</title>
   <meta name="label" content="Article title as a question">
   <meta name="short_description" content="One-sentence summary.">
@@ -453,12 +454,12 @@ const createFileTool = defineTool("create_file", {
   description:
     "Create a new wiki article from a complete HTML document. Path must " +
     "start with `wiki/` and end in `.html` (subfolders allowed). `html` " +
-    "must be a full document beginning with `<!DOCTYPE html>` or `<html>` " +
-    "and containing a non-empty `<title>` plus a `<body>`. Recommended: " +
-    "include `<meta name=\"label\">` and `<meta name=\"short_description\">` " +
-    "in `<head>` for better metadata. Other `<meta name=\"...\">` tags are " +
-    "indexed as entity properties. Fails if the path exists or if the HTML " +
-    "is structurally incomplete.",
+    "must be a full document beginning with `<!DOCTYPE html>` or `<html>`, " +
+    "containing a `<meta charset>` declaration, a non-empty `<title>`, and " +
+    "a `<body>`. Recommended: `<meta name=\"label\">` and " +
+    "`<meta name=\"short_description\">` in `<head>` for better metadata. " +
+    "Other `<meta name=\"...\">` tags are indexed as entity properties. " +
+    "Fails if the path exists or if the HTML is structurally incomplete.",
   inputSchema: z.object({
     path: z
       .string()
@@ -466,8 +467,9 @@ const createFileTool = defineTool("create_file", {
     html: z
       .string()
       .describe(
-        "Complete HTML document. Must start with `<!DOCTYPE html>` or `<html>` " +
-          "and contain a non-empty `<title>` and a `<body>`. Example:\n" +
+        "Complete HTML document. Must start with `<!DOCTYPE html>` or `<html>`, " +
+          "declare a `<meta charset>`, and contain a non-empty `<title>` and a " +
+          "`<body>`. Example:\n" +
           CREATE_FILE_TEMPLATE,
       ),
   }),
@@ -503,6 +505,8 @@ function formatCreateFileValidationError(
   const head =
     failure?.reason === "missing-wrapper"
       ? `create_file: html must be a complete HTML document — expected '<!DOCTYPE html>' or '<html>' at the top. Got: "${preview}…"`
+      : failure?.reason === "missing-charset"
+      ? `create_file: html must declare its encoding via <meta charset="utf-8"> in <head>. Without it, browsers default to Latin-1 and mojibake non-ASCII characters.`
       : failure?.reason === "missing-title"
       ? `create_file: html must contain a <title> element inside <head>.`
       : failure?.reason === "empty-title"

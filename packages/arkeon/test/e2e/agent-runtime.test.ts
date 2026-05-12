@@ -151,7 +151,7 @@ describe("read-gate", () => {
       path: "wiki/new.html",
       html: `<!DOCTYPE html>
 <html>
-<head><title>New</title><meta name="label" content="New"></head>
+<head><meta charset="utf-8"><title>New</title><meta name="label" content="New"></head>
 <body><h1>New</h1><p>x</p></body>
 </html>`,
     });
@@ -174,6 +174,19 @@ describe("read-gate", () => {
     expect(existsSync(join(workdir, "wiki/frag.html"))).toBe(false);
   });
 
+  it("create_file rejects a document missing <meta charset>", async () => {
+    const ctx = makeContext(SPACE, "writer");
+    const create = getTool("create_file", ctx);
+
+    await expect(
+      exec(create, {
+        path: "wiki/nocharset.html",
+        html: `<!DOCTYPE html><html><head><title>X</title></head><body><h1>X</h1></body></html>`,
+      }),
+    ).rejects.toThrow(/must declare its encoding via <meta charset/);
+    expect(existsSync(join(workdir, "wiki/nocharset.html"))).toBe(false);
+  });
+
   it("create_file rejects a document missing <title>", async () => {
     const ctx = makeContext(SPACE, "writer");
     const create = getTool("create_file", ctx);
@@ -181,7 +194,7 @@ describe("read-gate", () => {
     await expect(
       exec(create, {
         path: "wiki/notitle.html",
-        html: `<!DOCTYPE html><html><head></head><body><h1>X</h1></body></html>`,
+        html: `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body><h1>X</h1></body></html>`,
       }),
     ).rejects.toThrow(/must contain a <title>/);
   });

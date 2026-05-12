@@ -201,7 +201,7 @@ function countOccurrences(haystack: string, needle: string): number {
  * `create_file` tool turns each reason into a specific error with the
  * canonical template attached, so the model can recover on retry.
  *
- * The three requirements:
+ * The four requirements:
  *
  *   1. The document must start with `<!DOCTYPE>` or `<html>` (case-
  *      insensitive, leading whitespace ignored). Fragments are rejected
@@ -209,21 +209,31 @@ function countOccurrences(haystack: string, needle: string): number {
  *      envelope — and the smoke run showed that "envelope or no
  *      envelope" was where the model wasted tool calls.
  *
- *   2. The document must contain a `<title>` with non-empty trimmed
+ *   2. The document must declare its encoding via `<meta charset>`.
+ *      Without one, browsers fall back to Latin-1 and mojibake the
+ *      first em-dash / smart quote / non-ASCII byte they encounter.
+ *      Phase 0/1's `composeWikiHtmlShell` always emitted this; once
+ *      the agent took over authoring the envelope the guarantee
+ *      disappeared, so the validator carries it. Existence check only
+ *      — we accept any charset value the model writes (the bundled
+ *      template ships `utf-8`).
+ *
+ *   3. The document must contain a `<title>` with non-empty trimmed
  *      text. Without one, `syncFile` falls back to the filename slug,
  *      which silently destroys searchability. Required for the same
  *      reason a wiki without a label is broken — strict here is mercy.
  *
- *   3. The document must contain a `<body>` element. Articles without
+ *   4. The document must contain a `<body>` element. Articles without
  *      a body don't sync any inline `<a href>` edges, which defeats
  *      the relationship graph that makes this a wiki at all.
  *
- * Everything else — `<meta>` tags, charset, content shape — is the
+ * Everything else — `<meta name="...">` tags, content shape — is the
  * prompt's concern, not the tool's. The tool stays lenient on style
  * and strict on structure.
  */
 export type WikiHtmlValidationFailure =
   | { reason: "missing-wrapper" }
+  | { reason: "missing-charset" }
   | { reason: "missing-title" }
   | { reason: "empty-title" }
   | { reason: "missing-body" };
@@ -236,6 +246,10 @@ export function validateWikiHtmlDocument(
     return { reason: "missing-wrapper" };
   }
   const root = parseHtml(html);
+  const hasCharset = root
+    .querySelectorAll("meta")
+    .some((m) => m.getAttribute("charset") !== undefined);
+  if (!hasCharset) return { reason: "missing-charset" };
   const title = root.querySelector("title");
   if (!title) return { reason: "missing-title" };
   if (title.text.trim() === "") return { reason: "empty-title" };
