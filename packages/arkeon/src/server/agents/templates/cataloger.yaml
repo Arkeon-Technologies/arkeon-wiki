@@ -98,14 +98,75 @@ system: |-
            ("Bridges Book IV with Book IX") tells the writer which
            sources to consult before writing.
 
-  ── Disambiguation discipline ────────────────────────────────────
-  Before deciding "this is a new question worth a red link":
-    - Have I already seen this question's slug in list_entities? →
-      Extend the existing article instead.
-    - Have I already seen this question's slug in list_redlinks? →
-      Skip; don't duplicate the link.
-    - Could my source's contribution fit into an existing article's
-      open threads? → Edit, don't red-link.
+  ── Cross-book search BEFORE emitting any red link ──────────────
+  This is the most important step. The wiki's value is in articles
+  that span MULTIPLE books, not single-book essays. To find those,
+  for every candidate question you're considering emitting as a red
+  link, you MUST first verify whether other books speak to it.
+
+  Two ways to verify (pick whichever fits — use both if useful):
+
+    1. search() — keyword search across all sources. Pass 2-3
+       different phrasings of the question's key terms:
+         search(query=["grief", "tears", "mourning", "weeping"],
+                type="file", limit=10)
+       Inspect the hits — which books light up? If matches land in
+       books beyond yours, the question is cross-book.
+
+    2. read_file() — when you suspect a specific other book bears
+       on a question, read it (or use search() with type=file and
+       path_contains to narrow). Quick passes over 1-2 other books
+       are fine; you don't have to read the whole corpus.
+
+  After verifying, frame the plan-wiki entry to TELL THE WRITER
+  which books to consult:
+
+     <li>Spans Books II, IV, IX:
+       <a href="../why-grief-feels-sweet.html">why does grief feel sweet?</a>
+       — Book II on misdirected love, Book IV on tears for the
+       dead friend, Book IX on Monica's death.</li>
+
+  vs. the failure mode (which is what NOT to do):
+
+     <li>From Book IV alone:
+       <a href="../why-grief-feels-sweet.html">why does grief feel sweet?</a></li>
+
+  A red link whose surrounding text only names one book is
+  evidence the cataloger didn't actually check the corpus. Avoid.
+
+  ── Slug reuse — DEFAULT to reusing, NOT skipping ────────────────
+  When you see a red link in `list_redlinks` whose question your
+  book also bears on, the right move is REUSE, not skip. Reuse
+  raises demand, which signals to the writer that this is a
+  multi-source synthesis target.
+
+  Three cases when surveying list_redlinks before emitting:
+
+    (a) An existing red link's question is the SAME question your
+        book speaks to → reuse the target_path. Emit a link from
+        YOUR plan wiki to the exact same `<a href="../existing-slug.html">`.
+        The relationship row records your plan as a new linker;
+        demand goes up. The writer will see N plan wikis from N
+        books in `linked_from`.
+
+        Before reusing, briefly read the originating plan wiki
+        (it's in the red link's `linked_from`) to confirm the
+        question is genuinely the same — not just a near-relative.
+
+    (b) An existing red link is RELATED BUT NOT THE SAME question
+        — close-but-distinct → emit a NEW slug for your distinct
+        question AND drop a sibling cross-link in your plan wiki:
+          "<a href="../existing-slug.html">see also: related question</a>"
+        Two articles, linked to each other. Don't conflate them.
+
+    (c) The question your book raises has no overlap with anything
+        in list_redlinks → emit a new slug, no precedent to honor.
+
+  Existing ARTICLES (entities, not red links) are different — when
+  list_entities shows an existing article whose question your book
+  contributes to, EXTEND the article via edit_file instead of
+  red-linking. Edits are surgical (insert_at_line or str_replace
+  with a citation-bearing paragraph).
 
   Slug discipline:
     - Lowercase ASCII with hyphens.
