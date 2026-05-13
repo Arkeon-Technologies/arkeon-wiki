@@ -49,9 +49,9 @@ import type { Space } from "../lib/sync.js";
  */
 function resolveToolScope(
   ctx: AgentContext,
-  spaceArg: string | undefined,
+  spaceArg: string | null | undefined,
 ): Space[] {
-  if (spaceArg !== undefined && spaceArg !== "") {
+  if (spaceArg != null && spaceArg !== "") {
     if (ctx.allowedSpaces.length <= 1) return [ctx.space];
     return [resolveSpaceArg(spaceArg, ctx.allowedSpaces)];
   }
@@ -88,13 +88,13 @@ const readFileTool = defineTool("read_file", {
     "You MUST read a file before editing it; edit_file refuses unread paths.",
   inputSchema: z.object({
     path: z.string().describe("Relative path inside the space's watch_dir."),
-    space: z.string().optional().describe(SPACE_PARAM_DESC),
+    space: z.string().nullable().optional().describe(SPACE_PARAM_DESC),
   }),
   call: ({ path, space }, ctx) => {
     let target: Space;
     if (ctx.allowedSpaces.length <= 1) {
       target = ctx.space;
-    } else if (space !== undefined && space !== "") {
+    } else if (space != null && space !== "") {
       target = resolveSpaceArg(space, ctx.allowedSpaces);
     } else {
       throw new Error(
@@ -145,17 +145,33 @@ const searchTool = defineTool("search", {
       ),
     type: z
       .string()
+      .nullable()
       .optional()
-      .describe("Comma-separated: 'wiki', 'file'. Omit for all types."),
-    regex: z.boolean().optional().describe("Treat query as a regex."),
-    limit: z.number().int().positive().optional().describe("Max hits. Default 20."),
+      .describe(
+        "Comma-separated: 'wiki', 'file'. Pass null (or omit) for all types.",
+      ),
+    regex: z
+      .boolean()
+      .nullable()
+      .optional()
+      .describe("Treat query as a regex. Pass null (or omit) for substring."),
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .nullable()
+      .optional()
+      .describe("Max hits. Pass null (or omit) for the default of 20."),
     max_snippets_per_file: z
       .number()
       .int()
       .min(0)
+      .nullable()
       .optional()
-      .describe("Max line snippets per hit (default 3)."),
-    space: z.string().optional().describe(SPACE_PARAM_DESC),
+      .describe(
+        "Max line snippets per hit. Pass null (or omit) for the default of 3.",
+      ),
+    space: z.string().nullable().optional().describe(SPACE_PARAM_DESC),
   }),
   call: async (
     { query, type, regex, limit, max_snippets_per_file, space },
@@ -216,46 +232,98 @@ const listEntitiesTool = defineTool("list_entities", {
   inputSchema: z.object({
     type: z
       .string()
+      .nullable()
       .optional()
-      .describe("Comma-separated entity types: 'wiki' or 'file'. Omit for both."),
+      .describe(
+        "Comma-separated entity types: 'wiki' or 'file'. Pass null (or omit) for both.",
+      ),
     label_contains: z
       .string()
+      .nullable()
       .optional()
       .describe(
         "Case-insensitive substring match on the entity's label. Useful " +
-          "for checking whether a subject already exists under some variant.",
+          "for checking whether a subject already exists under some variant. " +
+          "Pass null (or omit) to skip the filter.",
       ),
     path_contains: z
       .string()
+      .nullable()
       .optional()
       .describe(
         "Case-insensitive substring match on `source_path`. Useful for " +
-          "filtering to a subdirectory (e.g. 'biology' to narrow articles).",
+          "filtering to a subdirectory (e.g. 'biology' to narrow articles). " +
+          "Pass null (or omit) to skip the filter.",
       ),
-    inbound_min: z.number().int().min(0).optional(),
+    inbound_min: z
+      .number()
+      .int()
+      .min(0)
+      .nullable()
+      .optional()
+      .describe("Pass null (or omit) to skip the filter."),
     inbound_max: z
       .number()
       .int()
       .min(0)
+      .nullable()
       .optional()
       .describe(
-        "Combine with type='file' inbound_max=0 to find sources nothing has cited yet.",
+        "Combine with type='file' inbound_max=0 to find sources nothing has cited yet. " +
+          "Pass null (or omit) for no upper bound.",
       ),
-    outbound_min: z.number().int().min(0).optional(),
-    outbound_max: z.number().int().min(0).optional(),
-    updated_since: z.string().optional().describe("ISO timestamp."),
+    outbound_min: z
+      .number()
+      .int()
+      .min(0)
+      .nullable()
+      .optional()
+      .describe("Pass null (or omit) to skip the filter."),
+    outbound_max: z
+      .number()
+      .int()
+      .min(0)
+      .nullable()
+      .optional()
+      .describe("Pass null (or omit) for no upper bound."),
+    updated_since: z
+      .string()
+      .nullable()
+      .optional()
+      .describe("ISO timestamp. Pass null (or omit) to skip the filter."),
     edited_by_role: z
       .string()
+      .nullable()
       .optional()
-      .describe("Filter on the most recent edit's by_role ('writer', 'human', etc.)."),
+      .describe(
+        "Filter on the most recent edit's by_role ('writer', 'human', etc.). " +
+          "Pass null (or omit) to skip the filter.",
+      ),
     sort: z
       .enum(["updated_at", "label", "inbound", "outbound"])
+      .nullable()
       .optional()
-      .describe("Default 'updated_at' (newest first)."),
-    include_counts: z.boolean().optional(),
-    limit: z.number().int().positive().optional().describe("Default 100, max 10000."),
-    offset: z.number().int().min(0).optional(),
-    space: z.string().optional().describe(SPACE_PARAM_DESC),
+      .describe("Default 'updated_at' (newest first). Pass null (or omit) for default."),
+    include_counts: z
+      .boolean()
+      .nullable()
+      .optional()
+      .describe("Pass null (or omit) to skip counts."),
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .nullable()
+      .optional()
+      .describe("Default 100, max 10000. Pass null (or omit) for default."),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .nullable()
+      .optional()
+      .describe("Pass null (or omit) for 0."),
+    space: z.string().nullable().optional().describe(SPACE_PARAM_DESC),
   }),
   call: async (input, ctx) => {
     let types: EntityType[] | undefined;
@@ -314,9 +382,21 @@ const listRedLinksTool = defineTool("list_redlinks", {
     "articles want this concept defined. `linked_from` shows the last 3 " +
     "source articles that pointed at the missing target.",
   inputSchema: z.object({
-    limit: z.number().int().positive().optional().describe("Default 100."),
-    offset: z.number().int().min(0).optional(),
-    space: z.string().optional().describe(SPACE_PARAM_DESC),
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .nullable()
+      .optional()
+      .describe("Default 100. Pass null (or omit) for default."),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .nullable()
+      .optional()
+      .describe("Pass null (or omit) for 0."),
+    space: z.string().nullable().optional().describe(SPACE_PARAM_DESC),
   }),
   call: async ({ limit, offset, space }, ctx) => {
     const targets = resolveToolScope(ctx, space);
@@ -359,26 +439,37 @@ const editFileTool = defineTool("edit_file", {
       .number()
       .int()
       .positive()
+      .nullable()
       .optional()
-      .describe("REQUIRED when mode='insert_at_line'. 1-indexed."),
+      .describe(
+        "REQUIRED when mode='insert_at_line'. 1-indexed. Pass null (or omit) for str_replace mode.",
+      ),
     content: z
       .string()
+      .nullable()
       .optional()
       .describe(
         "REQUIRED when mode='insert_at_line'. One or more lines to insert " +
-          "BEFORE `line_number`. Use \\n for line breaks.",
+          "BEFORE `line_number`. Use \\n for line breaks. " +
+          "Pass null (or omit) for str_replace mode.",
       ),
     old_string: z
       .string()
+      .nullable()
       .optional()
       .describe(
         "REQUIRED when mode='str_replace'. The exact span to substitute. " +
-          "Must match exactly once. Do NOT include line-number prefixes from read_file output.",
+          "Must match exactly once. Do NOT include line-number prefixes from read_file output. " +
+          "Pass null (or omit) for insert_at_line mode.",
       ),
     new_string: z
       .string()
+      .nullable()
       .optional()
-      .describe("REQUIRED when mode='str_replace'. The substitute content."),
+      .describe(
+        "REQUIRED when mode='str_replace'. The substitute content. " +
+          "Pass null (or omit) for insert_at_line mode.",
+      ),
   }),
   call: async (input, ctx) => {
     const key = readGateKey(ctx.space.name, input.path);
