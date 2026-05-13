@@ -109,17 +109,24 @@ curl "$API/$SPACE/redlinks?limit=20"
 curl "$API/$SPACE/entities?type=file&inbound_max=0&include=counts"
 ```
 
-## The writer agent
+## The editor, proposer, and writer agents
 
-The bundled `writer` role (`packages/arkeon/src/server/agents/templates/writer.yaml`) runs on a cron schedule (`*/15 * * * *` by default). Each tick it:
+Three bundled roles share the writing job, each with a single responsibility:
 
-1. Surveys two queues: unprocessed sources (`list_entities?type=file&inbound_max=0`) and red links (`list_redlinks`).
-2. Reads the most interesting source or 1-2 of the articles that want a red-link target defined.
-3. Articulates the driving question.
-4. Searches for an existing article addressing it.
-5. Either **extends** the existing article via `edit_file` (`insert_at_line` or `str_replace`, both read-gated) or **creates** a new one via `create_file` (the agent authors a complete HTML document — `<!DOCTYPE>`/`<html>` wrapper, non-empty `<title>`, `<body>` — and the tool validates structure and writes it verbatim).
+- **`editor`** (`templates/editor.yaml`, cron `0 */1 * * *`) — source-driven. Picks one source the editor hasn't tagged at its current `source_hash`, surveys existing articles via `list_entities` + `properties.short_description`, and for each article the source bears on, either (a) inserts a citation-bearing paragraph into Evidence / revises the Current Answer via `edit_file`, or (b) appends a red-link `<li>` to the article's `<h2>Open threads</h2>`. Tags the source `editor.processed_hash=<source_hash>` when done. Never creates new articles.
 
-Default model: `gpt-5.4-mini`, `reasoning_effort: low`. Override via `.arkeon/agents.yaml` if you want a different model or schedule.
+- **`proposer`** (`templates/proposer.yaml`, cron `0 */1 * * *`) — also source-driven, but **data-gated on the editor's tag**: picks one source where `has_tag=editor.processed_hash AND not_has_tag=proposer.processed_hash`. Calls `get_entity` on the source path to see which articles the editor already integrated this source into (`entity.inbound`). Identifies the GAP — questions the source raises that no existing article (and no queued red link) covers. Writes a plan wiki at `wiki/_plans/<source-path>.html` listing those gaps as red links. Tags the source `proposer.processed_hash=<source_hash>`. Never edits existing articles, never writes article bodies.
+
+- **`writer`** (`templates/writer.yaml`, cron `*/15 * * * *`) — red-link-driven. Picks the highest-demand entry from `list_redlinks`, follows its linkers back to source files, and creates the article via `create_file`. Only ever creates — `edit_file` is not in its whitelist. Empty red-link queue → no-op, no fallback "invent something" branch.
+
+The pipeline is **sequential per source** by data dependency: editor marks → proposer eligible to run → both contribute red links → writer drains them. Content changes invalidate both source markers so the source re-enters both queues automatically.
+
+Two tagging patterns coexist on the `entities.tags` JSON column:
+
+- **Processing markers** (the canonical "I did this" idiom): `mark_processed(path, role)` writes `tags["${role}.processed_hash"] = source_hash` on the server side. The agent never touches the hash. Query queues with `list_entities({ tag_outdated: "<role>.processed_hash" })` (needs processing — absent OR stale) or `tag_current: "<role>.processed_hash"` (processed at current content). Hash invalidation is automatic.
+- **Free-form state** (for future roles that need richer bookkeeping — categorization, status enums, severities): use `tag_entity(path, key, value)` and the existing `has_tag` / `not_has_tag` / `tag_equals` filters. Not hash-validated; the agent is responsible for re-tagging when content changes if that matters.
+
+Default model for all three: `gpt-5.4-mini`, `reasoning_effort: low`. The single-role-per-tick decomposition lets a small model handle each job reliably (the previous single-writer role needed `reasoning_effort: medium` for the integrated workload). Override per role in `.arkeon/agents.yaml` for a stronger model or different cadence.
 
 **First-run cost**: a fresh `arkeon-wiki up` against a corpus with `OPENAI_API_KEY` set will start spending API credit within 15 minutes. Override the cadence in `.arkeon/agents.yaml` (`cron: "0 0 31 2 *"` is the canonical "never fire") to inspect behavior before letting it run.
 

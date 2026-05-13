@@ -7,15 +7,18 @@
  * Tools post-v0:
  *   - read_file     (line-numbered output for everything; registers in
  *                    ctx.readPaths so edit_file is allowed)
+ *   - read_files    (batched read_file, up to 10 paths per call)
  *   - list_entities (path-based; filterable wiki/file listing)
  *   - list_redlinks (link targets without a matching entity)
  *   - get_entity    (single entity with full inbound + outbound edges)
+ *   - get_entities  (batched get_entity, up to 10 paths per call)
  *   - search        (keyword via ripgrep)
  *   - edit_file     (insert_at_line | str_replace; read-gated)
  *   - create_file   (new wiki — accepts full HTML or inner fragment)
  *   - delete_wiki   (guarded full-file deletion; not in writer's whitelist)
  *   - tag_entity    (set/clear agent bookkeeping in entities.tags; survives
  *                    file re-syncs, used for per-role processing queues)
+ *   - mark_processed (sugar over tag_entity that fills source_hash for you)
  */
 
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -131,6 +134,85 @@ const readFileTool = defineTool("read_file", {
   }),
 });
 
+// ── read_files (batched) ──────────────────────────────────────────
+
+const MAX_BATCH_READ = 10;
+
+const readFilesTool = defineTool("read_files", {
+  description:
+    "Batched read_file. Read up to " +
+    String(MAX_BATCH_READ) +
+    " files in one call. Each successful read registers its path in the " +
+    "per-run read-gate just like read_file. Returns an array of results " +
+    "in the same order as the input `paths`; failures are per-item " +
+    "`{path, error}` rather than aborting the whole call. Use this " +
+    "instead of N separate read_file turns when you already know which " +
+    "files you need (e.g. all linkers of a red link, multiple sources " +
+    "cited by an article).",
+  inputSchema: z.object({
+    paths: z
+      .array(z.string())
+      .min(1)
+      .max(MAX_BATCH_READ)
+      .describe(
+        "Relative paths inside the space's watch_dir. 1.." +
+          String(MAX_BATCH_READ) +
+          " entries.",
+      ),
+    space: z.string().nullable().optional().describe(SPACE_PARAM_DESC),
+  }),
+  call: ({ paths, space }, ctx) => {
+    let target: Space;
+    if (ctx.allowedSpaces.length <= 1) {
+      target = ctx.space;
+    } else if (space != null && space !== "") {
+      target = resolveSpaceArg(space, ctx.allowedSpaces);
+    } else {
+      throw new Error(
+        `read_files: this role can read from multiple spaces, so the ` +
+          `\`space\` argument is required. Allowed: ${describeAllowed(ctx.allowedSpaces)}.`,
+      );
+    }
+
+    const results = paths.map((path) => {
+      try {
+        const absPath = safeResolve(target.watch_dir, path);
+        if (!existsSync(absPath)) {
+          return {
+            path,
+            space: target.name,
+            error: `does not exist in space '${target.name}'`,
+          };
+        }
+        if (statSync(absPath).isDirectory()) {
+          return { path, space: target.name, error: "is a directory" };
+        }
+        const raw = readFileSync(absPath, "utf-8");
+        ctx.readPaths.add(readGateKey(target.name, path));
+        return {
+          path,
+          space: target.name,
+          content: withLineNumbers(raw),
+        };
+      } catch (err) {
+        return {
+          path,
+          space: target.name,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    });
+
+    return { space: target.name, results };
+  },
+  summarize: (r) => ({
+    space: r.space,
+    count: r.results.length,
+    ok: r.results.filter((x) => !x.error).length,
+    errors: r.results.filter((x) => x.error).length,
+  }),
+});
+
 // ── search ────────────────────────────────────────────────────────
 
 const searchTool = defineTool("search", {
@@ -233,8 +315,11 @@ const listEntitiesTool = defineTool("list_entities", {
     "Use to check whether a subject already has a wiki, find unprocessed " +
     "sources (type=file inbound_max=0 → 'nothing links to this file yet'), " +
     "or surface recently-updated articles. Each row carries `space_name`, " +
-    "`source_path`, `type`, `label`, `properties`, `tags`, and optional " +
-    "`counts.inbound`/`counts.outbound`. `properties` is file-derived " +
+    "`source_path`, `type`, `label`, `source_hash`, `properties`, `tags`, " +
+    "and optional `counts.inbound`/`counts.outbound`. `source_hash` is the " +
+    "SHA-256 of the file content at last sync — pass it as the `value` to " +
+    "`tag_entity` when marking 'I processed this' so content-change " +
+    "invalidation works automatically. `properties` is file-derived " +
     "(rebuilt on every sync from <meta> tags); `tags` is agent-applied " +
     "bookkeeping (set via `tag_entity`) and persists across content edits. " +
     "Filter by `has_tag` / `not_has_tag` / `tag_equals` to drive " +
@@ -334,9 +419,36 @@ const listEntitiesTool = defineTool("list_entities", {
       .optional()
       .describe(
         "Restrict to entities where tag `key` equals exactly `value`. " +
-          "Use for content-hash invalidation (e.g. tag_equals " +
-          "{key:'editor.processed_hash', value:<current source_hash>} " +
-          "returns sources the editor processed at the current content). " +
+          "Use this for free-form tag matching with a literal value. " +
+          "For processing markers (where you want the value compared to " +
+          "the entity's own source_hash), prefer `tag_current` or " +
+          "`tag_outdated` instead. " +
+          "Pass null (or omit) to skip the filter.",
+      ),
+    tag_current: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        "Restrict to entities where this tag key's value equals the " +
+          "entity's CURRENT source_hash — i.e. the entity has been " +
+          "processed and the content has not changed since. Use for " +
+          "gate conditions in a pipeline (e.g. proposer needs " +
+          "tag_current='editor.processed_hash' to ensure the editor " +
+          "has finished at the current source content). " +
+          "Pass null (or omit) to skip the filter.",
+      ),
+    tag_outdated: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        "Restrict to entities where this tag key is ABSENT or its value " +
+          "DOES NOT equal the entity's current source_hash — i.e. the " +
+          "entity has never been processed OR its content has changed " +
+          "since the last pass. This is the canonical 'needs processing' " +
+          "queue filter (e.g. tag_outdated='editor.processed_hash' " +
+          "returns the editor's full work queue). " +
           "Pass null (or omit) to skip the filter.",
       ),
     sort: z
@@ -393,6 +505,8 @@ const listEntitiesTool = defineTool("list_entities", {
         has_tag: input.has_tag,
         not_has_tag: input.not_has_tag,
         tag_equals: input.tag_equals,
+        tag_current: input.tag_current,
+        tag_outdated: input.tag_outdated,
         sort: input.sort,
         include_counts: input.include_counts,
         limit: input.limit,
@@ -531,6 +645,68 @@ const getEntityTool = defineTool("get_entity", {
 function normalizeEntityPath(p: string): string {
   return p.replace(/^\/+/, "").split("#")[0]!.split("?")[0]!;
 }
+
+// ── get_entities (batched) ────────────────────────────────────────
+
+const MAX_BATCH_GET_ENTITY = 10;
+
+const getEntitiesTool = defineTool("get_entities", {
+  description:
+    "Batched get_entity. Fetch up to " +
+    String(MAX_BATCH_GET_ENTITY) +
+    " entities (with full inbound/outbound neighborhoods) in one call. " +
+    "Returns an array of results in the same order as the input `paths`; " +
+    "missing entities come back as `{found: false, path}` rather than " +
+    "aborting the call. Use when surveying multiple linkers of a red " +
+    "link, multiple sources cited by an article, or comparing several " +
+    "entities at once.",
+  inputSchema: z.object({
+    paths: z
+      .array(z.string())
+      .min(1)
+      .max(MAX_BATCH_GET_ENTITY)
+      .describe(
+        "Relative paths inside the space's watch_dir. 1.." +
+          String(MAX_BATCH_GET_ENTITY) +
+          " entries.",
+      ),
+    space: z.string().nullable().optional().describe(SPACE_PARAM_DESC),
+  }),
+  call: async ({ paths, space }, ctx) => {
+    let target: Space;
+    if (ctx.allowedSpaces.length <= 1) {
+      target = ctx.space;
+    } else if (space != null && space !== "") {
+      target = resolveSpaceArg(space, ctx.allowedSpaces);
+    } else {
+      throw new Error(
+        `get_entities: this role can read from multiple spaces, so the ` +
+          `\`space\` argument is required. Allowed: ${describeAllowed(ctx.allowedSpaces)}.`,
+      );
+    }
+    const results = await Promise.all(
+      paths.map(async (path) => {
+        const normalized = normalizeEntityPath(path);
+        const entity = await getEntity(target.name, normalized);
+        if (!entity) {
+          return {
+            found: false as const,
+            path: normalized,
+            space: target.name,
+          };
+        }
+        return { found: true as const, entity };
+      }),
+    );
+    return { space: target.name, results };
+  },
+  summarize: (r) => ({
+    space: r.space,
+    count: r.results.length,
+    found: r.results.filter((x) => x.found).length,
+    missing: r.results.filter((x) => !x.found).length,
+  }),
+});
 
 // ── edit_file ─────────────────────────────────────────────────────
 
@@ -830,16 +1006,91 @@ const tagEntityTool = defineTool("tag_entity", {
   }),
 });
 
+// ── mark_processed ────────────────────────────────────────────────
+
+const markProcessedTool = defineTool("mark_processed", {
+  description:
+    "Mark that this role has processed an entity at its current content. " +
+    "Sugar over `tag_entity` for the canonical 'I did this' pattern — the " +
+    "server reads the entity's current `source_hash` and stores it as the " +
+    "tag value under key `<role>.processed_hash`. The agent never handles " +
+    "the hash itself, eliminating a class of copy-paste bugs. Pair with " +
+    "the `tag_outdated` filter on `list_entities` to query 'sources that " +
+    "need (re)processing' — content-change invalidation is automatic " +
+    "because when a file's bytes change its `source_hash` changes, the " +
+    "stored tag no longer matches, and the entity re-enters the queue. " +
+    "For free-form (non-hash) tagging, use `tag_entity` instead.",
+  inputSchema: z.object({
+    path: z
+      .string()
+      .describe("Relative path of the entity to mark (wiki or source)."),
+    role: z
+      .string()
+      .min(1)
+      .describe(
+        "Role name (e.g. 'editor', 'proposer'). Stored as the tag key " +
+          "'<role>.processed_hash'.",
+      ),
+    space: z.string().nullable().optional().describe(SPACE_PARAM_DESC),
+  }),
+  call: async ({ path, role, space }, ctx) => {
+    let target: Space;
+    if (ctx.allowedSpaces.length <= 1) {
+      target = ctx.space;
+    } else if (space != null && space !== "") {
+      target = resolveSpaceArg(space, ctx.allowedSpaces);
+    } else {
+      throw new Error(
+        `mark_processed: this role can write to multiple spaces, so the ` +
+          `\`space\` argument is required. Allowed: ${describeAllowed(ctx.allowedSpaces)}.`,
+      );
+    }
+    const entity = await getEntity(target.name, path);
+    if (!entity) {
+      throw new Error(
+        `mark_processed: no entity at '${path}' in space '${target.name}'`,
+      );
+    }
+    const key = `${role}.processed_hash`;
+    const matched = await setEntityTag(
+      target.name,
+      path,
+      key,
+      entity.source_hash,
+    );
+    if (!matched) {
+      throw new Error(
+        `mark_processed: failed to write tag on '${path}' in space '${target.name}'`,
+      );
+    }
+    return {
+      path,
+      space: target.name,
+      role,
+      key,
+      source_hash: entity.source_hash,
+    };
+  },
+  summarize: (r) => ({
+    path: r.path,
+    space: r.space,
+    role: r.role,
+  }),
+});
+
 // ── Registry ──────────────────────────────────────────────────────
 
 export const ALL_TOOLS: Record<string, ToolFactory> = {
   read_file: readFileTool,
+  read_files: readFilesTool,
   search: searchTool,
   list_entities: listEntitiesTool,
   list_redlinks: listRedLinksTool,
   get_entity: getEntityTool,
+  get_entities: getEntitiesTool,
   edit_file: editFileTool,
   create_file: createFileTool,
   delete_wiki: deleteWikiTool,
   tag_entity: tagEntityTool,
+  mark_processed: markProcessedTool,
 };
