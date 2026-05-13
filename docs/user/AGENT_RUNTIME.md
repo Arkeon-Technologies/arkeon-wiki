@@ -147,7 +147,7 @@ The available tools are:
 |---|---|
 | `list_entities` | Frontmatter-aware enumeration: filter by `subject_type`, `status`, `label_contains` (case-insensitive substring match — `"Baker Street"` finds `"221B Baker Street"`). |
 | `search` | Keyword search via ripgrep, returns ranked entity hits with snippets. |
-| `read_file` | Read a file's contents (line-numbered). |
+| `read_file` | Read a file's contents (markdown returns parsed frontmatter + body). |
 | `edit_file` | The single file-mutation tool. Three modes dispatched on `search` and whether the path exists:<br>**CREATE** — empty `search`, file doesn't exist → creates the file with `replace` as content.<br>**APPEND** — empty `search`, file exists → appends `replace` to the body.<br>**REPLACE** — non-empty `search` (must match exactly once) → Aider-style SEARCH/REPLACE.<br>There's no overwrite path; to change a wiki's label, REPLACE just the `label:` line. |
 
 ### Prompt template variables
