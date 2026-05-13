@@ -10,7 +10,7 @@
  * sibling directory via the __dirname of the bundled file, which
  * lands here.
  *
- * Intentionally dumb — mirrors copy-explorer.ts. If you find yourself
+ * Intentionally dumb — mirrors copy-agent-templates.ts. If you find yourself
  * adding filtering or transformation, stop and push that into the
  * source tree instead.
  */

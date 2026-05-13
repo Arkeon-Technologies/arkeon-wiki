@@ -6,14 +6,12 @@ on:
     branches: [main, fs-first]
     paths:
       - 'packages/arkeon/**'
-      - 'packages/explorer/**'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/build-push.yml'
   pull_request:
     paths:
       - 'packages/arkeon/**'
-      - 'packages/explorer/**'
       - 'package.json'
       - 'package-lock.json'
       - '.github/workflows/build-push.yml'
