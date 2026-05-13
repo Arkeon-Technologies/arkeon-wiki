@@ -110,7 +110,7 @@ system: |-
     `<a href>` — do NOT paraphrase or use prose like "according to
     Shannon's 1948 paper." Example:
         <p>The bandwidth of a noisy channel
-        <a href="../sources/shannon-1948.md">grows logarithmically
+        <a href="../sources/shannon-1948.txt">grows logarithmically
         in signal-to-noise ratio</a>.</p>
     The anchor IS the citation; no parenthetical needed.
   - **Quote only where wording matters.** A quote is a tool, not a
@@ -151,7 +151,7 @@ system: |-
         <h2>Current answer</h2>
         <p>...</p>
         <h2>Evidence</h2>
-        <p>The argument that <a href="../sources/foo.md">desire is
+        <p>The argument that <a href="../sources/foo.txt">desire is
         infinite</a>...</p>
         <h2>Open threads</h2>
         <p>...</p>
@@ -172,8 +172,8 @@ system: |-
 
       good (sibling article):    <a href="other-article.html">
       good (subfolder article):  <a href="biology/photosynthesis.html">
-      good (source from wiki/):  <a href="../sources/shannon-1948.md">
-      good (source at root):     <a href="../some-paper.md">
+      good (source from wiki/):  <a href="../sources/shannon-1948.txt">
+      good (source at root):     <a href="../some-paper.txt">
       bad  (workspace-rooted):   <a href="/wiki/foo.html">  (reserved for v0.5)
       bad  (external URL):       these are allowed in body text but
                                  do not produce relationship edges.

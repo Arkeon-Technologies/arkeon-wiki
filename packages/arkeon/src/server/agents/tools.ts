@@ -446,7 +446,7 @@ const CREATE_FILE_TEMPLATE = `<!DOCTYPE html>
 </head>
 <body>
   <h1>Article title as a question</h1>
-  <p>Article content with inline <a href="../sources/foo.md">citations</a>.</p>
+  <p>Article content with inline <a href="../sources/foo.txt">citations</a>.</p>
 </body>
 </html>`;
 

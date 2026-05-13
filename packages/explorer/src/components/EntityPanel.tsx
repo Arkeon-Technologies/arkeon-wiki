@@ -5,7 +5,6 @@ import { useState, useRef, useCallback } from 'react'
 import type { LoadedEntity, OutgoingRel, IncomingRel } from '@/lib/arke-types'
 import { parseProps } from '@/lib/arke-types'
 import { getTypeColor } from '@/lib/type-colors'
-import { parseFrontmatter } from '@/lib/frontmatter'
 
 interface EntityPanelProps {
   entity: LoadedEntity
@@ -120,9 +119,7 @@ function WikiContent({
     return nodes
   }
 
-  // Strip frontmatter from content for display
-  const { body } = parseFrontmatter(content)
-  const lines = body.split('\n')
+  const lines = content.split('\n')
   const headings: Array<{ title: string; slug: string }> = []
   const blocks: React.ReactElement[] = []
   let paraLines: string[] = []
