@@ -2,7 +2,7 @@
 
 ## Unit tests
 
-`packages/arkeon/test/unit/` — isolated tests for parsers and utilities (frontmatter parsing, markdown link extraction, search ranking).
+`packages/arkeon/test/unit/` — isolated tests for parsers and utilities (HTML meta extraction, HTML link resolution, search ranking).
 
 ## E2e tests
 

@@ -16,11 +16,10 @@
     "dist"
   ],
   "scripts": {
-    "bundle-explorer": "npm run build -w @arkeon-wiki/explorer && tsx scripts/copy-explorer.ts",
     "bundle-schema": "tsx scripts/copy-schema.ts",
     "bundle-agent-templates": "tsx scripts/copy-agent-templates.ts",
     "prepack": "npm run build",
-    "build": "tsup && npm run bundle-explorer && npm run bundle-schema && npm run bundle-agent-templates",
+    "build": "tsup && npm run bundle-schema && npm run bundle-agent-templates",
     "dev": "tsup --watch",
     "start": "node dist/index.js",
     "test": "vitest run",

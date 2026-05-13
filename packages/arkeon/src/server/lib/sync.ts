@@ -25,7 +25,6 @@ import { createHash } from "node:crypto";
 
 import { createSql, withTransaction, type SqlClient } from "./sql.js";
 import { getEditContext, type EditKind } from "./edit-context.js";
-import { parseFrontmatter } from "./frontmatter.js";
 import { parseHtmlMeta } from "./html-meta.js";
 import { extractHtmlLinks } from "./html-links.js";
 
@@ -155,24 +154,9 @@ async function syncSource(
 ): Promise<SyncResult> {
   const label = basename(relativePath, extname(relativePath));
 
-  // Sources are opaque blobs in the index. Markdown sources get their
-  // YAML frontmatter parsed into properties (the Augustine pattern —
-  // `book: 5, section: 8`); everything else gets file_type only.
   const properties: Record<string, unknown> = {
     file_type: extname(relativePath).slice(1) || "unknown",
   };
-  if (relativePath.endsWith(".md")) {
-    try {
-      const fm = parseFrontmatter(content);
-      Object.assign(properties, fm.properties);
-    } catch (err) {
-      // Malformed YAML in a source file is recoverable — we still
-      // index the file, just without its frontmatter properties.
-      console.warn(
-        `[sync] malformed frontmatter in ${relativePath}: ${(err as Error).message} — indexing without properties`,
-      );
-    }
-  }
 
   const propsJson = JSON.stringify(properties);
   const sql = createSql();

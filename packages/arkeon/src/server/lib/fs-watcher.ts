@@ -25,7 +25,7 @@ type SchedulerHandle = Awaited<ReturnType<typeof startScheduler>>;
 const IGNORE_DIRS = new Set([".arkeon", ".git", "node_modules", ".claude", "__pycache__", ".venv"]);
 
 // File extensions we index. Anything else is invisible to the system.
-const INDEX_EXTENSIONS = new Set([".md", ".txt", ".json", ".csv", ".xml", ".html", ".rst"]);
+const INDEX_EXTENSIONS = new Set([".txt", ".json", ".csv", ".xml", ".html", ".rst"]);
 
 const watchers = new Map<string, FSWatcher>();
 const schedulers = new Map<string, SchedulerHandle>();

@@ -60,7 +60,7 @@ Parsing uses a real HTML parser (`node-html-parser`), not regex — apostrophe-i
 
 There is no YAML frontmatter on wikis, no `[[wikilink]]` syntax, no placeholder rows. A link to a target that doesn't exist on disk is a **red link** — a `relationships` row with no matching `entities` row. Resolution is a LEFT JOIN at query time; surfaced via `GET /{space}/redlinks` and the `list_redlinks` agent tool.
 
-Source files (anywhere outside `wiki/`) are indexed as `type='file'`. Markdown sources (`.md`) have their YAML frontmatter parsed into `properties` (the Augustine corpus pattern — `book: 5, section: 8`). Other source types (`.txt`, `.json`, `.csv`, `.xml`, `.rst`, `.html` outside `wiki/`) get only `{file_type: <ext>}`.
+Source files (anywhere outside `wiki/`) are indexed as `type='file'` with `{file_type: <ext>}`. Supported extensions: `.txt`, `.json`, `.csv`, `.xml`, `.rst`, `.html` outside `wiki/`. Markdown is intentionally unsupported — HTML is the only authoring format. Structured metadata lives in `<meta name="X" content="Y">` tags on the wiki itself.
 
 ## Writing (the `writer` role)
 
@@ -117,7 +117,7 @@ No auth, no actors, no versioning.
 
 ## Key modules
 
-- `src/server/lib/sync.ts` — `syncFile()`: read a file, parse HTML wiki or markdown source, upsert entity, extract `<a href>` edges. Single-pass — relationships rows have no FK on `target_path` so out-of-order syncs resolve at query time.
+- `src/server/lib/sync.ts` — `syncFile()`: read a file, parse HTML wiki or opaque source, upsert entity, extract `<a href>` edges. Single-pass — relationships rows have no FK on `target_path` so out-of-order syncs resolve at query time.
 - `src/server/lib/html-meta.ts` — `parseHtmlMeta(html)` → `{title, properties}`.
 - `src/server/lib/html-links.ts` — `extractHtmlLinks(html, fromPath)` + `resolveHref(href, fromPath)`. Drops external URLs, server-absolute paths, fragments, escaping `..`.
 - `src/server/lib/fs-watcher.ts` — `node:fs.watch` recursive + 500ms debounce, calls `syncFile()` on changes, `removeByPath()` on deletes. Also bootstraps the per-space agent scheduler.

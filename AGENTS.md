@@ -4,7 +4,7 @@ If you're an AI coding assistant operating in this repo or in a directory bound 
 
 ## What arkeon-wiki is
 
-A filesystem-first knowledge graph. A user points the daemon at one or more directories ("spaces"). The daemon watches files, parses HTML wikis under `wiki/` and any markdown sources, walks `<a href>` links, and indexes everything into a local SQLite database keyed by `(space_name, source_path)`. The filesystem is the source of truth — SQLite is the index.
+A filesystem-first knowledge graph. A user points the daemon at one or more directories ("spaces"). The daemon watches files, parses HTML wikis under `wiki/`, walks `<a href>` links, and indexes everything into a local SQLite database keyed by `(space_name, source_path)`. The filesystem is the source of truth — SQLite is the index.
 
 Six tables live in SQLite: `spaces`, `entities`, `relationships`, `entity_edits`, plus `conversations` + `conversation_messages` reserved for the Phase 3 chat surface. No auth, no queues, no actors. One process, one binary.
 
@@ -72,7 +72,7 @@ Sync extracts:
 
 There is no YAML frontmatter on wikis, no `[[wikilink]]` syntax, no placeholder rows. A link to a target that doesn't exist on disk is a **red link** — a `relationships` row with no matching `entities` row. Surfaced via `/{space}/redlinks` and the `list_redlinks` tool.
 
-Source files (anywhere outside `wiki/`) are indexed as `type='file'`. Markdown sources with YAML frontmatter have their frontmatter parsed into `properties`. Other source types (txt, json, html outside `wiki/`, csv, xml, rst) get only `{file_type: <ext>}`.
+Source files (anywhere outside `wiki/`) are indexed as `type='file'` with `{file_type: <ext>}`. Supported extensions: `txt`, `json`, `html` outside `wiki/`, `csv`, `xml`, `rst`. Markdown is intentionally unsupported — HTML is the only authoring format. Structured metadata belongs on `<meta name="...">` tags inside the wiki.
 
 ## How to query the graph from an AI session
 

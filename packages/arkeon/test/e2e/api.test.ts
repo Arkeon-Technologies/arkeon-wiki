@@ -7,7 +7,7 @@
  * Boots a real arkeon-wiki API server against a fresh SQLite file +
  * tmp watch dir. Exercises the full happy path:
  *   - create space
- *   - watcher syncs HTML wikis + markdown source
+ *   - watcher syncs HTML wikis + plain-text source
  *   - GET /:space/entities returns path-keyed rows
  *   - GET /:space/entities/* fetches one with relationships
  *   - GET /:space/redlinks aggregates missing targets
@@ -49,7 +49,7 @@ beforeAll(async () => {
 <h1>Photosynthesis</h1>
 <p>Occurs inside <a href="../wiki/chloroplast.html">chloroplasts</a> and uses
 <a href="biology/chlorophyll.html">chlorophyll</a>. See
-<a href="../sources/shannon-1948.md">Shannon 1948</a> for the information-theory angle.</p>
+<a href="../sources/shannon-1948.txt">Shannon 1948</a> for the information-theory angle.</p>
 </body>`,
   );
   writeFileSync(
@@ -60,14 +60,8 @@ beforeAll(async () => {
 <body><p>Found in chloroplasts.</p></body>`,
   );
   writeFileSync(
-    join(workdir, "sources/shannon-1948.md"),
-    `---
-year: 1948
-author: Shannon
----
-
-A mathematical theory of communication.
-`,
+    join(workdir, "sources/shannon-1948.txt"),
+    `A mathematical theory of communication.\n`,
   );
 
   await runMigrations({ dbPath });
@@ -84,7 +78,7 @@ A mathematical theory of communication.
 
   await waitForEntity(SPACE, "wiki/photosynthesis.html");
   await waitForEntity(SPACE, "wiki/biology/chlorophyll.html");
-  await waitForEntity(SPACE, "sources/shannon-1948.md");
+  await waitForEntity(SPACE, "sources/shannon-1948.txt");
 }, 30_000);
 
 afterAll(async () => {
@@ -113,8 +107,8 @@ describe("Phase 1 API shape", () => {
   it("GET /:space/entities supports inbound_max=0 to find unprocessed sources", async () => {
     const res = await fetch(`${baseUrl}/${SPACE}/entities?type=file&inbound_max=0&include=counts`);
     const body = (await res.json()) as { entities: Array<{ source_path: string; counts: { inbound: number } }> };
-    // shannon-1948.md IS cited by photosynthesis.html, so it should not appear.
-    expect(body.entities.find((e) => e.source_path === "sources/shannon-1948.md")).toBeUndefined();
+    // shannon-1948.txt IS cited by photosynthesis.html, so it should not appear.
+    expect(body.entities.find((e) => e.source_path === "sources/shannon-1948.txt")).toBeUndefined();
   });
 
   it("GET /:space/entities/* returns a single entity with relationships", async () => {
@@ -134,7 +128,7 @@ describe("Phase 1 API shape", () => {
     );
     const targets = body.outbound.map((r) => r.target_path).sort();
     expect(targets).toEqual([
-      "sources/shannon-1948.md",
+      "sources/shannon-1948.txt",
       "wiki/biology/chlorophyll.html",
       "wiki/chloroplast.html",
     ]);
