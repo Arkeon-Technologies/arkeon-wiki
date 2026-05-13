@@ -4,11 +4,12 @@
 /**
  * The shared tool registry.
  *
- * Six tools post-v0:
+ * Tools post-v0:
  *   - read_file     (line-numbered output for everything; registers in
  *                    ctx.readPaths so edit_file is allowed)
  *   - list_entities (path-based; filterable wiki/file listing)
  *   - list_redlinks (link targets without a matching entity)
+ *   - get_entity    (single entity with full inbound + outbound edges)
  *   - search        (keyword via ripgrep)
  *   - edit_file     (insert_at_line | str_replace; read-gated)
  *   - create_file   (new wiki — accepts full HTML or inner fragment)
@@ -22,6 +23,7 @@ import { z } from "zod";
 import { safeResolve, validateWikiHtmlDocument } from "../lib/file-edits.js";
 import { MAX_QUERY_PATTERNS, searchKeyword } from "../lib/search.js";
 import {
+  getEntity,
   listEntities,
   listRedLinks,
   parseEntityTypes,
@@ -418,6 +420,77 @@ const listRedLinksTool = defineTool("list_redlinks", {
   }),
 });
 
+// ── get_entity ────────────────────────────────────────────────────
+
+const getEntityTool = defineTool("get_entity", {
+  description:
+    "Fetch a single entity by path with its full link neighborhood. " +
+    "Returns the entity row plus `outbound` (every <a href> this article " +
+    "emits — INCLUDES red-link targets that don't have an entity row) " +
+    "and `inbound` (every article that points an <a href> at this path — " +
+    "the citation list). Use this to answer 'who cites this source?' or " +
+    "'what does this article connect to?' in one call. Path is relative " +
+    "to the space's watch_dir (e.g. 'wiki/foo.html', 'sources/notes.txt'). " +
+    "Leading slashes and trailing `#fragment`/`?query` are stripped. " +
+    "Returns `{found: false}` if the entity does not exist.",
+  inputSchema: z.object({
+    path: z
+      .string()
+      .describe(
+        "Relative path inside the space's watch_dir. " +
+          "E.g. 'wiki/foo.html' or 'sources/notes.txt'.",
+      ),
+    space: z.string().nullable().optional().describe(SPACE_PARAM_DESC),
+  }),
+  call: async ({ path, space }, ctx) => {
+    let target: Space;
+    if (ctx.allowedSpaces.length <= 1) {
+      target = ctx.space;
+    } else if (space != null && space !== "") {
+      target = resolveSpaceArg(space, ctx.allowedSpaces);
+    } else {
+      throw new Error(
+        `get_entity: this role can read from multiple spaces, so the ` +
+          `\`space\` argument is required. Allowed: ${describeAllowed(ctx.allowedSpaces)}.`,
+      );
+    }
+    const normalized = normalizeEntityPath(path);
+    const entity = await getEntity(target.name, normalized);
+    if (!entity) {
+      return {
+        found: false as const,
+        path: normalized,
+        space: target.name,
+      };
+    }
+    return { found: true as const, entity };
+  },
+  summarize: (r) => {
+    if (!r.found) {
+      return { found: false, path: r.path, space: r.space };
+    }
+    return {
+      found: true,
+      path: r.entity.source_path,
+      space: r.entity.space_name,
+      type: r.entity.type,
+      outbound_count: r.entity.outbound.length,
+      inbound_count: r.entity.inbound.length,
+    };
+  },
+});
+
+/**
+ * Tolerant normalization for `get_entity` paths. Stored entity paths
+ * have no leading slash and no fragment/query; agents (especially
+ * OpenAI models) occasionally hand us `/wiki/foo.html` or
+ * `wiki/foo.html#section`. Strip those before the SQL lookup so a
+ * mostly-right input doesn't silently 404.
+ */
+function normalizeEntityPath(p: string): string {
+  return p.replace(/^\/+/, "").split("#")[0]!.split("?")[0]!;
+}
+
 // ── edit_file ─────────────────────────────────────────────────────
 
 const editFileTool = defineTool("edit_file", {
@@ -647,6 +720,7 @@ export const ALL_TOOLS: Record<string, ToolFactory> = {
   search: searchTool,
   list_entities: listEntitiesTool,
   list_redlinks: listRedLinksTool,
+  get_entity: getEntityTool,
   edit_file: editFileTool,
   create_file: createFileTool,
   delete_wiki: deleteWikiTool,
