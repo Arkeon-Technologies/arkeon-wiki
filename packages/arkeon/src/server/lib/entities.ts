@@ -23,27 +23,31 @@ import { createSql } from "./sql.js";
 export type EntityType = "wiki" | "file";
 export type EntitySort = "updated_at" | "label" | "inbound" | "outbound";
 
+// All optional filters accept `null` as well as `undefined` — the AI SDK /
+// OpenAI strict-mode pipeline materialises every schema field in the
+// model's tool call, and `.nullable().optional()` zod fields surface as
+// `null` for "absent". Internal checks use `!= null` to treat both alike.
 export interface ListEntitiesOptions {
   /** Restrict to a single space by name. */
-  space_name?: string;
+  space_name?: string | null;
   /** Restrict to one or more entity types. */
-  types?: EntityType[];
+  types?: EntityType[] | null;
   /** Case-insensitive substring match on `label`. */
-  label_contains?: string;
+  label_contains?: string | null;
   /** Case-insensitive substring match on `source_path`. */
-  path_contains?: string;
-  inbound_min?: number;
-  inbound_max?: number;
-  outbound_min?: number;
-  outbound_max?: number;
+  path_contains?: string | null;
+  inbound_min?: number | null;
+  inbound_max?: number | null;
+  outbound_min?: number | null;
+  outbound_max?: number | null;
   /** ISO timestamp; only entities with `updated_at >= this`. */
-  updated_since?: string;
+  updated_since?: string | null;
   /** Filter on the entity's most recent edit's `by_role`. */
-  edited_by_role?: string;
-  sort?: string;
-  include_counts?: boolean;
-  limit?: number;
-  offset?: number;
+  edited_by_role?: string | null;
+  sort?: string | null;
+  include_counts?: boolean | null;
+  limit?: number | null;
+  offset?: number | null;
 }
 
 export interface EntityCounts {
@@ -142,19 +146,19 @@ export async function listEntities(
   const outerConditions: string[] = [];
   const outerParams: unknown[] = [];
 
-  if (opts.inbound_min !== undefined) {
+  if (opts.inbound_min != null) {
     outerConditions.push("inbound >= ?");
     outerParams.push(opts.inbound_min);
   }
-  if (opts.inbound_max !== undefined) {
+  if (opts.inbound_max != null) {
     outerConditions.push("inbound <= ?");
     outerParams.push(opts.inbound_max);
   }
-  if (opts.outbound_min !== undefined) {
+  if (opts.outbound_min != null) {
     outerConditions.push("outbound >= ?");
     outerParams.push(opts.outbound_min);
   }
-  if (opts.outbound_max !== undefined) {
+  if (opts.outbound_max != null) {
     outerConditions.push("outbound <= ?");
     outerParams.push(opts.outbound_max);
   }
@@ -243,8 +247,8 @@ export async function listEntities(
 export interface ListRedLinksOptions {
   space_name: string;
   /** Default 100. */
-  limit?: number;
-  offset?: number;
+  limit?: number | null;
+  offset?: number | null;
 }
 
 export interface RedLinkRow {
@@ -350,7 +354,7 @@ export async function listRedLinks(
  * Parse a comma-separated list of entity types, validating each one.
  * Used by route handlers to coerce `?type=wiki,file` into the typed array.
  */
-export function parseEntityTypes(raw: string | undefined): EntityType[] | undefined {
+export function parseEntityTypes(raw: string | null | undefined): EntityType[] | undefined {
   if (!raw) return undefined;
   const out: EntityType[] = [];
   for (const part of raw.split(",")) {

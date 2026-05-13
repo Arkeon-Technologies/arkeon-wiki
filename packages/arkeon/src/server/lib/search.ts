@@ -26,21 +26,25 @@ const DEFAULT_SNIPPETS_PER_FILE = 3;
  *  search; the tool layer enforces the same limit at the Zod schema. */
 export const MAX_QUERY_PATTERNS = 10;
 
+// Optional filters accept `null` as well as `undefined` — the AI SDK /
+// OpenAI strict-mode pipeline materialises every schema field in tool
+// calls, and `.nullable().optional()` zod fields surface as `null` for
+// "absent". Internals use `??` / `!!` / `length > 0` which treat both alike.
 export interface KeywordSearchOptions {
   /** Single substring/regex pattern, or up to MAX_QUERY_PATTERNS
    *  patterns run together as one ripgrep invocation (`-e p1 -e p2`).
    *  Match counts aggregate per file. */
   query: string | string[];
   /** Single-space convenience filter (equivalent to spaceNames: [spaceName]). */
-  spaceName?: string;
+  spaceName?: string | null;
   /** Restrict the search to a specific set of registered spaces by name.
-   *  Empty/undefined = every registered space. */
-  spaceNames?: string[];
+   *  Empty/undefined/null = every registered space. */
+  spaceNames?: string[] | null;
   /** Restrict hits to entities of the given type(s). */
-  types?: EntityType[];
-  limit?: number;
-  maxSnippetsPerFile?: number;
-  regex?: boolean;
+  types?: EntityType[] | null;
+  limit?: number | null;
+  maxSnippetsPerFile?: number | null;
+  regex?: boolean | null;
 }
 
 export interface SearchSnippet {
