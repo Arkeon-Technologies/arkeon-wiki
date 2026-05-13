@@ -33,7 +33,16 @@ const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 const DEBOUNCE_MS = 500;
 
-function shouldIgnorePath(relativePath: string): boolean {
+/**
+ * True if any path segment is hidden (`.`-prefixed) or matches a
+ * well-known ignore directory (`.git`, `node_modules`, `.arkeon`, etc.).
+ *
+ * Exported so the reader routes can return 404 for the same set the
+ * watcher refuses to index — keeping one rule in one place. Without
+ * this, a user could navigate to `/{space}/.arkeon/state.json` or
+ * `/{space}/.git/config` and the static-file fallback would serve it.
+ */
+export function shouldIgnorePath(relativePath: string): boolean {
   const parts = relativePath.split("/");
   for (const part of parts) {
     if (part.startsWith(".") && part !== ".") return true;

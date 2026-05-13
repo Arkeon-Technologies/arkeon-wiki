@@ -124,6 +124,8 @@ No auth, no actors, no versioning.
 - `src/server/lib/file-edits.ts` — `applyEdit(space, edit, opts)`: the mutation chokepoint. Four kinds: `create`, `insert_at_line`, `str_replace`, `delete`. Exports `validateWikiHtmlDocument` for `create_file` (structural validation: `<!DOCTYPE>`/`<html>` + non-empty `<title>` + `<body>`).
 - `src/server/lib/entities.ts` — `listEntities()` + `listRedLinks()` + `getEntity()`. Pure SQL, parameterized.
 - `src/server/lib/search.ts` — ripgrep adapter (`@vscode/ripgrep`), spawns per-space, parses `--json` events, joins back to entities by path.
+- `src/server/lib/reader.ts` — Phase 2 rendering primitives: `classifyAnchor`, `instrumentArticle`, `renderSpaceIndex`, `renderArticleIndex`. Pure functions; the route handlers in `routes/reader.ts` are thin glue.
+- `src/server/routes/reader.ts` — the four human-facing routes (`/`, `/:space`, `/:space/`, `/:space/wiki/*`, `/:space/*`). Mounted last so `/:space/*` is a true fallback.
 - `src/server/agents/` — declarative `.arkeon/agents.yaml` config (Zod-validated), bundled role templates (`templates/*.yaml`), role-builder, tool registry, `runAgent` loop (Vercel AI SDK), per-space cron scheduler.
 - `src/server/agents/cron.ts` — `nextTick(expr, from)` via `cron-parser`. Drives the scheduler's `setTimeout` chain.
 - `src/server/agents/scheduler.ts` — per-space cron. Per-space mutex (skip-if-busy on contention). No event queue, no orphan reclaim.
@@ -133,7 +135,8 @@ No auth, no actors, no versioning.
 
 Routes are space-scoped under `/{space}/...`. No auth required.
 
-- `GET /` — daemon-level landing (returns `{name, status}` for now; the human-facing version arrives in Phase 2).
+JSON API:
+
 - `POST /spaces` — register a directory. Body `{name, watch_dir}`. Name collisions return 409.
 - `GET /spaces` — list spaces with entity counts.
 - `GET /spaces/:name` — single space.
@@ -145,7 +148,17 @@ Routes are space-scoped under `/{space}/...`. No auth required.
 - `POST /{space}/chat`, `GET /{space}/chat/:conversation_id`, `DELETE ...` — **501 Phase 1 stubs**, wired up in Phase 3.
 - `GET /health` / `GET /ready` — liveness/readiness.
 
+Human-facing reader (Phase 2):
+
+- `GET /` — HTML spaces list (alphabetical, with per-space entity counts).
+- `GET /{space}` — 301 redirect to `/{space}/` (keeps relative hrefs correct on the index page).
+- `GET /{space}/` — HTML article index (`type='wiki'` only, alphabetical by `label`, with `short_description` subtitles).
+- `GET /{space}/wiki/*` — wiki article with chrome injection (`<div id="arkeon-chrome">`) and link classes (`arkeon-wiki`, `arkeon-file`, `arkeon-redlink`). The reader parses the on-disk HTML, decorates anchors, and serializes — never rewrites hrefs, so the same file opens identically via `file://`.
+- `GET /{space}/*` — static-file fallback. Serves any non-wiki path inside the watch dir with the right `Content-Type` (markdown → `text/markdown`, PDF → `application/pdf`, images → `image/*`, etc.). Path-traversal escapes return 404.
+
 Content lives on disk — the API returns metadata, relationships, and (optionally) file bodies.
+
+The reader is the "everything else" layer — it's mounted last so its `/:space/*` fallback only matches URLs no other route has claimed. The hard rule: URL structure mirrors disk structure within a space (`wiki/foo.html` on disk → `/{space}/wiki/foo.html` over HTTP). Articles render identically under `file://` and `http://`.
 
 ## Search
 
@@ -217,8 +230,8 @@ Tail with `tail -f <path> | jq` or query with `jq -c 'select(.event=="tool.call"
 
 ## What's NOT here (yet)
 
-- HTML reader / web viewer / chrome injection → **Phase 2** (`tasks/v0-reading-experience.md`)
 - Chat-with-article → **Phase 3** (`tasks/v0-chat.md`). Schema is in place; routes are stubs.
+- Human-facing UI for `/{space}/search`, `/{space}/recent`, `/{space}/redlinks`, per-article history. APIs exist; the reader pages don't render them in v0 (see `tasks/v0-reading-experience.md` for what was deliberately cut).
 - Cross-space link resolution — schema is ready (`relationships.target_path` is unconstrained text; URL scheme `/{other-space}/wiki/...` is committed). Writer prompt updates wait for **v0.5**.
 - Vector / semantic search — returns at **v0.5** when corpus crosses ~2,000 articles.
 - FTS5 / BM25 ranking (ripgrep gives substring matching only)
