@@ -64,6 +64,9 @@ spaceScopedRouter.get("/:space/entities", async (c) => {
     outbound_max: parseNumQuery(c.req.query("outbound_max"), "outbound_max"),
     updated_since: c.req.query("updated_since"),
     edited_by_role: c.req.query("edited_by_role"),
+    has_tag: c.req.query("has_tag"),
+    not_has_tag: c.req.query("not_has_tag"),
+    tag_equals: parseTagEquals(c.req.query("tag_equals")),
     sort: c.req.query("sort"),
     include_counts: (c.req.query("include") ?? "").split(",").includes("counts"),
     limit: parseNumQuery(c.req.query("limit"), "limit"),
@@ -251,4 +254,24 @@ function parseNumQuery(raw: string | undefined, name: string): number | undefine
     );
   }
   return n;
+}
+
+/**
+ * Parse `?tag_equals=key:value` into the typed shape `listEntities`
+ * expects. Splits on the FIRST colon so values may contain colons; keys
+ * must not (the conventional dotted-namespace form is colon-free).
+ */
+function parseTagEquals(
+  raw: string | undefined,
+): { key: string; value: string } | undefined {
+  if (raw === undefined || raw === "") return undefined;
+  const idx = raw.indexOf(":");
+  if (idx <= 0) {
+    throw new ApiError(
+      400,
+      "validation_error",
+      `Invalid tag_equals: expected "key:value", got "${raw}"`,
+    );
+  }
+  return { key: raw.slice(0, idx), value: raw.slice(idx + 1) };
 }

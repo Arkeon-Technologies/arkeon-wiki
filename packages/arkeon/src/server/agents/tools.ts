@@ -14,6 +14,8 @@
  *   - edit_file     (insert_at_line | str_replace; read-gated)
  *   - create_file   (new wiki — accepts full HTML or inner fragment)
  *   - delete_wiki   (guarded full-file deletion; not in writer's whitelist)
+ *   - tag_entity    (set/clear agent bookkeeping in entities.tags; survives
+ *                    file re-syncs, used for per-role processing queues)
  */
 
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -23,10 +25,12 @@ import { z } from "zod";
 import { safeResolve, validateWikiHtmlDocument } from "../lib/file-edits.js";
 import { MAX_QUERY_PATTERNS, searchKeyword } from "../lib/search.js";
 import {
+  deleteEntityTag,
   getEntity,
   listEntities,
   listRedLinks,
   parseEntityTypes,
+  setEntityTag,
   type EntityType,
 } from "../lib/entities.js";
 
@@ -229,8 +233,13 @@ const listEntitiesTool = defineTool("list_entities", {
     "Use to check whether a subject already has a wiki, find unprocessed " +
     "sources (type=file inbound_max=0 → 'nothing links to this file yet'), " +
     "or surface recently-updated articles. Each row carries `space_name`, " +
-    "`source_path`, `type`, `label`, `properties`, and optional " +
-    "`counts.inbound`/`counts.outbound`.",
+    "`source_path`, `type`, `label`, `properties`, `tags`, and optional " +
+    "`counts.inbound`/`counts.outbound`. `properties` is file-derived " +
+    "(rebuilt on every sync from <meta> tags); `tags` is agent-applied " +
+    "bookkeeping (set via `tag_entity`) and persists across content edits. " +
+    "Filter by `has_tag` / `not_has_tag` / `tag_equals` to drive " +
+    "per-role queues (e.g. `not_has_tag='editor.processed_hash'` returns " +
+    "sources the editor hasn't seen yet).",
   inputSchema: z.object({
     type: z
       .string()
@@ -301,6 +310,35 @@ const listEntitiesTool = defineTool("list_entities", {
         "Filter on the most recent edit's by_role ('writer', 'human', etc.). " +
           "Pass null (or omit) to skip the filter.",
       ),
+    has_tag: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        "Restrict to entities that have this tag key set. " +
+          "Pass null (or omit) to skip the filter.",
+      ),
+    not_has_tag: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        "Restrict to entities that do NOT have this tag key set. " +
+          "Use for 'find untagged-by-me' queue queries (e.g. " +
+          "not_has_tag='editor.processed_hash' returns sources the editor " +
+          "hasn't seen yet). Pass null (or omit) to skip the filter.",
+      ),
+    tag_equals: z
+      .object({ key: z.string(), value: z.string() })
+      .nullable()
+      .optional()
+      .describe(
+        "Restrict to entities where tag `key` equals exactly `value`. " +
+          "Use for content-hash invalidation (e.g. tag_equals " +
+          "{key:'editor.processed_hash', value:<current source_hash>} " +
+          "returns sources the editor processed at the current content). " +
+          "Pass null (or omit) to skip the filter.",
+      ),
     sort: z
       .enum(["updated_at", "label", "inbound", "outbound"])
       .nullable()
@@ -352,6 +390,9 @@ const listEntitiesTool = defineTool("list_entities", {
         outbound_max: input.outbound_max,
         updated_since: input.updated_since,
         edited_by_role: input.edited_by_role,
+        has_tag: input.has_tag,
+        not_has_tag: input.not_has_tag,
+        tag_equals: input.tag_equals,
         sort: input.sort,
         include_counts: input.include_counts,
         limit: input.limit,
@@ -713,6 +754,82 @@ const deleteWikiTool = defineTool("delete_wiki", {
   summarize: (r) => ({ path: r.path, mode: r.mode }),
 });
 
+// ── tag_entity ────────────────────────────────────────────────────
+
+const tagEntityTool = defineTool("tag_entity", {
+  description:
+    "Set or update an agent-applied tag on an entity (any wiki or " +
+    "source). Tags are key/value pairs in a JSON bag separate from " +
+    "`properties` — they persist across content edits and are used for " +
+    "processing bookkeeping (e.g. 'editor.processed_hash' set to the " +
+    "source_hash that was processed). Idempotent — calling twice with " +
+    "the same args is a no-op. Pass `null` as `value` to delete the key " +
+    "(empty string is a legitimate value and is stored verbatim). Keys " +
+    "are conventionally namespaced with the role name " +
+    "('editor.processed_hash', 'proposer.processed_hash') so different " +
+    "agents' bookkeeping stays legible.",
+  inputSchema: z.object({
+    path: z
+      .string()
+      .describe("Relative path of the entity to tag (wiki or source)."),
+    key: z
+      .string()
+      .min(1)
+      .describe(
+        "Tag key. Conventionally namespaced with the role name " +
+          "(e.g. 'editor.processed_hash'). Dotted keys are stored verbatim " +
+          "as JSON object keys (not nested paths).",
+      ),
+    value: z
+      .string()
+      .nullable()
+      .describe(
+        "Tag value. Strings only — encode timestamps, hashes, counts as " +
+          "strings. Pass `null` to delete the key. Empty string is a " +
+          "valid value and is stored as an empty string, not a deletion.",
+      ),
+    space: z.string().nullable().optional().describe(SPACE_PARAM_DESC),
+  }),
+  call: async ({ path, key, value, space }, ctx) => {
+    // tag_entity always writes to a single space. Mirror edit_file's
+    // single-space semantics: explicit space arg or the triggering one.
+    let target: Space;
+    if (ctx.allowedSpaces.length <= 1) {
+      target = ctx.space;
+    } else if (space != null && space !== "") {
+      target = resolveSpaceArg(space, ctx.allowedSpaces);
+    } else {
+      throw new Error(
+        `tag_entity: this role can write to multiple spaces, so the ` +
+          `\`space\` argument is required. Allowed: ${describeAllowed(ctx.allowedSpaces)}.`,
+      );
+    }
+
+    const deleted = value === null;
+    const matched = deleted
+      ? await deleteEntityTag(target.name, path, key)
+      : await setEntityTag(target.name, path, key, value);
+    if (!matched) {
+      throw new Error(
+        `tag_entity: no entity at '${path}' in space '${target.name}'`,
+      );
+    }
+    return {
+      path,
+      space: target.name,
+      key,
+      value: deleted ? null : value,
+      action: deleted ? ("deleted" as const) : ("set" as const),
+    };
+  },
+  summarize: (r) => ({
+    path: r.path,
+    space: r.space,
+    key: r.key,
+    action: r.action,
+  }),
+});
+
 // ── Registry ──────────────────────────────────────────────────────
 
 export const ALL_TOOLS: Record<string, ToolFactory> = {
@@ -724,4 +841,5 @@ export const ALL_TOOLS: Record<string, ToolFactory> = {
   edit_file: editFileTool,
   create_file: createFileTool,
   delete_wiki: deleteWikiTool,
+  tag_entity: tagEntityTool,
 };

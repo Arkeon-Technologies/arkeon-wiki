@@ -93,7 +93,7 @@ function parseJson(val: unknown): unknown {
 function hydrateRow(row: Row): Row {
   const out: Row = {};
   for (const [key, val] of Object.entries(row)) {
-    if (key === "properties" && typeof val === "string") {
+    if ((key === "properties" || key === "tags") && typeof val === "string") {
       out[key] = parseJson(val);
     } else {
       out[key] = val;

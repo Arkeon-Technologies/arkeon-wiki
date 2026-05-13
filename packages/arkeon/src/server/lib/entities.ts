@@ -44,6 +44,12 @@ export interface ListEntitiesOptions {
   updated_since?: string | null;
   /** Filter on the entity's most recent edit's `by_role`. */
   edited_by_role?: string | null;
+  /** Restrict to entities that have this tag key set. */
+  has_tag?: string | null;
+  /** Restrict to entities that do NOT have this tag key set. */
+  not_has_tag?: string | null;
+  /** Restrict to entities where tag `key` equals exactly `value`. */
+  tag_equals?: { key: string; value: string } | null;
   sort?: string | null;
   include_counts?: boolean | null;
   limit?: number | null;
@@ -61,6 +67,7 @@ export interface EntityListRow {
   type: EntityType;
   label: string | null;
   properties: Record<string, unknown> | string;
+  tags: Record<string, unknown> | string;
   created_at: string;
   updated_at: string;
   counts?: EntityCounts;
@@ -138,6 +145,28 @@ export async function listEntities(
     `);
     innerParams.push(opts.edited_by_role);
   }
+  // Tag filters use json_each rather than json_extract($.<key>) — the
+  // dotted-namespace convention ("editor.processed") would otherwise be
+  // parsed as a nested path. json_each iterates over the JSON object's
+  // top-level entries, where `key` matches verbatim.
+  if (opts.has_tag) {
+    innerConditions.push(
+      "EXISTS (SELECT 1 FROM json_each(e.tags) WHERE key = ?)",
+    );
+    innerParams.push(opts.has_tag);
+  }
+  if (opts.not_has_tag) {
+    innerConditions.push(
+      "NOT EXISTS (SELECT 1 FROM json_each(e.tags) WHERE key = ?)",
+    );
+    innerParams.push(opts.not_has_tag);
+  }
+  if (opts.tag_equals) {
+    innerConditions.push(
+      "EXISTS (SELECT 1 FROM json_each(e.tags) WHERE key = ? AND value = ?)",
+    );
+    innerParams.push(opts.tag_equals.key, opts.tag_equals.value);
+  }
 
   const innerWhere = innerConditions.length
     ? `WHERE ${innerConditions.join(" AND ")}`
@@ -169,7 +198,7 @@ export async function listEntities(
 
   const baseSelect = `
     SELECT
-      e.space_name, e.source_path, e.type, e.label, e.properties,
+      e.space_name, e.source_path, e.type, e.label, e.properties, e.tags,
       e.created_at, e.updated_at,
       (SELECT COUNT(*) FROM relationships r
         WHERE r.space_name = e.space_name AND r.target_path = e.source_path) AS inbound,
@@ -195,6 +224,7 @@ export async function listEntities(
     type: EntityType;
     label: string | null;
     properties: Record<string, unknown> | string;
+    tags: Record<string, unknown> | string;
     created_at: string;
     updated_at: string;
     inbound: number;
@@ -226,6 +256,7 @@ export async function listEntities(
         type: row.type,
         label: row.label,
         properties: row.properties,
+        tags: row.tags,
         created_at: row.created_at,
         updated_at: row.updated_at,
         last_edited_by: row.last_edited_by,
@@ -387,7 +418,7 @@ export async function getEntity(
 ): Promise<EntityDetail | null> {
   const sql = createSql();
   const rows = await sql`
-    SELECT space_name, source_path, type, label, properties, created_at, updated_at,
+    SELECT space_name, source_path, type, label, properties, tags, created_at, updated_at,
       (SELECT by_role FROM entity_edits ed
         WHERE ed.space_name = entities.space_name AND ed.entity_path = entities.source_path
         ORDER BY ed.at DESC LIMIT 1) AS last_edited_by
@@ -412,6 +443,7 @@ export async function getEntity(
     type: row.type as EntityType,
     label: row.label as string | null,
     properties: row.properties as Record<string, unknown> | string,
+    tags: row.tags as Record<string, unknown> | string,
     created_at: row.created_at as string,
     updated_at: row.updated_at as string,
     last_edited_by: row.last_edited_by as string | null,
@@ -424,4 +456,60 @@ export async function getEntity(
       link_text: r.link_text as string | null,
     })),
   };
+}
+
+// ── tag helpers ──────────────────────────────────────────────────────
+//
+// `tags` is agent-applied bookkeeping (e.g. `editor.processed_hash`),
+// distinct from `properties` which is file-derived. Tags persist across
+// `syncFile` reconciles — the UPDATE in sync.ts is explicit-column and
+// never touches `tags` — and are cleared only when the entity row is
+// deleted. The merge is done in SQL via json_patch so concurrent writes
+// to different keys on the same entity don't race.
+//
+// We use json_patch + json_object rather than json_set('$.' || key) so
+// dotted keys ("editor.processed") aren't misread as nested paths.
+// RFC 7396 says a null value in the patch removes the key, which is how
+// `deleteEntityTag` works.
+
+/**
+ * Idempotent upsert of a tag key/value on an entity. Returns true if a
+ * row was matched (i.e. the entity exists), false otherwise.
+ */
+export async function setEntityTag(
+  space_name: string,
+  source_path: string,
+  key: string,
+  value: string,
+): Promise<boolean> {
+  const sql = createSql();
+  const patch = JSON.stringify({ [key]: value });
+  const result = await sql`
+    UPDATE entities
+    SET tags = json_patch(COALESCE(tags, '{}'), ${patch})
+    WHERE space_name = ${space_name} AND source_path = ${source_path}
+    RETURNING source_path
+  `;
+  return result.length > 0;
+}
+
+/**
+ * Idempotent removal of a tag key on an entity. Returns true if a row
+ * was matched.
+ */
+export async function deleteEntityTag(
+  space_name: string,
+  source_path: string,
+  key: string,
+): Promise<boolean> {
+  const sql = createSql();
+  // RFC 7396 merge-patch: null removes the key.
+  const patch = JSON.stringify({ [key]: null });
+  const result = await sql`
+    UPDATE entities
+    SET tags = json_patch(COALESCE(tags, '{}'), ${patch})
+    WHERE space_name = ${space_name} AND source_path = ${source_path}
+    RETURNING source_path
+  `;
+  return result.length > 0;
 }
