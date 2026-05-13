@@ -67,8 +67,9 @@ beforeAll(async () => {
 <h1>Photosynthesis</h1>
 <p>Occurs inside <a href="biology/chlorophyll.html">chloroplasts</a> and references
 <a href="ghost-article.html">a missing article</a>.</p>
-<p>See <a href="../sources/shannon-1948.md">Shannon 1948</a> and
-<a href="../sources/missing.md">a missing source</a> and
+<p>See <a href="../sources/shannon-1948.txt">Shannon 1948</a> and
+<a href="../sources/missing.txt">a missing source</a> and
+<a href="../sources/notes.md">scratch notes</a> and
 <a href="https://wikipedia.org">wikipedia</a>.</p>
 </body>
 </html>`,
@@ -84,15 +85,20 @@ beforeAll(async () => {
 </html>`,
   );
 
+  // Indexed source (`.txt` is in INDEX_EXTENSIONS) — produces an entity row.
   writeFileSync(
-    join(workdir, "sources/shannon-1948.md"),
-    `---
-year: 1948
-author: Shannon
----
+    join(workdir, "sources/shannon-1948.txt"),
+    `A mathematical theory of communication.\n`,
+  );
 
-A mathematical theory of communication.
-`,
+  // Deliberately NOT indexed (markdown was removed in #126). Still exists on
+  // disk and gets served raw by the static-file fallback with the MIME table's
+  // `text/markdown` content type — exercises the passthrough path for any
+  // non-indexed file type. From the wiki's perspective it's a red link
+  // because no entity row exists.
+  writeFileSync(
+    join(workdir, "sources/notes.md"),
+    `# Scratch notes\n\nNot indexed, served raw.\n`,
   );
 
   writeFileSync(
@@ -113,7 +119,7 @@ A mathematical theory of communication.
 
   await waitForEntity(SPACE, "wiki/photosynthesis.html");
   await waitForEntity(SPACE, "wiki/biology/chlorophyll.html");
-  await waitForEntity(SPACE, "sources/shannon-1948.md");
+  await waitForEntity(SPACE, "sources/shannon-1948.txt");
 }, 30_000);
 
 afterAll(async () => {
@@ -178,25 +184,44 @@ describe("Phase 2 reader", () => {
     expect(body).toContain(
       `<a href="ghost-article.html" class="arkeon-wiki arkeon-redlink">`,
     );
-    // Existing source → arkeon-file
+    // Existing indexed source → arkeon-file (no redlink)
     expect(body).toContain(
-      `<a href="../sources/shannon-1948.md" class="arkeon-file">`,
+      `<a href="../sources/shannon-1948.txt" class="arkeon-file">`,
     );
     // Missing source → arkeon-file + arkeon-redlink
     expect(body).toContain(
-      `<a href="../sources/missing.md" class="arkeon-file arkeon-redlink">`,
+      `<a href="../sources/missing.txt" class="arkeon-file arkeon-redlink">`,
+    );
+    // Non-indexed file type (markdown isn't in INDEX_EXTENSIONS) — the file
+    // exists on disk but there's no entity row, so the reader classifies it
+    // as a red link. The static-file route below verifies the bytes still
+    // come through.
+    expect(body).toContain(
+      `<a href="../sources/notes.md" class="arkeon-file arkeon-redlink">`,
     );
     // External link untouched
     expect(body).toContain(`<a href="https://wikipedia.org">wikipedia</a>`);
   });
 
-  it("GET /:space/sources/*.md serves markdown raw with text/markdown content-type", async () => {
-    const res = await fetch(`${baseUrl}/${SPACE}/sources/shannon-1948.md`);
+  it("GET /:space/sources/*.txt serves indexed plain text raw with text/plain content-type", async () => {
+    const res = await fetch(`${baseUrl}/${SPACE}/sources/shannon-1948.txt`);
     expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toMatch(/text\/markdown/);
+    expect(res.headers.get("content-type")).toMatch(/text\/plain/);
     const body = await res.text();
     expect(body).toContain("A mathematical theory of communication.");
     // No chrome injection for non-wiki paths.
+    expect(body).not.toContain("arkeon-chrome");
+  });
+
+  it("GET /:space/sources/*.md serves non-indexed markdown raw via MIME table passthrough", async () => {
+    // Markdown isn't indexed but the static-file fallback still serves it
+    // with text/markdown so browsers display it natively. Same principle
+    // covers PDFs, images, JSON, etc. — the MIME table is the contract.
+    const res = await fetch(`${baseUrl}/${SPACE}/sources/notes.md`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toMatch(/text\/markdown/);
+    const body = await res.text();
+    expect(body).toContain("Scratch notes");
     expect(body).not.toContain("arkeon-chrome");
   });
 

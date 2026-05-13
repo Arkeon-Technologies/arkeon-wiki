@@ -90,6 +90,10 @@ a.arkeon-redlink:hover { color: #900; text-decoration: underline; }
  * appropriate `arkeon-*` classes, inject the chrome div + style, and
  * return the serialized document.
  *
+ * Note: the bytes round-trip through `node-html-parser`'s parse →
+ * toString, so whitespace, attribute quoting, and self-closing-tag
+ * style may differ from the on-disk source. Semantics don't.
+ *
  * Idempotent enough for v0: if the page already has an `#arkeon-chrome`
  * element we skip re-injecting (defensive against double-renders, not a
  * real concern since articles on disk never contain one).
