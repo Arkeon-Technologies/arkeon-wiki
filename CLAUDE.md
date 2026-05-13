@@ -95,7 +95,7 @@ The writer's tool surface, validated by a 75-trial bake-off (see `tasks/v0-agent
 - `edit_file mode='str_replace' {path, old_string, new_string}` — exact-match SEARCH/REPLACE. `old_string` must match exactly once.
 - `create_file(path, html)` — new wiki from a complete HTML document. Path must start with `wiki/` and end in `.html`. `html` must begin with `<!DOCTYPE>` or `<html>` and contain a non-empty `<title>` plus a `<body>`. The agent authors the whole document, envelope and all — symmetric with how a human writes a wiki. Recommended (not enforced): `<meta name="label">` and `<meta name="short_description">`. Any other `<meta name="...">` tags land in `entities.properties`. Each validation failure returns the canonical template inline so the model can retry in one shot.
 - `delete_wiki(path, reason)` — guarded full-file deletion (only `wiki/**`, required reason). Not in the writer's whitelist; available for operator scripts or future curator roles.
-- `tag_entity(path, key, value)` — set or clear an agent-applied tag on any entity (wiki or source). Writes to `entities.tags`, a JSON bag distinct from `properties` (see "Properties vs tags" below). Pass an empty string as `value` to delete a key. Idempotent. No read-gate interaction — tags aren't file content.
+- `tag_entity(path, key, value)` — set or clear an agent-applied tag on any entity (wiki or source). Writes to `entities.tags`, a JSON bag distinct from `properties` (see "Properties vs tags" below). Pass `null` as `value` to delete the key (empty string is a legitimate value and is stored verbatim). Idempotent. No read-gate interaction — tags aren't file content.
 
 **The read-gate.** `edit_file` refuses to mutate a path the agent hasn't `read_file`-ed in this run. Successful edits invalidate the path — the agent must re-read before its next edit on the same file. This catches "editing from stale memory" errors before they corrupt a file. It lives on `AgentContext.readPaths` in `runtime.ts`.
 
@@ -234,9 +234,11 @@ Tail with `tail -f <path> | jq` or query with `jq -c 'select(.event=="tool.call"
 
 ## Schema migrations
 
-`src/schema/001-foundation.sql` is the v0 reset point — six tables, no migration history. The runner (`src/schema/migrate.ts`) tracks applied files in `schema_migrations` so future non-idempotent migrations only run once.
+`src/schema/001-foundation.sql` is the v0 reset point — six tables. Subsequent files (`002-entity-tags.sql`, ...) are additive migrations applied in lexicographic order and recorded in `schema_migrations` (`src/schema/migrate.ts`), so they run exactly once.
 
-**Phase 1 migration story is destructive**: `rm ~/.arkeon-wiki/data/arke.db && arkeon-wiki up`. The database is a pure index — the only state that doesn't live on disk is `entity_edits`, and nobody is in production with audit history they care about.
+Use `ALTER TABLE ... ADD COLUMN` with `NOT NULL DEFAULT` for new columns — SQLite rewrites the table-defining schema entry rather than the row data, so even large tables migrate in milliseconds. The DB is a pure index of filesystem state (the only column that doesn't have an on-disk counterpart is `entity_edits` history), so a `rm ~/.arkeon-wiki/data/arke.db && arkeon-wiki up` reset is always available as a fallback for development.
+
+`json_patch` / `json_object` / `json_each` (used by the tag helpers and filters) require SQLite 3.38+. better-sqlite3 bundles SQLite, so this is satisfied at the application level; portability to a system sqlite3 isn't a goal.
 
 ## What's NOT here (yet)
 

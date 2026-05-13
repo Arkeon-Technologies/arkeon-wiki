@@ -479,7 +479,7 @@ describe("tag_entity tool + tag filters", () => {
     expect(listed2.entities[0].tags).toEqual({ "editor.processed_hash": "hash-v1" });
   });
 
-  it("tag_entity with empty value deletes the key", async () => {
+  it("tag_entity with null value deletes the key (empty string is a stored value)", async () => {
     await makeSource("sources/b.txt");
 
     const ctx = makeContext(SPACE, "editor");
@@ -487,11 +487,13 @@ describe("tag_entity tool + tag filters", () => {
 
     await exec(tag, { path: "sources/b.txt", key: "foo", value: "bar" });
     await exec(tag, { path: "sources/b.txt", key: "baz", value: "qux" });
+    // Empty string is a legitimate value, not a delete signal.
+    await exec(tag, { path: "sources/b.txt", key: "flag", value: "" });
 
     const result = (await exec(tag, {
       path: "sources/b.txt",
       key: "foo",
-      value: "",
+      value: null,
     })) as { action: string; value: string | null };
     expect(result.action).toBe("deleted");
     expect(result.value).toBe(null);
@@ -500,7 +502,7 @@ describe("tag_entity tool + tag filters", () => {
     const listed = (await exec(list, { path_contains: "sources/b.txt" })) as {
       entities: Array<{ tags: Record<string, string> }>;
     };
-    expect(listed.entities[0].tags).toEqual({ baz: "qux" });
+    expect(listed.entities[0].tags).toEqual({ baz: "qux", flag: "" });
   });
 
   it("tag_entity is idempotent — setting the same value twice is a no-op", async () => {

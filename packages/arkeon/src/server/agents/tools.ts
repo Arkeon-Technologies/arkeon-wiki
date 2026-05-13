@@ -763,8 +763,9 @@ const tagEntityTool = defineTool("tag_entity", {
     "`properties` — they persist across content edits and are used for " +
     "processing bookkeeping (e.g. 'editor.processed_hash' set to the " +
     "source_hash that was processed). Idempotent — calling twice with " +
-    "the same args is a no-op. Pass an empty string as `value` to delete " +
-    "the key. Keys are conventionally namespaced with the role name " +
+    "the same args is a no-op. Pass `null` as `value` to delete the key " +
+    "(empty string is a legitimate value and is stored verbatim). Keys " +
+    "are conventionally namespaced with the role name " +
     "('editor.processed_hash', 'proposer.processed_hash') so different " +
     "agents' bookkeeping stays legible.",
   inputSchema: z.object({
@@ -781,9 +782,11 @@ const tagEntityTool = defineTool("tag_entity", {
       ),
     value: z
       .string()
+      .nullable()
       .describe(
         "Tag value. Strings only — encode timestamps, hashes, counts as " +
-          "strings. Pass an empty string to delete the key.",
+          "strings. Pass `null` to delete the key. Empty string is a " +
+          "valid value and is stored as an empty string, not a deletion.",
       ),
     space: z.string().nullable().optional().describe(SPACE_PARAM_DESC),
   }),
@@ -802,7 +805,7 @@ const tagEntityTool = defineTool("tag_entity", {
       );
     }
 
-    const deleted = value === "";
+    const deleted = value === null;
     const matched = deleted
       ? await deleteEntityTag(target.name, path, key)
       : await setEntityTag(target.name, path, key, value);
