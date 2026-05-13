@@ -61,21 +61,23 @@ afterEach(() => {
   if (workdir) rmSync(workdir, { recursive: true, force: true });
 });
 
-describe("read-gate", () => {
-  function getTool(name: string, ctx: ReturnType<typeof makeContext>): Tool {
-    const factory = ALL_TOOLS[name];
-    if (!factory) throw new Error(`unknown tool: ${name}`);
-    return factory(ctx);
-  }
+function getTool(name: string, ctx: ReturnType<typeof makeContext>): Tool {
+  const factory = ALL_TOOLS[name];
+  if (!factory) throw new Error(`unknown tool: ${name}`);
+  return factory(ctx);
+}
 
-  async function exec<T = unknown>(tool: Tool, input: unknown): Promise<T> {
-    // The AI SDK's Tool surface carries provider-specific generics that
-    // hide `execute` from the public type; call it directly. The runtime
-    // contract is what defineTool wires up.
-    type Exec = (input: unknown, ctx: { toolCallId: string; messages: unknown[] }) => Promise<T>;
-    const fn = (tool as unknown as { execute: Exec }).execute;
-    return fn(input, { toolCallId: "test", messages: [] });
-  }
+async function execTool<T = unknown>(tool: Tool, input: unknown): Promise<T> {
+  // The AI SDK's Tool surface carries provider-specific generics that
+  // hide `execute` from the public type; call it directly. The runtime
+  // contract is what defineTool wires up.
+  type Exec = (input: unknown, ctx: { toolCallId: string; messages: unknown[] }) => Promise<T>;
+  const fn = (tool as unknown as { execute: Exec }).execute;
+  return fn(input, { toolCallId: "test", messages: [] });
+}
+
+describe("read-gate", () => {
+  const exec = execTool;
 
   it("edit_file refuses a path that wasn't read in this run", async () => {
     writeFileSync(join(workdir, "wiki/x.html"), `<!doctype html>
@@ -235,6 +237,154 @@ describe("read-gate", () => {
         content: "<p>Another.</p>",
       }),
     ).rejects.toThrow(/must read_file/);
+  });
+});
+
+describe("get_entity tool", () => {
+  type EdgeRow = { target_path?: string; source_path?: string; link_text: string | null };
+  interface GetEntityFound {
+    found: true;
+    entity: {
+      space_name: string;
+      source_path: string;
+      type: string;
+      label: string | null;
+      outbound: EdgeRow[];
+      inbound: EdgeRow[];
+    };
+  }
+  interface GetEntityMissing {
+    found: false;
+    path: string;
+    space: string;
+  }
+  type GetEntityResult = GetEntityFound | GetEntityMissing;
+
+  async function setupGraph() {
+    // wiki/a.html  → wiki/b.html, sources/x.txt
+    // wiki/b.html  → wiki/missing.html   (red link)
+    // sources/x.txt is a source (type=file) that wiki/a cites.
+    writeFileSync(
+      join(workdir, "wiki/a.html"),
+      `<!doctype html>
+<html><head><meta charset="utf-8"><title>A</title>
+<meta name="label" content="A"></head>
+<body><h1>A</h1>
+<p>see <a href="b.html">B</a></p>
+<p>cites <a href="../sources/x.txt">X</a></p>
+</body></html>`,
+    );
+    writeFileSync(
+      join(workdir, "wiki/b.html"),
+      `<!doctype html>
+<html><head><meta charset="utf-8"><title>B</title>
+<meta name="label" content="B"></head>
+<body><h1>B</h1>
+<p>see <a href="missing.html">missing</a></p>
+</body></html>`,
+    );
+    mkdirSync(join(workdir, "sources"), { recursive: true });
+    writeFileSync(join(workdir, "sources/x.txt"), "source content");
+
+    await syncFile(SPACE, "wiki/a.html");
+    await syncFile(SPACE, "wiki/b.html");
+    await syncFile(SPACE, "sources/x.txt");
+  }
+
+  it("returns the entity with outbound + inbound edges", async () => {
+    await setupGraph();
+    const ctx = makeContext(SPACE, "writer");
+    const tool = getTool("get_entity", ctx);
+
+    const result = await execTool<GetEntityResult>(tool, { path: "wiki/b.html" });
+    expect(result.found).toBe(true);
+    if (!result.found) throw new Error("unreachable");
+
+    expect(result.entity.source_path).toBe("wiki/b.html");
+    expect(result.entity.type).toBe("wiki");
+    expect(result.entity.label).toBe("B");
+    expect(result.entity.outbound.map((e) => e.target_path)).toEqual([
+      "wiki/missing.html",
+    ]);
+    expect(result.entity.inbound.map((e) => e.source_path)).toEqual([
+      "wiki/a.html",
+    ]);
+    expect(result.entity.inbound[0]?.link_text).toBe("B");
+  });
+
+  it("a source's inbound list reveals every article that cites it", async () => {
+    await setupGraph();
+    const ctx = makeContext(SPACE, "writer");
+    const tool = getTool("get_entity", ctx);
+
+    const result = await execTool<GetEntityResult>(tool, {
+      path: "sources/x.txt",
+    });
+    expect(result.found).toBe(true);
+    if (!result.found) throw new Error("unreachable");
+
+    expect(result.entity.type).toBe("file");
+    expect(result.entity.outbound).toEqual([]);
+    expect(result.entity.inbound.map((e) => e.source_path)).toEqual([
+      "wiki/a.html",
+    ]);
+  });
+
+  it("outbound preserves red-link targets that have no entity row", async () => {
+    // wiki/b → wiki/missing.html. missing has no file → no entity.
+    // get_entity('wiki/b.html').outbound still surfaces the target.
+    await setupGraph();
+    const ctx = makeContext(SPACE, "writer");
+    const tool = getTool("get_entity", ctx);
+
+    const result = await execTool<GetEntityResult>(tool, { path: "wiki/b.html" });
+    expect(result.found).toBe(true);
+    if (!result.found) throw new Error("unreachable");
+
+    const targets = result.entity.outbound.map((e) => e.target_path);
+    expect(targets).toContain("wiki/missing.html");
+  });
+
+  it("returns {found:false} for a path with no entity row", async () => {
+    await setupGraph();
+    const ctx = makeContext(SPACE, "writer");
+    const tool = getTool("get_entity", ctx);
+
+    const result = await execTool<GetEntityResult>(tool, {
+      path: "wiki/missing.html",
+    });
+    expect(result.found).toBe(false);
+    if (result.found) throw new Error("unreachable");
+    expect(result.path).toBe("wiki/missing.html");
+    expect(result.space).toBe(SPACE.name);
+  });
+
+  it("strips leading slash and trailing #fragment / ?query", async () => {
+    await setupGraph();
+    const ctx = makeContext(SPACE, "writer");
+    const tool = getTool("get_entity", ctx);
+
+    for (const variant of [
+      "/wiki/b.html",
+      "wiki/b.html#open-threads",
+      "wiki/b.html?v=2",
+      "/wiki/b.html#x",
+    ]) {
+      const result = await execTool<GetEntityResult>(tool, { path: variant });
+      expect(result.found, `variant "${variant}"`).toBe(true);
+      if (!result.found) throw new Error("unreachable");
+      expect(result.entity.source_path).toBe("wiki/b.html");
+    }
+  });
+
+  it("does not interact with the read-gate (no read_file required)", async () => {
+    await setupGraph();
+    const ctx = makeContext(SPACE, "writer");
+    const tool = getTool("get_entity", ctx);
+
+    expect(ctx.readPaths.size).toBe(0);
+    await execTool<GetEntityResult>(tool, { path: "wiki/a.html" });
+    expect(ctx.readPaths.size).toBe(0);
   });
 });
 

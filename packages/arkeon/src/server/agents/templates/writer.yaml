@@ -5,6 +5,7 @@ tools:
   - read_file
   - list_entities
   - list_redlinks
+  - get_entity
   - search
   - edit_file
   - create_file
@@ -197,6 +198,13 @@ system: |-
       its line number and a tab (e.g. `12\t<p>...`). Line numbers
       are reference-only — do NOT include them in any edit content
       or old_string.
+
+    get_entity(path) — fetch a single entity with both directions of
+      its link neighborhood: `outbound` (what it cites, including red
+      links) and `inbound` (every article that cites IT). Useful when
+      a source surfaces in the unprocessed queue and you want to know
+      who already cites it, or when extending an article and you want
+      to see what it connects to without re-parsing the body.
 
     create_file(path, html)
       Create a new wiki article. Path must start with `wiki/` and
