@@ -95,6 +95,7 @@ The writer's tool surface, validated by a 75-trial bake-off (see `tasks/v0-agent
 - `edit_file mode='str_replace' {path, old_string, new_string}` — exact-match SEARCH/REPLACE. `old_string` must match exactly once.
 - `create_file(path, html)` — new wiki from a complete HTML document. Path must start with `wiki/` and end in `.html`. `html` must begin with `<!DOCTYPE>` or `<html>` and contain a non-empty `<title>` plus a `<body>`. The agent authors the whole document, envelope and all — symmetric with how a human writes a wiki. Recommended (not enforced): `<meta name="label">` and `<meta name="short_description">`. Any other `<meta name="...">` tags land in `entities.properties`. Each validation failure returns the canonical template inline so the model can retry in one shot.
 - `delete_wiki(path, reason)` — guarded full-file deletion (only `wiki/**`, required reason). Not in the writer's whitelist; available for operator scripts or future curator roles.
+- `tag_entity(path, key, value)` — set or clear an agent-applied tag on any entity (wiki or source). Writes to `entities.tags`, a JSON bag distinct from `properties` (see "Properties vs tags" below). Pass an empty string as `value` to delete a key. Idempotent. No read-gate interaction — tags aren't file content.
 
 **The read-gate.** `edit_file` refuses to mutate a path the agent hasn't `read_file`-ed in this run. Successful edits invalidate the path — the agent must re-read before its next edit on the same file. This catches "editing from stale memory" errors before they corrupt a file. It lives on `AgentContext.readPaths` in `runtime.ts`.
 
@@ -107,13 +108,22 @@ The read-gate is orthogonal to `edit-context.ts`, which exists for **attribution
 Six tables in SQLite, fresh `001-foundation.sql`:
 
 - `spaces (name PK, watch_dir UNIQUE, created_at)`
-- `entities (space_name, source_path)` composite PK, `type` CHECK (`'wiki'|'file'`), `label`, `source_hash`, `properties` JSON, timestamps
+- `entities (space_name, source_path)` composite PK, `type` CHECK (`'wiki'|'file'`), `label`, `source_hash`, `properties` JSON (file-derived), `tags` JSON (agent-applied), timestamps
 - `relationships (space_name, source_path, target_path)` composite PK, `link_text` — no FK on `target_path` (red links!)
 - `entity_edits (space_name, entity_path, at)` composite PK — `at` carries millisecond precision via `strftime('%f')` so same-second writes don't collide. Not FK'd; history survives entity deletion.
 - `conversations (id PK ULID, space_name, article_path NULLABLE, title)` — the **one** v0 table with an explicit ID, because conversations have no on-disk file to derive identity from. Phase 1 lays the schema; Phase 3 wires the routes.
 - `conversation_messages (conversation_id, seq)` composite PK, `role`, `content` JSON
 
 No auth, no actors, no versioning.
+
+### Properties vs tags
+
+The `entities` table carries two JSON bags, divided by origin:
+
+- `properties` — **file-derived**. Wikis fill it from `<meta name="X" content="Y">` tags; sources get an auto-generated `file_type`. `syncFile()` rebuilds this column on every reconcile, so its contents always reflect what's on disk.
+- `tags` — **agent-applied bookkeeping**. Written exclusively via the `tag_entity` tool (or `setEntityTag`/`deleteEntityTag` helpers). The sync UPDATE clauses are explicit-column and never touch `tags`, so it survives content edits — cleared only when the entity row itself is deleted (file removed) or the DB is wiped.
+
+Tags exist so multi-agent pipelines can track "has role X processed entity Y" without conflating it with `inbound_max=0`-style structural queries. Convention: dotted-namespace keys (`editor.processed_hash`, `proposer.processed_hash`) — values are strings (encode timestamps, hashes, or status flags as needed). Liberal at this stage: any agent can write any key. `list_entities` exposes `has_tag` / `not_has_tag` / `tag_equals` filters that hit these via `json_each`, which handles dotted keys verbatim (a `json_extract('$.editor.processed')` path would otherwise be misread as a nested lookup).
 
 ## Key modules
 

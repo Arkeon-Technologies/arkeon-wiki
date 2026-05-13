@@ -437,6 +437,159 @@ describe("deletion semantics", () => {
   });
 });
 
+describe("tag_entity tool + tag filters", () => {
+  const exec = execTool;
+
+  async function makeSource(path: string, content = "x") {
+    mkdirSync(join(workdir, ...path.split("/").slice(0, -1)), { recursive: true });
+    writeFileSync(join(workdir, path), content);
+    await syncFile(SPACE, path);
+  }
+
+  it("tag_entity sets a tag visible on list_entities + survives file re-sync", async () => {
+    await makeSource("sources/a.txt", "first");
+
+    const ctx = makeContext(SPACE, "editor");
+    const tag = getTool("tag_entity", ctx);
+
+    const result = (await exec(tag, {
+      path: "sources/a.txt",
+      key: "editor.processed_hash",
+      value: "hash-v1",
+    })) as { action: string; value: string | null };
+    expect(result.action).toBe("set");
+    expect(result.value).toBe("hash-v1");
+
+    // List sees the tag.
+    const list = getTool("list_entities", ctx);
+    const listed = (await exec(list, { path_contains: "sources/a.txt" })) as {
+      entities: Array<{ source_path: string; tags: Record<string, string> }>;
+    };
+    const row = listed.entities.find((e) => e.source_path === "sources/a.txt");
+    expect(row?.tags).toEqual({ "editor.processed_hash": "hash-v1" });
+
+    // Re-sync the file with new content — tag must persist (sync.ts UPDATE
+    // is explicit-column and doesn't touch `tags`).
+    writeFileSync(join(workdir, "sources/a.txt"), "second");
+    await syncFile(SPACE, "sources/a.txt");
+
+    const listed2 = (await exec(list, { path_contains: "sources/a.txt" })) as {
+      entities: Array<{ source_path: string; tags: Record<string, string> }>;
+    };
+    expect(listed2.entities[0].tags).toEqual({ "editor.processed_hash": "hash-v1" });
+  });
+
+  it("tag_entity with empty value deletes the key", async () => {
+    await makeSource("sources/b.txt");
+
+    const ctx = makeContext(SPACE, "editor");
+    const tag = getTool("tag_entity", ctx);
+
+    await exec(tag, { path: "sources/b.txt", key: "foo", value: "bar" });
+    await exec(tag, { path: "sources/b.txt", key: "baz", value: "qux" });
+
+    const result = (await exec(tag, {
+      path: "sources/b.txt",
+      key: "foo",
+      value: "",
+    })) as { action: string; value: string | null };
+    expect(result.action).toBe("deleted");
+    expect(result.value).toBe(null);
+
+    const list = getTool("list_entities", ctx);
+    const listed = (await exec(list, { path_contains: "sources/b.txt" })) as {
+      entities: Array<{ tags: Record<string, string> }>;
+    };
+    expect(listed.entities[0].tags).toEqual({ baz: "qux" });
+  });
+
+  it("tag_entity is idempotent — setting the same value twice is a no-op", async () => {
+    await makeSource("sources/c.txt");
+
+    const ctx = makeContext(SPACE, "editor");
+    const tag = getTool("tag_entity", ctx);
+
+    await exec(tag, { path: "sources/c.txt", key: "editor.processed", value: "v1" });
+    await exec(tag, { path: "sources/c.txt", key: "editor.processed", value: "v1" });
+
+    const list = getTool("list_entities", ctx);
+    const listed = (await exec(list, { path_contains: "sources/c.txt" })) as {
+      entities: Array<{ tags: Record<string, string> }>;
+    };
+    expect(listed.entities[0].tags).toEqual({ "editor.processed": "v1" });
+  });
+
+  it("tag_entity errors on a non-existent entity", async () => {
+    const ctx = makeContext(SPACE, "editor");
+    const tag = getTool("tag_entity", ctx);
+    await expect(
+      exec(tag, { path: "sources/missing.txt", key: "k", value: "v" }),
+    ).rejects.toThrow(/no entity at/);
+  });
+
+  it("list_entities filters: has_tag / not_has_tag / tag_equals", async () => {
+    await makeSource("sources/d.txt");
+    await makeSource("sources/e.txt");
+    await makeSource("sources/f.txt");
+
+    const ctx = makeContext(SPACE, "editor");
+    const tag = getTool("tag_entity", ctx);
+    const list = getTool("list_entities", ctx);
+
+    // Tag d and e with the same key; e with the matching value.
+    await exec(tag, { path: "sources/d.txt", key: "editor.processed_hash", value: "old" });
+    await exec(tag, { path: "sources/e.txt", key: "editor.processed_hash", value: "current" });
+    // f gets no tag.
+
+    // has_tag returns d + e.
+    const hasTag = (await exec(list, {
+      type: "file",
+      has_tag: "editor.processed_hash",
+    })) as { entities: Array<{ source_path: string }> };
+    const hasPaths = hasTag.entities.map((r) => r.source_path).sort();
+    expect(hasPaths).toEqual(["sources/d.txt", "sources/e.txt"]);
+
+    // not_has_tag returns f.
+    const notHas = (await exec(list, {
+      type: "file",
+      path_contains: "sources/",
+      not_has_tag: "editor.processed_hash",
+    })) as { entities: Array<{ source_path: string }> };
+    expect(notHas.entities.map((r) => r.source_path)).toContain("sources/f.txt");
+    expect(notHas.entities.map((r) => r.source_path)).not.toContain("sources/d.txt");
+
+    // tag_equals returns only e (the value matches).
+    const eq = (await exec(list, {
+      type: "file",
+      tag_equals: { key: "editor.processed_hash", value: "current" },
+    })) as { entities: Array<{ source_path: string }> };
+    expect(eq.entities.map((r) => r.source_path)).toEqual(["sources/e.txt"]);
+  });
+
+  it("dotted-namespace keys aren't treated as nested JSON paths", async () => {
+    await makeSource("sources/g.txt");
+
+    const ctx = makeContext(SPACE, "editor");
+    const tag = getTool("tag_entity", ctx);
+    const list = getTool("list_entities", ctx);
+
+    await exec(tag, { path: "sources/g.txt", key: "editor.processed_hash", value: "h1" });
+
+    const matched = (await exec(list, {
+      has_tag: "editor.processed_hash",
+    })) as { entities: Array<{ source_path: string }> };
+    expect(matched.entities.map((r) => r.source_path)).toContain("sources/g.txt");
+
+    // The naive json_extract('$.editor.processed_hash') path would parse
+    // as a nested $.editor → .processed_hash lookup and miss. Confirm a
+    // query for the sub-path returns nothing.
+    const nested = (await exec(list, {
+      has_tag: "editor",
+    })) as { entities: Array<{ source_path: string }> };
+    expect(nested.entities.map((r) => r.source_path)).not.toContain("sources/g.txt");
+  });
+});
+
 describe("scheduler", () => {
   it("fires a cron-bearing role on schedule and invokes runAgent", async () => {
     // cron-parser supports a 6-field form where the first field is

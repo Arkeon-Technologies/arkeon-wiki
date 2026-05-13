@@ -169,6 +169,65 @@ describe("Phase 1 API shape", () => {
     expect(body.keyword.hits.some((h) => h.source_path === "wiki/photosynthesis.html")).toBe(true);
   });
 
+  it("GET /:space/entities exposes the tags column (empty by default)", async () => {
+    const res = await fetch(`${baseUrl}/${SPACE}/entities?type=wiki`);
+    const body = (await res.json()) as {
+      entities: Array<{ source_path: string; tags: Record<string, string> }>;
+    };
+    expect(body.entities.length).toBeGreaterThan(0);
+    for (const row of body.entities) {
+      expect(row.tags).toEqual({});
+    }
+  });
+
+  it("GET /:space/entities filters by has_tag / not_has_tag / tag_equals", async () => {
+    // Seed a tag directly via the helper (no HTTP write path yet — the
+    // agent tool is the canonical writer; the route just reads).
+    const { setEntityTag } = await import("../../src/server/lib/entities.js");
+    await setEntityTag(SPACE, "wiki/photosynthesis.html", "editor.processed_hash", "h-current");
+
+    const hasTag = await fetch(
+      `${baseUrl}/${SPACE}/entities?has_tag=editor.processed_hash`,
+    );
+    const hasBody = (await hasTag.json()) as { entities: Array<{ source_path: string }> };
+    expect(hasBody.entities.map((r) => r.source_path)).toContain(
+      "wiki/photosynthesis.html",
+    );
+
+    const notHas = await fetch(
+      `${baseUrl}/${SPACE}/entities?type=wiki&not_has_tag=editor.processed_hash`,
+    );
+    const notBody = (await notHas.json()) as { entities: Array<{ source_path: string }> };
+    expect(notBody.entities.map((r) => r.source_path)).not.toContain(
+      "wiki/photosynthesis.html",
+    );
+    expect(notBody.entities.map((r) => r.source_path)).toContain(
+      "wiki/biology/chlorophyll.html",
+    );
+
+    // tag_equals encoded as `key:value`.
+    const eqHit = await fetch(
+      `${baseUrl}/${SPACE}/entities?tag_equals=${encodeURIComponent("editor.processed_hash:h-current")}`,
+    );
+    const eqHitBody = (await eqHit.json()) as { entities: Array<{ source_path: string }> };
+    expect(eqHitBody.entities.map((r) => r.source_path)).toEqual([
+      "wiki/photosynthesis.html",
+    ]);
+
+    const eqMiss = await fetch(
+      `${baseUrl}/${SPACE}/entities?tag_equals=${encodeURIComponent("editor.processed_hash:stale")}`,
+    );
+    const eqMissBody = (await eqMiss.json()) as { entities: Array<unknown> };
+    expect(eqMissBody.entities).toEqual([]);
+  });
+
+  it("GET /:space/entities rejects malformed tag_equals", async () => {
+    const res = await fetch(`${baseUrl}/${SPACE}/entities?tag_equals=missing-colon`);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("validation_error");
+  });
+
   it("POST /:space/chat returns 501 (Phase 3 stub)", async () => {
     const res = await fetch(`${baseUrl}/${SPACE}/chat`, {
       method: "POST",
