@@ -62,26 +62,44 @@ There is no YAML frontmatter on wikis, no `[[wikilink]]` syntax, no placeholder 
 
 Source files (anywhere outside `wiki/`) are indexed as `type='file'` with `{file_type: <ext>}`. Supported extensions: `.txt`, `.json`, `.csv`, `.xml`, `.rst`, `.html` outside `wiki/`. Markdown is intentionally unsupported — HTML is the only authoring format. Structured metadata lives in `<meta name="X" content="Y">` tags on the wiki itself.
 
-## Writing (the `writer` role)
+## Writing (three roles: `editor`, `proposer`, `writer`)
 
-A single agent role — `writer` — turns recent sources into HTML articles on a recurring cron schedule. Every tick, the writer:
+Three bundled agent roles cooperate on a single-job-each pipeline. Each runs on its own cron, all three serialized per-space by the in-process mutex.
 
-1. Surveys two queues:
-   - **Unprocessed sources**: `list_entities?type=file&inbound_max=0` — files no article cites yet
-   - **Red links**: `list_redlinks` — link targets ranked by demand (how many existing articles want this concept defined)
-2. Picks one piece of work: a high-demand red link, or a recently-arrived source.
-3. Reads the relevant files (the source, or 1-2 articles that want the red-link target defined).
-4. Articulates the driving question.
-5. Searches existing articles via keyword search (`search(query=[...]&type=wiki)`).
-6. Either **extends** the existing article via `edit_file` (`insert_at_line` or `str_replace`) or **creates** a new one via `create_file`.
+**`editor`** (source-driven, runs first per source). Each tick:
+1. Picks one source the editor hasn't tagged at its current `source_hash` (`list_entities?type=file&not_has_tag=editor.processed_hash`).
+2. Reads the source; surveys existing articles via `list_entities` (using `properties.short_description` for semantic matching).
+3. For each existing article the source bears on, applies one or both:
+   - **Content edit** — `edit_file insert_at_line` adds a citation-bearing paragraph in Evidence, or `edit_file str_replace` revises Current Answer when the source reshapes the thesis. Always cites the source inline via `<a href="../sources/...">`.
+   - **Open-thread red link** — `edit_file insert_at_line` appends one `<li>` to the article's `<h2>Open threads</h2>` `<ul>`, containing a red link to a future article and a one-sentence gloss.
+4. `tag_entity` the source with `key="editor.processed_hash"` value=source_hash.
 
-Articles are horizontal: one article spans many sources, growing as the corpus grows. The default body convention is four sections — `<h2>Question</h2>` / `<h2>Current answer</h2>` / `<h2>Evidence</h2>` / `<h2>Open threads</h2>` — but it's a soft convention. Operators reshape it via `instructions:` in their `agents.yaml`.
+Editor never creates articles. Zero edits per tick is fine — many sources are tangential to existing articles and should be tagged-and-skipped.
 
-The trigger is **purely cron-driven**. The watcher's job ends at the SQLite mirror; agents pick up new state at their next scheduled tick. Per-space serialization is enforced by an in-process mutex — at most one role can run in a given space at any time.
+**`proposer`** (source-driven, runs SECOND per source by data dependency). Each tick:
+1. Picks one source the editor has tagged but the proposer hasn't (`list_entities?type=file&has_tag=editor.processed_hash&not_has_tag=proposer.processed_hash`).
+2. Reads the source.
+3. **Calls `get_entity` on the source path** — `entity.inbound` lists every article that already cites this source (the editor's integration points). These tell the proposer which concepts the editor already integrated.
+4. Identifies the GAP — questions the source raises that aren't already covered by (a) an existing article citing this source, (b) any other existing article, or (c) an already-queued red link.
+5. `create_file` a plan wiki at `wiki/_plans/<source-path>.html` (mirrors source path, drops extension to `.html`) containing a Summary that cites the source inline, plus a list of red links to the gap articles. `<meta name="kind" content="plan">` distinguishes plan wikis from real articles.
+6. `tag_entity` the source with `key="proposer.processed_hash"` value=source_hash.
 
-The bundled writer template ships `cron: "*/15 * * * *"` with `model: gpt-5.4-mini`, `reasoning_effort: low`, `max_steps: 12`. **First-run cost note**: a fresh `arkeon-wiki up` against a corpus with `OPENAI_API_KEY` set will start spending API credit within 15 minutes. Operators who want to inspect the writer's behavior before letting it run should override the cadence in `.arkeon/agents.yaml` (`cron: "0 0 31 2 *"` is the canonical "never fire" idiom — Feb 31 doesn't exist).
+Proposer never edits existing articles and never writes article bodies — only red-link slugs in a plan wiki.
 
-**Downtime → missed ticks are dropped.** No persistence of last-fire times. The cron model lets each role decide its own work from current state — new behaviors (reflector picking articles with open threads, bridger rotating across spaces) need only a different prompt + cron, no scheduler changes.
+**`writer`** (red-link-driven). Each tick:
+1. Picks the highest-demand entry from `list_redlinks`.
+2. Reads the 1-3 plan wikis / articles that linked at it (via `linked_from` + `get_entity`), then follows their inline `<a href="../sources/...">` citations back to the source files.
+3. `create_file` the new article at the red link's `target_path`. Standard four-section body (`Question` / `Current answer` / `Evidence` / `Open threads`) with inline source citations. Drops 1-2 forward-looking red links in Open Threads to keep the queue alive.
+
+Writer **only creates new articles**. No `edit_file` in its whitelist; no fallback "write from scratch when queue is empty" branch — empty queue → no-op.
+
+**Tag namespaces** are the queue mechanism: `editor.processed_hash` / `proposer.processed_hash` on each source. Content changes (new `source_hash`) naturally invalidate both, re-entering the source into both queues.
+
+The trigger for all three is **purely cron-driven**. Bundled defaults: editor hourly, proposer hourly (gates on editor's tag so it naturally trails one cycle), writer every 15 min. Per-space mutex serializes — at most one role runs in a given space at a time.
+
+All three bundled templates ship with `model: gpt-5.4-mini`, `reasoning_effort: low`. **First-run cost note**: a fresh `arkeon-wiki up` against a corpus with `OPENAI_API_KEY` set will start spending API credit within 15 minutes. To inspect behavior before letting them run, override the cadence per role in `.arkeon/agents.yaml`.
+
+**Downtime → missed ticks are dropped.** No persistence of last-fire times. The cron model lets each role decide its own work from current state — new behaviors (synthesizer connecting articles across themes, deprecator marking stale questions) need only a different prompt + cron, no scheduler changes.
 
 ## Edit primitives
 

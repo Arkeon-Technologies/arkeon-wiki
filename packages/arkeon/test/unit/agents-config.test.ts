@@ -686,6 +686,68 @@ describe("loadBundledTemplates", () => {
     expect(t.tools?.length, "writer.tools").toBeGreaterThan(0);
     expect(t.cron, "writer.cron").toBeTruthy();
   });
+
+  it("auto-loads editor from disk with no config present", () => {
+    // Editor is the source-driven role that integrates new sources
+    // into existing articles (citations + open-thread red links).
+    // Runs first per source; calls mark_processed("editor") when done.
+    const templates = loadBundledTemplates();
+    expect(Object.keys(templates)).toContain("editor");
+    const t = templates.editor;
+    expect(t.system, "editor.system").toBeTruthy();
+    expect(t.tools?.length, "editor.tools").toBeGreaterThan(0);
+    // Editor's tool whitelist must include mark_processed (queue
+    // bookkeeping — the canonical 'I did this' marker that handles
+    // source_hash for the agent) and edit_file (its core action),
+    // but not create_file (only proposer/writer create files).
+    expect(t.tools, "editor.tools").toContain("mark_processed");
+    expect(t.tools, "editor.tools").toContain("edit_file");
+    expect(t.tools, "editor.tools").not.toContain("create_file");
+    // Batched read primitive keeps multi-article surveys in one turn.
+    expect(t.tools, "editor.tools").toContain("read_files");
+    expect(t.cron, "editor.cron").toBeTruthy();
+  });
+
+  it("auto-loads proposer from disk with no config present", () => {
+    // Proposer is the second source-driven role: it gates on the
+    // editor's tag (via tag_current), identifies gaps via
+    // get_entity (inverse lookup), and emits red links in a
+    // per-source plan wiki.
+    const templates = loadBundledTemplates();
+    expect(Object.keys(templates)).toContain("proposer");
+    const t = templates.proposer;
+    expect(t.system, "proposer.system").toBeTruthy();
+    expect(t.tools?.length, "proposer.tools").toBeGreaterThan(0);
+    // Proposer's tool whitelist must include get_entity (the
+    // inverse-lookup primitive), create_file (the plan wiki), and
+    // mark_processed (queue bookkeeping). It must NOT include
+    // edit_file — proposer never edits existing articles.
+    expect(t.tools, "proposer.tools").toContain("get_entity");
+    expect(t.tools, "proposer.tools").toContain("create_file");
+    expect(t.tools, "proposer.tools").toContain("mark_processed");
+    expect(t.tools, "proposer.tools").not.toContain("edit_file");
+    // Batched primitives let the gap-survey step run in O(1) turns.
+    expect(t.tools, "proposer.tools").toContain("get_entities");
+    expect(t.tools, "proposer.tools").toContain("read_files");
+    expect(t.cron, "proposer.cron").toBeTruthy();
+  });
+
+  it("writer is create-only — no edit_file, tag_entity, or mark_processed", () => {
+    // The new writer drains the red-link queue and never edits
+    // existing articles or marks sources. Processing-marker
+    // responsibility belongs to the editor/proposer; this
+    // whitelist enforces the boundary.
+    const templates = loadBundledTemplates();
+    const t = templates.writer;
+    expect(t.tools, "writer.tools").not.toContain("edit_file");
+    expect(t.tools, "writer.tools").not.toContain("tag_entity");
+    expect(t.tools, "writer.tools").not.toContain("mark_processed");
+    expect(t.tools, "writer.tools").toContain("create_file");
+    // Batched reads keep the multi-linker / multi-source survey
+    // (the common case for demand>=2 red links) inside one turn.
+    expect(t.tools, "writer.tools").toContain("get_entities");
+    expect(t.tools, "writer.tools").toContain("read_files");
+  });
 });
 
 // ── fillTemplate ─────────────────────────────────────────────────

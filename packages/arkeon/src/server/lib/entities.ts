@@ -50,6 +50,16 @@ export interface ListEntitiesOptions {
   not_has_tag?: string | null;
   /** Restrict to entities where tag `key` equals exactly `value`. */
   tag_equals?: { key: string; value: string } | null;
+  /** Restrict to entities where this tag key's value equals the entity's
+   *  current `source_hash`. Use for "processed at current content"
+   *  queue gates (e.g. proposer's "editor has finished at the current
+   *  source content" precondition). */
+  tag_current?: string | null;
+  /** Restrict to entities where this tag key is absent OR has a value
+   *  that does NOT equal the entity's current `source_hash`. Use for
+   *  "needs processing" queues — covers both unprocessed entities and
+   *  ones whose content has changed since the last processing pass. */
+  tag_outdated?: string | null;
   sort?: string | null;
   include_counts?: boolean | null;
   limit?: number | null;
@@ -66,6 +76,12 @@ export interface EntityListRow {
   source_path: string;
   type: EntityType;
   label: string | null;
+  /** SHA-256 of the file content as of the last sync. Stable
+   *  across reconciles unless the file's bytes change. Useful as a
+   *  tag value for `editor.processed_hash` / `proposer.processed_hash`
+   *  markers — pass it to `tag_entity` so content-change
+   *  invalidation works automatically. */
+  source_hash: string;
   properties: Record<string, unknown> | string;
   tags: Record<string, unknown> | string;
   created_at: string;
@@ -167,6 +183,23 @@ export async function listEntities(
     );
     innerParams.push(opts.tag_equals.key, opts.tag_equals.value);
   }
+  // `tag_current` and `tag_outdated` compare the tag's value to the
+  // entity's own `source_hash` column — purpose-built for processing
+  // markers that need content-change invalidation. json_each walks
+  // the tags bag once per row; the JOIN to source_hash is on the
+  // same row, no subquery needed.
+  if (opts.tag_current) {
+    innerConditions.push(
+      "EXISTS (SELECT 1 FROM json_each(e.tags) WHERE key = ? AND value = e.source_hash)",
+    );
+    innerParams.push(opts.tag_current);
+  }
+  if (opts.tag_outdated) {
+    innerConditions.push(
+      "NOT EXISTS (SELECT 1 FROM json_each(e.tags) WHERE key = ? AND value = e.source_hash)",
+    );
+    innerParams.push(opts.tag_outdated);
+  }
 
   const innerWhere = innerConditions.length
     ? `WHERE ${innerConditions.join(" AND ")}`
@@ -198,8 +231,8 @@ export async function listEntities(
 
   const baseSelect = `
     SELECT
-      e.space_name, e.source_path, e.type, e.label, e.properties, e.tags,
-      e.created_at, e.updated_at,
+      e.space_name, e.source_path, e.type, e.label, e.source_hash,
+      e.properties, e.tags, e.created_at, e.updated_at,
       (SELECT COUNT(*) FROM relationships r
         WHERE r.space_name = e.space_name AND r.target_path = e.source_path) AS inbound,
       (SELECT COUNT(*) FROM relationships r
@@ -223,6 +256,7 @@ export async function listEntities(
     source_path: string;
     type: EntityType;
     label: string | null;
+    source_hash: string;
     properties: Record<string, unknown> | string;
     tags: Record<string, unknown> | string;
     created_at: string;
@@ -255,6 +289,7 @@ export async function listEntities(
         source_path: row.source_path,
         type: row.type,
         label: row.label,
+        source_hash: row.source_hash,
         properties: row.properties,
         tags: row.tags,
         created_at: row.created_at,
@@ -418,7 +453,8 @@ export async function getEntity(
 ): Promise<EntityDetail | null> {
   const sql = createSql();
   const rows = await sql`
-    SELECT space_name, source_path, type, label, properties, tags, created_at, updated_at,
+    SELECT space_name, source_path, type, label, source_hash, properties, tags,
+      created_at, updated_at,
       (SELECT by_role FROM entity_edits ed
         WHERE ed.space_name = entities.space_name AND ed.entity_path = entities.source_path
         ORDER BY ed.at DESC LIMIT 1) AS last_edited_by
@@ -442,6 +478,7 @@ export async function getEntity(
     source_path: row.source_path as string,
     type: row.type as EntityType,
     label: row.label as string | null,
+    source_hash: row.source_hash as string,
     properties: row.properties as Record<string, unknown> | string,
     tags: row.tags as Record<string, unknown> | string,
     created_at: row.created_at as string,

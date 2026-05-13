@@ -67,6 +67,8 @@ spaceScopedRouter.get("/:space/entities", async (c) => {
     has_tag: c.req.query("has_tag"),
     not_has_tag: c.req.query("not_has_tag"),
     tag_equals: parseTagEquals(c.req.query("tag_equals")),
+    tag_current: c.req.query("tag_current"),
+    tag_outdated: c.req.query("tag_outdated"),
     sort: c.req.query("sort"),
     include_counts: (c.req.query("include") ?? "").split(",").includes("counts"),
     limit: parseNumQuery(c.req.query("limit"), "limit"),
