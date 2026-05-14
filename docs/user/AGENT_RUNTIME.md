@@ -77,7 +77,7 @@ The package ships three roles that compose into a question-driven wiki pipeline.
 | Role | Job |
 |---|---|
 | `editor` | Integrates each new source into existing articles. Adds citation-bearing paragraphs to Evidence sections; revises a thesis when a source reshapes it; adds open-thread red links for questions the source raises. Never creates new articles. |
-| `proposer` | After the editor has handled a source, identifies the questions the editor did *not* integrate and emits them as red links in a per-source plan wiki. Never edits existing articles. |
+| `proposer` | After the editor has handled a source, identifies the questions the editor did *not* integrate and emits them as red links in a per-source plan wiki (`wiki/_plans/<source-slug>.html` with `<meta name="kind" content="plan">`). Never edits existing articles or writes article bodies — only red-link slugs. |
 | `writer` | Drains the red-link queue. Picks the highest-demand red link, follows it back to the articles and plan wikis that point at it, reads the cited sources, and creates the target article. Never edits existing articles. |
 
 The three roles run on cron and coordinate via tags on source files (`editor.processed_hash`, `proposer.processed_hash`) — when an editor finishes a source, the proposer's next tick sees it as queue-ready. There's no message-passing; each role re-derives its work from current state.
@@ -210,7 +210,7 @@ Roles call tools to read state, search, and mutate the wiki. The registry is sma
 |---|---|
 | `read_file` | Read one file with line numbers. Required before `edit_file` on the same path. |
 | `read_files` | Batched `read_file`, up to 10 paths in one call. |
-| `list_entities` | Filtered listing of wikis and sources. Supports `type`, `label_contains`, `path_contains`, `inbound_min`/`max`, `outbound_min`/`max`, `has_tag`, `not_has_tag`, `tag_current`, `tag_outdated`, sort, limit, offset. |
+| `list_entities` | Filtered listing of wikis and sources. Supports `type`, `label_contains`, `path_contains`, `inbound_min`/`max`, `outbound_min`/`max`, `updated_since`, `edited_by_role`, `has_tag`, `not_has_tag`, `tag_equals`, `tag_current`, `tag_outdated`, `sort`, `include_counts`, `limit`, `offset`. Full filter set is the Zod schema in `tools.ts`. |
 | `list_redlinks` | Link targets without an entity row, ranked by demand. Carries up to 3 `linked_from` paths per target. |
 | `get_entity` | Single entity with inbound + outbound link neighborhoods. |
 | `get_entities` | Batched `get_entity`, up to 10 paths. |
@@ -219,7 +219,7 @@ Roles call tools to read state, search, and mutate the wiki. The registry is sma
 | `create_file` | Create a new wiki under `wiki/**.html`. Validates the HTML envelope. |
 | `delete_wiki` | Guarded full-file deletion. Reason required. Restricted to `wiki/**`. |
 | `tag_entity` | Set or clear an agent-applied tag on any entity. Idempotent. |
-| `mark_processed` | Shorthand for `tag_entity(role + "processed_hash", entity.source_hash)`. |
+| `mark_processed` | Shorthand for `tag_entity(role + ".processed_hash", entity.source_hash)`. The server reads the entity's current `source_hash` on the agent's behalf, so role pipelines can gate on `tag_outdated` / `tag_current` without the agent ever handling the hash. |
 
 When you list `tools:` on a role, the runtime exposes exactly that subset to the model — any tool not listed is invisible, even if the model knows about it from training. Custom roles must declare their `tools:` array explicitly; bundled roles inherit theirs from the template.
 
