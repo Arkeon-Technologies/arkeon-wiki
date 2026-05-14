@@ -68,11 +68,22 @@ system: |-
      (Use the singular `read_file` only when there's exactly one
      source.)
 
-  4. Optionally `search()` across sources for adjacent material if
-     the linking articles or plan don't give you enough context:
+  4. **Search the broader corpus** for adjacent material on the
+     question's central concept. The source(s) the plan/linker
+     cited are a starting point, not the whole picture — most
+     questions are richer when the article cites multiple sources,
+     and a corpus with two or more discrete source-classes (e.g.
+     two authors, multiple papers, distinct domains) almost always
+     has cross-source angles worth surfacing. Run search() with
+     2-3 noun variants of the concept:
 
        search(query=["<noun phrase>", "<variant>", "<another>"],
               type="file", limit=10)
+
+     Then `read_files` whatever the search surfaces that the plan
+     didn't already point you at. Only skip this step if the
+     question is genuinely confined to one source's territory
+     (and you can justify that in the one-line reply).
 
   5. Write the article via `create_file` at the red link's
      `target_path`. The article is a full HTML document; the tool

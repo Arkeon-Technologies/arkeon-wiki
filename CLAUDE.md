@@ -80,16 +80,18 @@ Editor never creates articles. Zero edits per tick is fine — many sources are 
 1. Picks one source the editor has tagged but the proposer hasn't (`list_entities?type=file&has_tag=editor.processed_hash&not_has_tag=proposer.processed_hash`).
 2. Reads the source.
 3. **Calls `get_entity` on the source path** — `entity.inbound` lists every article that already cites this source (the editor's integration points). These tell the proposer which concepts the editor already integrated.
-4. Identifies the GAP — questions the source raises that aren't already covered by (a) an existing article citing this source, (b) any other existing article, or (c) an already-queued red link.
-5. `create_file` a plan wiki at `wiki/_plans/<source-path>.html` (mirrors source path, drops extension to `.html`) containing a Summary that cites the source inline, plus a list of red links to the gap articles. `<meta name="kind" content="plan">` distinguishes plan wikis from real articles.
-6. `tag_entity` the source with `key="proposer.processed_hash"` value=source_hash.
+4. **Searches the broader corpus** for thematically-adjacent material on the source's main themes — so the plan can seed cross-source citations the writer will follow later. Without this step plans tend to cite only their originating source, which biases the writer toward single-source articles.
+5. Identifies the GAP — questions the source raises that aren't already covered by (a) an existing article citing this source, (b) any other existing article, or (c) an already-queued red link.
+6. `create_file` a plan wiki at `wiki/_plans/<source-path>.html` (mirrors source path, drops extension to `.html`) containing a Summary that cites the source inline plus any cross-source parallels found in step 4, plus a list of red links to the gap articles. `<meta name="kind" content="plan">` distinguishes plan wikis from real articles.
+7. `tag_entity` the source with `key="proposer.processed_hash"` value=source_hash.
 
 Proposer never edits existing articles and never writes article bodies — only red-link slugs in a plan wiki.
 
 **`writer`** (red-link-driven). Each tick:
 1. Picks the highest-demand entry from `list_redlinks`.
 2. Reads the 1-3 plan wikis / articles that linked at it (via `linked_from` + `get_entity`), then follows their inline `<a href="../sources/...">` citations back to the source files.
-3. `create_file` the new article at the red link's `target_path`. Standard four-section body (`Question` / `Current answer` / `Evidence` / `Open threads`) with inline source citations. Drops 1-2 forward-looking red links in Open Threads to keep the queue alive.
+3. **Searches the broader corpus by default** for adjacent material on the question's central concept and reads whatever the plan didn't already point at. Single-source articles are an explicit escape hatch (justified in the one-line reply), not the default — most questions are richer when the article cites multiple sources.
+4. `create_file` the new article at the red link's `target_path`. Standard four-section body (`Question` / `Current answer` / `Evidence` / `Open threads`) with inline source citations. Drops 1-2 forward-looking red links in Open Threads to keep the queue alive.
 
 Writer **only creates new articles**. No `edit_file` in its whitelist; no fallback "write from scratch when queue is empty" branch — empty queue → no-op.
 
