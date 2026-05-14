@@ -25,7 +25,11 @@ import type { Command } from "commander";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
-import { DEFAULT_API_PORT } from "../../lib/local-runtime.js";
+import {
+  DEFAULT_INSTANCE_NAME,
+  listInstances,
+  type Instance,
+} from "../../lib/instances.js";
 import { output } from "../../lib/output.js";
 import { loadRepoState, type RepoState } from "../../lib/repo-state.js";
 import {
@@ -65,7 +69,7 @@ async function runInit(
   template: string,
 ): Promise<void> {
   const cwd = process.cwd();
-  const apiUrl = process.env.ARKE_API_URL ?? `http://localhost:${DEFAULT_API_PORT}`;
+  const apiUrl = resolveApiUrl();
 
   // Branch on whether the space is already known locally. Reconcile
   // mode skips the API call and the state.json write but still runs
@@ -169,6 +173,68 @@ function buildHint(args: {
     return "Already initialized — nothing to reconcile.";
   }
   return `Already initialized — restored missing: ${filled.join(", ")}.`;
+}
+
+/**
+ * Decide which daemon `init` should talk to. Every other CLI command
+ * gets the api_url from `.arkeon/state.json`, but `init` runs before
+ * state.json exists — it has to discover the daemon some other way.
+ *
+ * Priority chain (most specific wins):
+ *
+ *   1. `ARKE_API_URL` env var or `--api-url` flag (moved into the env
+ *      var by the root preAction hook). Explicit override.
+ *   2. The "default" instance — i.e. a daemon started by plain
+ *      `arkeon-wiki up` (no `--name`). This is the 99% case and the
+ *      port is :8000.
+ *   3. Exactly one named instance running. If the user has a single
+ *      `--name foo` daemon and no default, init talks to it.
+ *   4. Nothing running, or multiple named with no default → throw a
+ *      message that names the running instances and tells the user
+ *      to pass `--api-url`.
+ *
+ * Both lookups go through `listInstances()`, which prunes stale
+ * registry entries (dead PIDs) before returning. A crashed daemon's
+ * leftover `default.json` therefore can't fool us into returning a
+ * dead api_url and producing the exact `fetch failed` UX this helper
+ * exists to eliminate.
+ *
+ * The `deps` argument exists for unit tests — production callers omit
+ * it and the registry lookup goes through the real filesystem.
+ */
+export interface ResolveApiUrlDeps {
+  env?: NodeJS.ProcessEnv;
+  listInstances?: () => Instance[];
+}
+
+export function resolveApiUrl(deps: ResolveApiUrlDeps = {}): string {
+  const env = deps.env ?? process.env;
+  const listInst = deps.listInstances ?? listInstances;
+
+  // (1) Explicit override.
+  const fromEnv = env.ARKE_API_URL;
+  if (fromEnv) return fromEnv;
+
+  // (2)+(3) live-pid-filtered registry.
+  const running = listInst();
+  const defaultInst = running.find((i) => i.name === DEFAULT_INSTANCE_NAME);
+  if (defaultInst) return defaultInst.api_url;
+  if (running.length === 1) return running[0].api_url;
+
+  // (4) Error path — describe what we found so the user can choose.
+  if (running.length === 0) {
+    throw new Error(
+      "No arkeon-wiki daemon is running. Start one with `arkeon-wiki up` " +
+        "(or pass `--api-url <url>` to point at a daemon elsewhere).",
+    );
+  }
+  const list = running
+    .map((i: Instance) => `  - ${i.name} (${i.api_url})`)
+    .join("\n");
+  throw new Error(
+    `Multiple arkeon-wiki daemons are running and none of them is the default. ` +
+      `Pick one with --api-url <url>:\n${list}`,
+  );
 }
 
 /**
