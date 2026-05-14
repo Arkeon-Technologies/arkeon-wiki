@@ -28,6 +28,12 @@ export {
   renderLaunchdPlist,
   validateInstanceName,
 } from "./launchd-plist.js";
+export {
+  renderSystemdUnit,
+  systemdUnitName,
+  systemdUnitPath,
+  UNIT_PREFIX as SYSTEMD_UNIT_PREFIX,
+} from "./systemd-unit.js";
 
 /**
  * Detect which service supervisor we should target. Pure: only reads
@@ -80,27 +86,22 @@ export async function findInstalledService(name: string): Promise<{
  * Get the platform's {@link ServiceManager}. Throws on `unsupported` —
  * the install command catches and prints a friendly message.
  *
- * Implementations are loaded lazily via dynamic import so the launchd
- * module never executes on Linux (it's pure rendering today, but as
- * soon as we add `execFile("launchctl", ...)` we want that import to
- * stay off the Linux path entirely).
+ * Implementations are loaded lazily via dynamic import so each
+ * platform's exec wrapper code stays off the other platform's import
+ * path (launchctl on Linux would try to execFile a missing binary;
+ * systemctl on macOS likewise).
  */
 export async function getServiceManager(p: Platform = detectPlatform()): Promise<ServiceManager> {
   if (p === "launchd") {
-    // Phase C wires this up; until then the module exports a
-    // not-yet-implemented stub that throws on use.
     const mod = await import("./launchd.js");
     return mod.manager;
   }
   if (p === "systemd") {
-    // PR2 wires this up.
-    throw new Error(
-      "systemd integration is not implemented in this build. " +
-        "See https://github.com/Arkeon-Technologies/arkeon-wiki/issues/146",
-    );
+    const mod = await import("./systemd.js");
+    return mod.manager;
   }
   throw new Error(
     `Service install is not supported on this platform (${osPlatform()}). ` +
-      "Currently supported: macOS (launchd), Linux (systemd, planned).",
+      "Currently supported: macOS (launchd), Linux (systemd).",
   );
 }

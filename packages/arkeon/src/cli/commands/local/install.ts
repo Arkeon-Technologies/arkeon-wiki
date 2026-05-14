@@ -7,7 +7,9 @@
  *
  * On macOS: writes a LaunchAgent plist under ~/Library/LaunchAgents
  * and bootstraps it into the user's launchd domain. On Linux: writes
- * a user-scope systemd unit (PR2). User-scope on both — no sudo.
+ * a user-scope systemd unit under ~/.config/systemd/user and enables
+ * it via `systemctl --user enable --now`, plus `loginctl
+ * enable-linger` for headless servers. User-scope on both — no sudo.
  *
  * Refuses to run while a `up`-spawned daemon already holds the port.
  * Installation includes starting the service; we want a clean handoff,
@@ -21,6 +23,7 @@ import type { Command } from "commander";
 import {
   applyName,
   arkeonDir,
+  ensureArkeonDir,
   isProcessAlive,
   readPidfile,
   removePidfile,
@@ -33,6 +36,7 @@ import {
   snapshotEnv,
   snapshotPaths,
 } from "../../lib/service/index.js";
+import { isSystemctlAvailable } from "../../lib/service/systemctl.js";
 
 interface InstallCliOptions {
   name?: string;
@@ -79,13 +83,35 @@ async function runInstall(opts: InstallCliOptions): Promise<void> {
   if (platform === "unsupported") {
     throw new Error(
       `service install is not supported on this platform. ` +
-        `Currently: macOS (launchd), Linux (systemd, planned).`,
+        `Currently: macOS (launchd), Linux (systemd).`,
+    );
+  }
+
+  // On Linux, confirm systemctl --user actually works before going
+  // further. Alpine / OpenRC / WSL1 / some container init systems
+  // either don't ship the binary or can't reach the user-bus — refuse
+  // with actionable instructions rather than write a unit file the
+  // system can't load.
+  if (platform === "systemd" && !(await isSystemctlAvailable())) {
+    throw new Error(
+      "systemctl --user is not available on this system. " +
+        "If you're on a non-systemd Linux (Alpine, Void, WSL1) the persistent service " +
+        "isn't supported yet — use `arkeon-wiki up` for an ephemeral background daemon, " +
+        "or wrap it in your distro's preferred supervisor (OpenRC, runit, supervisord).",
     );
   }
 
   const instanceName = opts.name ?? DEFAULT_INSTANCE_NAME;
   if (opts.name) applyName(opts.name);
   const home = arkeonDir();
+
+  // Create the instance home dir BEFORE the supervisor starts the
+  // daemon. systemd's StandardOutput=append:<path> opens the log
+  // file before invoking ExecStart, so the dir must exist or the
+  // unit fails to start with status=209/STDOUT. Launchd is less
+  // strict here, but creating the dir up front is correct on both
+  // platforms.
+  ensureArkeonDir();
 
   // Refuse to install while a `up`-spawned daemon is running on the
   // same instance. The supervisor's first start would race the
@@ -119,7 +145,7 @@ async function runInstall(opts: InstallCliOptions): Promise<void> {
       })
     : { written: [], preserved: [], missing: [], envFilePath: "" };
 
-  output.progress(`[arkeon-wiki] platform: ${platform === "launchd" ? "macOS (launchd)" : "Linux (systemd)"}`);
+  output.progress(`[arkeon-wiki] platform: ${platform === "launchd" ? "macOS (launchd)" : "Linux (systemd --user)"}`);
 
   const manager = await getServiceManager(platform);
   const result = await manager.install({
@@ -127,6 +153,19 @@ async function runInstall(opts: InstallCliOptions): Promise<void> {
     home,
     paths,
   });
+
+  const nextSteps: string[] = [];
+  if (envResult.missing.length > 0) {
+    nextSteps.push(
+      `Missing keys: ${envResult.missing.join(", ")}. Add them to ${envResult.envFilePath} or set them in the shell where you ran install before retrying.`,
+    );
+  }
+  if (platform === "systemd" && result.lingerEnabled === false) {
+    nextSteps.push(
+      `loginctl enable-linger failed. The service won't survive logout on headless servers. ` +
+        `Run \`sudo loginctl enable-linger $USER\` (as admin) if this is a non-graphical session.`,
+    );
+  }
 
   output.result({
     operation: "install",
@@ -136,6 +175,9 @@ async function runInstall(opts: InstallCliOptions): Promise<void> {
     label: result.label,
     running: result.running,
     pid: result.pid,
+    ...(result.lingerEnabled !== undefined
+      ? { linger_enabled: result.lingerEnabled }
+      : {}),
     env: envResult.envFilePath
       ? {
           file: envResult.envFilePath,
@@ -144,11 +186,6 @@ async function runInstall(opts: InstallCliOptions): Promise<void> {
           missing: envResult.missing,
         }
       : { skipped: true },
-    next_steps:
-      envResult.missing.length > 0
-        ? [
-            `Missing keys: ${envResult.missing.join(", ")}. Add them to ${envResult.envFilePath} or set them in the shell where you ran install before retrying.`,
-          ]
-        : undefined,
+    next_steps: nextSteps.length > 0 ? nextSteps : undefined,
   });
 }

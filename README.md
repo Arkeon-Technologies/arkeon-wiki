@@ -15,7 +15,7 @@ arkeon-wiki up
 
 This starts the daemon as a detached background process — it survives your terminal closing. Stop it with `arkeon-wiki down`. State (SQLite database, pidfile, log) lives in `~/.arkeon-wiki/`.
 
-For a daemon that also survives reboot and restarts on crash, run `arkeon-wiki install` (macOS launchd today; Linux systemd planned). See [§Persistent service](#persistent-service).
+For a daemon that also survives reboot and restarts on crash, run `arkeon-wiki install` (macOS launchd or Linux systemd `--user`). See [§Persistent service](#persistent-service).
 
 **2. Register a directory**
 
@@ -120,11 +120,11 @@ arkeon-wiki uninstall                # remove the service (leaves data dir intac
 
 **macOS** writes `~/Library/LaunchAgents/tech.arkeon.wiki[.<name>].plist` and bootstraps it into the user's launchd domain. No sudo. The plist's `KeepAlive: { SuccessfulExit: false, Crashed: true }` contract means `arkeon-wiki down` stays down (clean exit), but a crashed daemon comes back within ~10s.
 
-**Linux** (systemd user unit + `loginctl enable-linger`) is planned for PR2 — tracked in [#146](https://github.com/Arkeon-Technologies/arkeon-wiki/issues/146).
+**Linux** writes `~/.config/systemd/user/arkeon-wiki[-<name>].service` and enables it via `systemctl --user enable --now`, plus `loginctl enable-linger $USER` so the service survives logout on headless servers (best-effort — fine on most distros; some require sudo via polkit). No sudo for the install itself. `Restart=on-failure` + `RestartSec=10` give the same "clean down stays down, crash → restart after 10s" semantics as the Mac path. On non-systemd Linux (Alpine, WSL1, OpenRC/runit) the install refuses with actionable manual instructions rather than writing a unit the system can't load.
 
-API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) live in `~/.arkeon-wiki/.env`, *not* in the plist (plists are world-readable). `install` captures keys from your shell if they're set there but not in the file yet — it never overwrites existing values. Rotate keys by editing the file.
+API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) live in `~/.arkeon-wiki/.env` (mode 0600), *not* in the plist/unit. `install` captures keys from your shell if they're set there but not in the file yet — it never overwrites existing values. Rotate keys by editing the file.
 
-When a service is installed, `up`/`down`/`status` coordinate with the supervisor automatically: `up` delegates to `launchctl kickstart` instead of spawning an orphan; `down` produces a clean exit the supervisor respects; `status` surfaces a `service` field with installed/running/pid.
+When a service is installed, `up`/`down`/`status` coordinate with the supervisor automatically: `up` delegates to `launchctl kickstart` / `systemctl --user start` instead of spawning an orphan; `down` produces a clean exit the supervisor respects; `status` surfaces a `service` field with installed/running/pid.
 
 ## Agents (LLM-powered)
 

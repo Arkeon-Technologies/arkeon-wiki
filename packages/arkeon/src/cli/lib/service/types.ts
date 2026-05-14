@@ -44,6 +44,14 @@ export interface InstallResult {
   running: boolean;
   /** PID, if the supervisor exposes one. */
   pid: number | null;
+  /**
+   * Linux-only: did `loginctl enable-linger <user>` succeed? Headless
+   * servers need linger enabled for the user-systemd instance to
+   * survive logout. Best-effort during install (polkit may refuse on
+   * some distros), so we report the outcome rather than failing.
+   * Undefined on launchd.
+   */
+  lingerEnabled?: boolean;
 }
 
 export interface UninstallOptions {
