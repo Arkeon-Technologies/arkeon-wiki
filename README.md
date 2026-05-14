@@ -2,6 +2,8 @@
 
 A knowledge graph that lives in your filesystem. Point it at a directory, and it watches for changes, indexes files into SQLite, and builds a connected graph from `<a href>` links between HTML articles.
 
+**First-time setup → [SETUP.md](./SETUP.md)** is a 15-minute walkthrough that takes you from install to a corpus the agents are actively writing into.
+
 ## Quick start
 
 **1. Install and start**
