@@ -109,13 +109,16 @@ async function syncWiki(
         SET label = ${label},
             source_hash = ${hash},
             properties = ${propsJson},
-            updated_at = datetime('now')
+            updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
         WHERE space_name = ${space.name} AND source_path = ${relativePath}
       `;
     } else {
+      // updated_at is set explicitly with ms precision (matching the UPDATE
+      // branch) so the "latest first" sort in the article index can break
+      // ties on entities created in the same second.
       await tx`
-        INSERT INTO entities (space_name, source_path, type, label, source_hash, properties)
-        VALUES (${space.name}, ${relativePath}, 'wiki', ${label}, ${hash}, ${propsJson})
+        INSERT INTO entities (space_name, source_path, type, label, source_hash, properties, updated_at)
+        VALUES (${space.name}, ${relativePath}, 'wiki', ${label}, ${hash}, ${propsJson}, strftime('%Y-%m-%d %H:%M:%f', 'now'))
       `;
     }
 
@@ -167,15 +170,15 @@ async function syncSource(
       SET label = ${label},
           source_hash = ${hash},
           properties = ${propsJson},
-          updated_at = datetime('now')
+          updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
       WHERE space_name = ${space.name} AND source_path = ${relativePath}
     `;
     return { action: "updated", type: "file", label, linksExtracted: 0 };
   }
 
   await sql`
-    INSERT INTO entities (space_name, source_path, type, label, source_hash, properties)
-    VALUES (${space.name}, ${relativePath}, 'file', ${label}, ${hash}, ${propsJson})
+    INSERT INTO entities (space_name, source_path, type, label, source_hash, properties, updated_at)
+    VALUES (${space.name}, ${relativePath}, 'file', ${label}, ${hash}, ${propsJson}, strftime('%Y-%m-%d %H:%M:%f', 'now'))
   `;
   return { action: "created", type: "file", label, linksExtracted: 0 };
 }

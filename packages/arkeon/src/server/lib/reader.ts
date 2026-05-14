@@ -186,8 +186,8 @@ export interface ArticleIndexRow {
 }
 
 /**
- * Render the per-space alphabetical article index. Each row links to
- * the wiki article via its on-disk path under `/{space}/wiki/...`.
+ * Render the per-space article index. Rendered in input order — the
+ * caller decides the sort (the route picks most-recently-updated first).
  *
  * `label` falls back to the bare filename if missing (the writer is
  * supposed to emit `<title>`, so this is just defensive).
@@ -196,15 +196,7 @@ export function renderArticleIndex(
   spaceName: string,
   articles: ArticleIndexRow[],
 ): string {
-  const sorted = [...articles].sort((a, b) => {
-    const al = (a.label ?? posix.basename(a.source_path)).toLowerCase();
-    const bl = (b.label ?? posix.basename(b.source_path)).toLowerCase();
-    if (al < bl) return -1;
-    if (al > bl) return 1;
-    return 0;
-  });
-
-  const rows = sorted
+  const rows = articles
     .map((a) => {
       const display = escapeHtml(a.label ?? posix.basename(a.source_path));
       const href = `/${encodeURIComponent(spaceName)}/${a.source_path
@@ -241,7 +233,7 @@ export function renderArticleIndex(
   <p class="crumb"><a href="/">&larr; spaces</a></p>
   <h1>${escapeHtml(spaceName)}</h1>
   <ul>
-${sorted.length === 0 ? empty : rows}
+${articles.length === 0 ? empty : rows}
   </ul>
 </body>
 </html>

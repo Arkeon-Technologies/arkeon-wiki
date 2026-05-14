@@ -143,7 +143,16 @@ describe("Phase 2 reader", () => {
     expect(res.headers.get("location")).toBe(`/${SPACE}/`);
   });
 
-  it("GET /:space/ returns an alphabetical article index", async () => {
+  it("GET /:space/ returns the article index with most-recently-updated first", async () => {
+    // Write a new wiki *after* the corpus is already synced — its
+    // updated_at will be strictly later than the original two, so it
+    // must render above them regardless of any tie-breaker.
+    writeFileSync(
+      join(workdir, "wiki/late-arrival.html"),
+      `<!doctype html><html><head><title>Late Arrival</title></head><body><h1>Late Arrival</h1></body></html>`,
+    );
+    await waitForEntity(SPACE, "wiki/late-arrival.html");
+
     const res = await fetch(`${baseUrl}/${SPACE}/`);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toMatch(/text\/html/);
@@ -155,11 +164,17 @@ describe("Phase 2 reader", () => {
     expect(body).toContain(
       `<a href="/${SPACE}/wiki/photosynthesis.html">Photosynthesis</a>`,
     );
+    expect(body).toContain(
+      `<a href="/${SPACE}/wiki/late-arrival.html">Late Arrival</a>`,
+    );
     expect(body).toContain("How plants convert light into chemical energy.");
 
+    const lateIdx = body.indexOf(">Late Arrival<");
     const choIdx = body.indexOf(">Chlorophyll<");
     const phoIdx = body.indexOf(">Photosynthesis<");
-    expect(choIdx).toBeLessThan(phoIdx); // alphabetical
+    expect(lateIdx).toBeGreaterThan(0);
+    expect(lateIdx).toBeLessThan(choIdx);
+    expect(lateIdx).toBeLessThan(phoIdx);
   });
 
   it("GET /:space/wiki/* returns the article with chrome and link classes", async () => {

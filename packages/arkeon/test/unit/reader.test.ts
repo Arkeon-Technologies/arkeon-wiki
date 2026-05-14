@@ -189,17 +189,19 @@ describe("renderSpaceIndex", () => {
 });
 
 describe("renderArticleIndex", () => {
-  it("sorts alphabetically by label (case-insensitive)", () => {
+  it("preserves input order (the route sorts by updated_at DESC)", () => {
     const out = renderArticleIndex("demo", [
       { source_path: "wiki/zebra.html", label: "Zebra", short_description: null },
       { source_path: "wiki/apple.html", label: "apple", short_description: null },
       { source_path: "wiki/banana.html", label: "Banana", short_description: null },
     ]);
-    const appleIdx = out.indexOf("apple");
-    const bananaIdx = out.indexOf("Banana");
-    const zebraIdx = out.indexOf("Zebra");
+    // Use path strings (unique to each row) rather than labels (which can
+    // collide with CSS like `-apple-system`).
+    const zebraIdx = out.indexOf("/demo/wiki/zebra.html");
+    const appleIdx = out.indexOf("/demo/wiki/apple.html");
+    const bananaIdx = out.indexOf("/demo/wiki/banana.html");
+    expect(zebraIdx).toBeLessThan(appleIdx);
     expect(appleIdx).toBeLessThan(bananaIdx);
-    expect(bananaIdx).toBeLessThan(zebraIdx);
   });
 
   it("links to /:space/<source_path>", () => {
