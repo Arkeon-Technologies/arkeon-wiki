@@ -44,7 +44,13 @@ const EXAMPLES_PER_EXT = 5;
  * skipped — same rule the watcher applies.
  *
  * Synchronous fs is fine here: this runs once on operator demand, not
- * in a hot path.
+ * in a hot path. Cost is O(N) over every file in the watch tree —
+ * a corpus of tens of thousands of files blocks the event loop for
+ * the duration of the walk. Acceptable for v0 because the endpoint
+ * is operator-triggered (one shot, not a request you fan out). If
+ * usage outgrows that, the natural next step is async readdir + a
+ * max-files truncation signal, or serving from a count the watcher
+ * maintains.
  */
 export function scanSources(watchDir: string): ScanResult {
   const supportedByExt: Record<string, number> = {};
@@ -105,6 +111,10 @@ function walk(
     } else if (entry.isFile()) {
       visit(relativePath);
     }
+    // Symlinks fall through both branches (isDirectory and isFile
+    // are false for them) and are silently skipped — matches the
+    // watcher's behavior in fs-watcher.ts so the inventory stays
+    // consistent with what gets indexed.
   }
 }
 
