@@ -102,7 +102,7 @@ arkeon-wiki start              # foreground (for use under pm2/launchd/etc.)
 
 ## Agents (LLM-powered)
 
-arkeon-wiki ships a small AI agent runtime with a single built-in role — `writer` — that turns recent sources and red-link demand into HTML articles. Configure it in `.arkeon/agents.yaml` (committed) and put your API key in `~/.arkeon-wiki/.env` (per-user, machine-local).
+arkeon-wiki ships a small AI agent runtime with three built-in roles — `editor`, `proposer`, and `writer` — that work in sequence per source: the editor integrates a new source into existing articles (citations and open-thread red links), the proposer emits a per-source plan wiki of red links the editor didn't integrate, and the writer drains the red-link queue by creating new articles. Configure them in `.arkeon/agents.yaml` (committed) and put your API key in `~/.arkeon-wiki/.env` (per-user, machine-local).
 
 ```bash
 arkeon-wiki config init                                       # template config
