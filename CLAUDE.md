@@ -95,7 +95,7 @@ Writer **only creates new articles**. No `edit_file` in its whitelist; no fallba
 
 **Tag namespaces** are the queue mechanism: `editor.processed_hash` / `proposer.processed_hash` on each source. Content changes (new `source_hash`) naturally invalidate both, re-entering the source into both queues.
 
-The trigger for all three is **purely cron-driven**. Bundled defaults: editor hourly, proposer hourly (gates on editor's tag so it naturally trails one cycle), writer every 15 min. Per-space mutex serializes — at most one role runs in a given space at a time.
+The trigger for all three is **purely cron-driven**. Bundled defaults: editor hourly, proposer hourly (gates on editor's tag so it naturally trails one cycle), writer every 15 min. Per-space mutex serializes — at most one role runs in a given space at a time. Cron ticks **queue** behind any in-flight or already-queued run in their space (FIFO), so a contended tick is never dropped — it just runs late. Manual `POST /:space/agents/:role/run` calls keep fail-fast semantics: 409 if the space is busy or has a queued waiter.
 
 All three bundled templates ship with `model: gpt-5.4-mini`, `reasoning_effort: low`. **First-run cost note**: a fresh `arkeon-wiki up` against a corpus with `OPENAI_API_KEY` set will start spending API credit within 15 minutes. To inspect behavior before letting them run, override the cadence per role in `.arkeon/agents.yaml`.
 
@@ -156,7 +156,7 @@ Tags exist so multi-agent pipelines can track "has role X processed entity Y" wi
 - `src/server/routes/reader.ts` — the four human-facing routes (`/`, `/:space`, `/:space/`, `/:space/wiki/*`, `/:space/*`). Mounted last so `/:space/*` is a true fallback.
 - `src/server/agents/` — declarative `.arkeon/agents.yaml` config (Zod-validated), bundled role templates (`templates/*.yaml`), role-builder, tool registry, `runAgent` loop (Vercel AI SDK), per-space cron scheduler.
 - `src/server/agents/cron.ts` — `nextTick(expr, from)` via `cron-parser`. Drives the scheduler's `setTimeout` chain.
-- `src/server/agents/scheduler.ts` — per-space cron. Per-space mutex (skip-if-busy on contention). No event queue, no orphan reclaim.
+- `src/server/agents/scheduler.ts` — per-space cron. Cron ticks queue per-space (FIFO) behind any in-flight or queued run via `queueSpaceMutex`. The HTTP run route stays fail-fast via `withSpaceMutex`. No orphan reclaim.
 - `src/server/agents/space-scope.ts` — `resolveAllowedSpaces(scope, ownSpace)` + `resolveSpaceArg(arg, allowed)`. Multi-space reads, writes always to `ctx.space`.
 
 ## API endpoints

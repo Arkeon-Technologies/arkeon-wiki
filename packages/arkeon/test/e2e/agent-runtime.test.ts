@@ -636,4 +636,97 @@ describe("scheduler", () => {
       delete process.env.OPENAI_API_KEY;
     }
   }, 10_000);
+
+  it("queues a contending cron tick instead of dropping it", async () => {
+    // Two cron-bearing roles in the same space, both firing every second.
+    // Hold the first role's runAgent open with a gate so the second
+    // role's tick fires while the mutex is taken. With queueing, the
+    // second role's run must be observed after the first releases —
+    // not dropped to a skip-and-reschedule (which was the old behavior).
+    const cron = "* * * * * *";
+
+    process.env.OPENAI_API_KEY = "sk-test-fake";
+    mkdirSync(join(workdir, ".arkeon"), { recursive: true });
+    writeFileSync(
+      join(workdir, ".arkeon/agents.yaml"),
+      `roles:\n  editor:\n    cron: "${cron}"\n  writer:\n    cron: "${cron}"\n`,
+    );
+
+    const events: Array<{ role: string; phase: "start" | "end"; at: number }> = [];
+    const start0 = Date.now();
+    let releaseEditor!: () => void;
+    const editorGate = new Promise<void>((r) => {
+      releaseEditor = r;
+    });
+
+    type RunAgentFn = Parameters<typeof startScheduler>[0]["runAgentFn"];
+    const fakeRunAgent: RunAgentFn = async (role) => {
+      const name = role.name;
+      events.push({ role: name, phase: "start", at: Date.now() - start0 });
+      if (name === "editor" && events.filter((e) => e.role === "editor").length === 1) {
+        // First editor invocation only — block on the gate so writer's
+        // tick has to queue.
+        await editorGate;
+      }
+      events.push({ role: name, phase: "end", at: Date.now() - start0 });
+      return { skipped: false, edits: [], text: "ok", steps: 1 };
+    };
+
+    const handle = await startScheduler({
+      space: SPACE,
+      scheduleRoles: ["editor", "writer"],
+      runAgentFn: fakeRunAgent,
+      gracePeriodMs: 500,
+    });
+
+    try {
+      // Wait for editor to be observed running (it's holding the gate).
+      const editorStartDeadline = Date.now() + 2500;
+      while (
+        Date.now() < editorStartDeadline &&
+        !events.some((e) => e.role === "editor" && e.phase === "start")
+      ) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(
+        events.some((e) => e.role === "editor" && e.phase === "start"),
+      ).toBe(true);
+
+      // Give writer's cron a chance to fire while editor holds the mutex.
+      // 1500ms covers two full seconds of cron alignment plus jitter.
+      await new Promise((r) => setTimeout(r, 1500));
+
+      // Writer must NOT have started yet — it's queued behind editor.
+      expect(events.some((e) => e.role === "writer")).toBe(false);
+      // Editor must NOT have finished yet — it's still holding the gate.
+      expect(events.some((e) => e.role === "editor" && e.phase === "end")).toBe(
+        false,
+      );
+
+      // Release editor; writer should drain from the queue next.
+      releaseEditor();
+
+      // Wait for writer to be observed running.
+      const writerDeadline = Date.now() + 2500;
+      while (
+        Date.now() < writerDeadline &&
+        !events.some((e) => e.role === "writer" && e.phase === "end")
+      ) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+
+      // Both runs observed, editor end strictly before writer start
+      // (proves queue serialized, not parallel).
+      const editorEnd = events.find((e) => e.role === "editor" && e.phase === "end");
+      const writerStart = events.find((e) => e.role === "writer" && e.phase === "start");
+      expect(editorEnd).toBeDefined();
+      expect(writerStart).toBeDefined();
+      expect(writerStart!.at).toBeGreaterThanOrEqual(editorEnd!.at);
+    } finally {
+      // Ensure the gate isn't left dangling if an expectation failed early.
+      releaseEditor();
+      await handle.stop();
+      delete process.env.OPENAI_API_KEY;
+    }
+  }, 10_000);
 });
