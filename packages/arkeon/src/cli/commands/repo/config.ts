@@ -29,9 +29,11 @@ import { loadBundledTemplates } from "../../../server/agents/templates.js";
 import { listAvailableRoles } from "../../../server/agents/role-builder.js";
 import { output } from "../../lib/output.js";
 
-const REPO_RELATIVE_PATH = join(".arkeon", "agents.yaml");
+export const AGENTS_YAML_RELATIVE_PATH = join(".arkeon", "agents.yaml");
 
-const TEMPLATE = `# .arkeon/agents.yaml
+export const DEFAULT_AGENTS_TEMPLATE = "wiki";
+
+const WIKI_TEMPLATE = `# .arkeon/agents.yaml
 #
 # Per-repo agent configuration. Committed to the repo so the team
 # shares the same focus, model choices, and operator instructions.
@@ -82,6 +84,62 @@ defaults:
 #       and rewrite the thesis.
 `;
 
+/**
+ * Registry of named templates that `arkeon-wiki init` and
+ * `arkeon-wiki config init` can lay down. Today there's one (`wiki`);
+ * the indirection exists so additional templates (e.g. a
+ * source-archive-only template, a notebook template) can land as new
+ * entries without changing the CLI surface.
+ */
+export const AGENTS_YAML_TEMPLATES: Record<string, string> = {
+  wiki: WIKI_TEMPLATE,
+};
+
+export interface WriteAgentsYamlOptions {
+  /** The repo root. The file is written at {targetDir}/.arkeon/agents.yaml. */
+  targetDir: string;
+  /** Named template from AGENTS_YAML_TEMPLATES. Defaults to "wiki". */
+  template?: string;
+  /** Overwrite an existing file. Defaults to false. */
+  force?: boolean;
+}
+
+export interface WriteAgentsYamlResult {
+  /** False if the file already existed and force was not set. */
+  created: boolean;
+  /** Absolute path to the target file. */
+  path: string;
+  /** Resolved template name. */
+  template: string;
+}
+
+/**
+ * Write `.arkeon/agents.yaml` from a named template. Idempotent unless
+ * `force` is set: an existing file is left untouched.
+ *
+ * Throws if the template name isn't registered — the error lists what
+ * names are available so the caller can correct a typo.
+ */
+export function writeAgentsYamlTemplate(
+  opts: WriteAgentsYamlOptions,
+): WriteAgentsYamlResult {
+  const templateName = opts.template ?? DEFAULT_AGENTS_TEMPLATE;
+  const content = AGENTS_YAML_TEMPLATES[templateName];
+  if (!content) {
+    const available = Object.keys(AGENTS_YAML_TEMPLATES).sort().join(", ");
+    throw new Error(
+      `Unknown agents.yaml template '${templateName}'. Available: ${available}.`,
+    );
+  }
+  const target = resolve(opts.targetDir, AGENTS_YAML_RELATIVE_PATH);
+  if (existsSync(target) && !opts.force) {
+    return { created: false, path: target, template: templateName };
+  }
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, content);
+  return { created: true, path: target, template: templateName };
+}
+
 export function registerConfigCommand(program: Command): void {
   const cmd = program
     .command("config")
@@ -103,9 +161,15 @@ export function registerConfigCommand(program: Command): void {
     .command("init")
     .description("Create .arkeon/agents.yaml from a template")
     .option("--force", "Overwrite an existing file", false)
-    .action(async (options: { force: boolean }) => {
+    .option(
+      "--template <name>",
+      `Named template to use (default: ${DEFAULT_AGENTS_TEMPLATE}). ` +
+        `Available: ${Object.keys(AGENTS_YAML_TEMPLATES).sort().join(", ")}.`,
+      DEFAULT_AGENTS_TEMPLATE,
+    )
+    .action(async (options: { force: boolean; template: string }) => {
       try {
-        await runInit(options.force);
+        await runInit(options.force, options.template);
       } catch (error) {
         output.error(error, { operation: "config init" });
         process.exitCode = 1;
@@ -150,27 +214,26 @@ async function runShow(): Promise<void> {
   }
 }
 
-async function runInit(force: boolean): Promise<void> {
+async function runInit(force: boolean, template: string): Promise<void> {
   const cwd = process.cwd();
-  const target = resolve(cwd, REPO_RELATIVE_PATH);
+  const result = writeAgentsYamlTemplate({ targetDir: cwd, template, force });
 
-  if (existsSync(target) && !force) {
+  if (!result.created) {
     output.result({
       operation: "config init",
       created: false,
-      path: target,
+      path: result.path,
+      template: result.template,
       hint: "File already exists. Use --force to overwrite, or edit it directly.",
     });
     return;
   }
 
-  mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, TEMPLATE);
-
   output.result({
     operation: "config init",
     created: true,
-    path: target,
+    path: result.path,
+    template: result.template,
     hint:
       "Edit this file to set your provider/model and operator instructions. " +
       "Add API keys to .env (not this file).",
@@ -179,7 +242,7 @@ async function runInit(force: boolean): Promise<void> {
 
 async function runValidate(): Promise<void> {
   const cwd = process.cwd();
-  const target = resolve(cwd, REPO_RELATIVE_PATH);
+  const target = resolve(cwd, AGENTS_YAML_RELATIVE_PATH);
 
   if (!existsSync(target)) {
     output.result({
