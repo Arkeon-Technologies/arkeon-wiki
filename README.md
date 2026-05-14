@@ -102,7 +102,7 @@ arkeon-wiki start              # foreground (for use under pm2/launchd/etc.)
 
 ## Agents (LLM-powered)
 
-arkeon-wiki ships a small AI agent runtime with a single built-in role — `writer` — that turns recent sources and red-link demand into HTML articles. Configure it in `.arkeon/agents.yaml` (committed) and put your API key in `~/.arkeon-wiki/.env` (per-user, machine-local).
+arkeon-wiki ships a three-role agent pipeline — `editor`, `proposer`, `writer` — that ingests sources, proposes the questions worth answering, and drafts the HTML articles. All three run on cron, serialized per-space. Configure them in `.arkeon/agents.yaml` (committed) and put your API key in `~/.arkeon-wiki/.env` (per-user, machine-local).
 
 ```bash
 arkeon-wiki config init                                       # template config
@@ -112,6 +112,23 @@ arkeon-wiki config show                                        # confirm what'll
 ```
 
 Roles run on OpenAI, Anthropic, or any OpenAI-compatible backend (Ollama, LM Studio, OpenRouter, Groq, vLLM, …). Each role can use a different provider; secrets stay in `.env`, never YAML. Custom user-defined roles are first-class.
+
+### Opinionating your wiki
+
+A bare config will produce a generic wiki that takes every source seriously and writes articles on whatever it finds. To get an *opinionated* wiki — one with a point of view, a scope, a house style — set `instructions:` in `.arkeon/agents.yaml`. It's appended to every role's system prompt without disturbing the workflow, so it's the one knob you reach for first.
+
+```yaml
+defaults:
+  instructions: |
+    This wiki is about distributed systems, with a bias toward
+    primary-source engineering writeups (postmortems, design docs,
+    papers) over secondary commentary. Skip vendor blog posts.
+    Tone: skeptical, evidence-led, no marketing voice.
+    Audience: practitioners, not students — assume the reader knows
+    what consensus and replication are.
+```
+
+This is the most consequential setting in the file. The default article structure (`Question / Current answer / Evidence / Open threads`) is a soft convention baked into the bundled prompts — if it doesn't fit your domain, override the `writer` role's `system:` directly. Otherwise, treat `instructions:` as the place to spend your editorial judgment.
 
 Full setup guide: [docs/user/AGENT_RUNTIME.md](./docs/user/AGENT_RUNTIME.md).
 
