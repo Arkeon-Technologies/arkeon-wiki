@@ -53,6 +53,25 @@ describe("resolveHref", () => {
     expect(resolveHref("../../etc/passwd", "wiki/foo.html")).toBeNull();
     expect(resolveHref("../../../foo", "wiki/biology/x.html")).toBeNull();
   });
+
+  it("decodes percent-escaped path segments", () => {
+    expect(
+      resolveHref(
+        "../IARPA_Bengal/Milestones%20%26%20Schedules/A1/Data/README.md",
+        "wiki/foo.html",
+      ),
+    ).toBe("IARPA_Bengal/Milestones & Schedules/A1/Data/README.md");
+    expect(resolveHref("../My%20Notes/x.html", "wiki/foo.html")).toBe(
+      "My Notes/x.html",
+    );
+  });
+
+  it("tolerates malformed percent encoding", () => {
+    // Invalid `%` sequence → fall back to the raw string rather than throw.
+    expect(resolveHref("../foo%2/bar.html", "wiki/x.html")).toBe(
+      "foo%2/bar.html",
+    );
+  });
 });
 
 describe("extractHtmlLinks", () => {

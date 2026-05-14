@@ -55,8 +55,19 @@ export function resolveHref(href: string, fromPath: string): string | null {
   const clean = href.split(/[#?]/, 1)[0];
   if (!clean) return null;
 
+  // Hrefs are URL-encoded; entity source_paths are real filesystem strings.
+  // Decode percent-escapes (`%20` → space, `%26` → `&`, ...) so the resolved
+  // path is comparable to what's on disk. Without this, links to files whose
+  // names contain spaces or other reserved chars render as red links.
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(clean);
+  } catch {
+    decoded = clean;
+  }
+
   const fromDir = posix.dirname(fromPath);
-  const resolved = posix.normalize(posix.join(fromDir, clean));
+  const resolved = posix.normalize(posix.join(fromDir, decoded));
 
   if (resolved.startsWith("../") || resolved === ".." || resolved.startsWith("/")) {
     return null;
