@@ -3,7 +3,10 @@
 
 import { describe, expect, it } from "vitest";
 
-import { parseSystemctlShow } from "../../src/cli/lib/service/systemctl.js";
+import {
+  isSystemctlAvailable,
+  parseSystemctlShow,
+} from "../../src/cli/lib/service/systemctl.js";
 
 describe("parseSystemctlShow", () => {
   it("extracts active state + main pid + load state from typical show output", () => {
@@ -77,5 +80,36 @@ LoadState=loaded
   it("ignores invalid MainPID values (negative, NaN)", () => {
     expect(parseSystemctlShow("MainPID=-1\n").mainPid).toBeNull();
     expect(parseSystemctlShow("MainPID=garbage\n").mainPid).toBeNull();
+  });
+});
+
+describe("isSystemctlAvailable", () => {
+  it("returns true when systemctl --user --version succeeds", async () => {
+    const fake = async () => ({
+      stdout: "systemd 252 (252.16-1~deb12u1)\n",
+      stderr: "",
+      exitCode: 0,
+    });
+    expect(await isSystemctlAvailable(fake)).toBe(true);
+  });
+
+  it("returns false when the binary is missing (exitCode -1)", async () => {
+    // Our wrapper returns exitCode -1 for ENOENT-style failures.
+    const fake = async () => ({
+      stdout: "",
+      stderr: "spawn systemctl ENOENT",
+      exitCode: -1,
+    });
+    expect(await isSystemctlAvailable(fake)).toBe(false);
+  });
+
+  it("returns false when systemctl exists but the user-bus is unavailable", async () => {
+    // Happens on WSL1 / some containers where systemd isn't pid 1.
+    const fake = async () => ({
+      stdout: "",
+      stderr: "Failed to connect to bus: No such file or directory",
+      exitCode: 1,
+    });
+    expect(await isSystemctlAvailable(fake)).toBe(false);
   });
 });

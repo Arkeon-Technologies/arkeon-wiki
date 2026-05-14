@@ -60,6 +60,28 @@ export const realSystemctl: SystemctlRunner = makeRunner("systemctl");
 export const realLoginctl: LoginctlRunner = makeRunner("loginctl");
 
 /**
+ * Probe whether `systemctl --user` works on this machine. Returns
+ * false on non-systemd Linux (Alpine, slim containers, OpenRC/runit
+ * distros) where the binary is missing or the user-bus isn't
+ * available — install should refuse with actionable manual
+ * instructions rather than fall through to a cryptic exec error.
+ *
+ * The probe is `systemctl --user --version`, which:
+ *   - exits 0 with version banner when systemctl is installed and
+ *     the user-bus is reachable
+ *   - exits ENOENT (-1 here, after our error wrap) when the binary
+ *     isn't installed at all
+ *   - exits non-zero with a clear error when systemctl exists but
+ *     systemd isn't pid 1 (e.g., WSL1, some container init systems)
+ */
+export async function isSystemctlAvailable(
+  run: SystemctlRunner = realSystemctl,
+): Promise<boolean> {
+  const result = await run(["--user", "--version"]);
+  return result.exitCode === 0;
+}
+
+/**
  * Parsed slice of `systemctl --user show <unit>` output. We ask for
  * the specific properties we care about via `-p ActiveState -p
  * MainPID -p LoadState`, and parse the resulting key=value lines.
