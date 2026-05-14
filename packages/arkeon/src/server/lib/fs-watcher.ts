@@ -25,7 +25,10 @@ type SchedulerHandle = Awaited<ReturnType<typeof startScheduler>>;
 const IGNORE_DIRS = new Set([".arkeon", ".git", "node_modules", ".claude", "__pycache__", ".venv"]);
 
 // File extensions we index. Anything else is invisible to the system.
-const INDEX_EXTENSIONS = new Set([".txt", ".json", ".csv", ".xml", ".html", ".rst"]);
+// Exported so callers like the sources-scan endpoint can partition a
+// directory listing against the same set the watcher applies — keeps
+// "what's indexable" defined in exactly one place.
+export const INDEX_EXTENSIONS = new Set([".txt", ".json", ".csv", ".xml", ".html", ".rst"]);
 
 const watchers = new Map<string, FSWatcher>();
 const schedulers = new Map<string, SchedulerHandle>();
