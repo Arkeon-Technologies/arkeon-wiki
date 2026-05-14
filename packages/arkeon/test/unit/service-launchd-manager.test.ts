@@ -87,7 +87,10 @@ describe("createLaunchdManager — install", () => {
     expect(readFileSync(expectedPath, "utf-8")).toContain("<string>tech.arkeon.wiki</string>");
 
     // Verb sequence: bootout (clear prior load) → bootstrap → kickstart → print.
+    // Plist is written to disk BEFORE bootout — see install() in
+    // launchd.ts for the partial-failure reasoning.
     expect(calls.map((c) => c.args[0])).toEqual(["bootout", "bootstrap", "kickstart", "print"]);
+    expect(calls[0].args).toEqual(["bootout", "gui/501/tech.arkeon.wiki"]);
     expect(calls[1].args).toEqual(["bootstrap", "gui/501", expectedPath]);
     expect(calls[2].args).toEqual(["kickstart", "-k", "gui/501/tech.arkeon.wiki"]);
   });
@@ -147,6 +150,51 @@ describe("createLaunchdManager — install", () => {
     expect(result.running).toBe(true);
     expect(result.pid).toBe(4242);
     expect(calls.filter((c) => c.args[0] === "print")).toHaveLength(3);
+  });
+
+  it("re-install replaces the plist on disk and tears down the old load", async () => {
+    // Simulate an upgrade: install once with the original entry path,
+    // then install again with a different path. The on-disk plist
+    // bytes must reflect the second call, and bootout must run between
+    // the two write+bootstrap pairs so the new plist actually takes.
+    const { run, calls } = fakeLaunchctl({});
+    const mgr = createLaunchdManager({
+      runLaunchctl: run,
+      home,
+      uid: 501,
+      bootWaitMs: 0,
+    });
+
+    await mgr.install(INSTALL_OPTS);
+    const firstPlist = readFileSync(
+      join(home, "Library/LaunchAgents/tech.arkeon.wiki.plist"),
+      "utf-8",
+    );
+    expect(firstPlist).toContain("<string>/Users/test/arkeon-wiki/dist/index.js</string>");
+
+    // Second install with a different cliEntry path — simulates upgrading
+    // arkeon-wiki to a build that lives somewhere else.
+    calls.length = 0;
+    await mgr.install({
+      ...INSTALL_OPTS,
+      paths: {
+        nodeBin: "/usr/local/bin/node",
+        cliEntry: "/opt/arkeon-wiki/dist/index.js",
+      },
+    });
+
+    const secondPlist = readFileSync(
+      join(home, "Library/LaunchAgents/tech.arkeon.wiki.plist"),
+      "utf-8",
+    );
+    expect(secondPlist).toContain("<string>/opt/arkeon-wiki/dist/index.js</string>");
+    expect(secondPlist).not.toContain("/Users/test/arkeon-wiki/dist/index.js");
+
+    // Second install must bootout the previous load before bootstrapping
+    // the new plist — otherwise launchd keeps the stale entry pointing
+    // at the old path.
+    const verbs = calls.map((c) => c.args[0]);
+    expect(verbs.indexOf("bootout")).toBeLessThan(verbs.indexOf("bootstrap"));
   });
 
   it("threads a named instance through plist + label + path", async () => {

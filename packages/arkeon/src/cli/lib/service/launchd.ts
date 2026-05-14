@@ -121,13 +121,19 @@ export function createLaunchdManager(
       mkdirSync(launchAgentsDir, { recursive: true });
     }
 
-    // If the service is already loaded (re-install, or a stale entry
-    // from a previous build), bootout first so bootstrap can take a
-    // fresh plist. Ignore failures — bootout returns non-zero if the
-    // service wasn't loaded, which is fine.
-    await run(["bootout", domain(label)]);
-
+    // Write the new plist *before* tearing down the previous load.
+    // If writeFileSync throws (disk full, EACCES, etc.) the user's
+    // previous service is left running — a re-runnable failure.
+    // If we bootout'd first and then failed to write, the user would
+    // be left with a stopped service and no new plist to retry from.
     writeFileSync(unitPath, plistBody, "utf-8");
+
+    // If the service is already loaded (re-install with new plist
+    // contents, or a stale entry from a previous build), bootout
+    // first so bootstrap can take the fresh plist. Ignore failures —
+    // bootout returns non-zero when the service wasn't loaded, which
+    // is the happy path on a first install.
+    await run(["bootout", domain(label)]);
 
     const bootstrap = await run(["bootstrap", `gui/${uid}`, unitPath]);
     if (bootstrap.exitCode !== 0) {

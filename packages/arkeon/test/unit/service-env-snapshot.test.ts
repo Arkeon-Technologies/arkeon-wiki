@@ -2,7 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -160,5 +167,59 @@ describe("snapshotEnv", () => {
     });
     expect(result.missing).toEqual(["EMPTY_KEY"]);
     expect(result.written).toEqual([]);
+  });
+
+  it("writes the env file with 0600 permissions", () => {
+    snapshotEnv({
+      keys: ["OPENAI_API_KEY"],
+      envFilePath: envPath,
+      shellEnv: { OPENAI_API_KEY: "sk-secret" },
+    });
+    // Mask file-type bits; we only care about the permission bits.
+    expect(statSync(envPath).mode & 0o777).toBe(0o600);
+  });
+
+  it("tightens existing 0644 permissions to 0600 on idempotent re-run", () => {
+    // User created the file by hand with permissive defaults — install
+    // should bring it to the secret-file standard, even when nothing
+    // new gets written.
+    writeFileSync(envPath, "OPENAI_API_KEY=sk-existing\n");
+    chmodSync(envPath, 0o644);
+    expect(statSync(envPath).mode & 0o777).toBe(0o644);
+
+    const result = snapshotEnv({
+      keys: ["OPENAI_API_KEY"],
+      envFilePath: envPath,
+      shellEnv: { OPENAI_API_KEY: "sk-shell" },
+    });
+
+    expect(result.preserved).toEqual(["OPENAI_API_KEY"]);
+    expect(result.written).toEqual([]);
+    expect(statSync(envPath).mode & 0o777).toBe(0o600);
+  });
+
+  it("creates the empty placeholder file with 0600", () => {
+    // No keys to write, no existing file — snapshotEnv still
+    // creates an empty file (cosmetic). It must also enforce 0600
+    // on that empty file so a later hand-edit landing a key is
+    // already protected.
+    snapshotEnv({
+      keys: ["NOT_IN_SHELL"],
+      envFilePath: envPath,
+      shellEnv: {},
+    });
+    expect(statSync(envPath).mode & 0o777).toBe(0o600);
+  });
+
+  it("dry-run does not chmod (no apply, no write)", () => {
+    writeFileSync(envPath, "EXISTING=v\n");
+    chmodSync(envPath, 0o644);
+    snapshotEnv({
+      keys: ["EXISTING"],
+      envFilePath: envPath,
+      shellEnv: { EXISTING: "v" },
+      apply: false,
+    });
+    expect(statSync(envPath).mode & 0o777).toBe(0o644);
   });
 });

@@ -27,12 +27,21 @@
 
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
+
+/**
+ * Mode bits for the user-global env file. 0600 = owner read/write
+ * only; other users on the machine cannot read it. The plist
+ * deliberately omits secrets (multi-user Macs make plists
+ * world-readable); the redirect target must apply the same standard.
+ */
+const ENV_FILE_MODE = 0o600;
 
 export interface SnapshotEnvOptions {
   /** Keys to consider, in user-visible order. e.g. ["OPENAI_API_KEY"]. */
@@ -122,6 +131,15 @@ export function snapshotEnv(opts: SnapshotEnvOptions): SnapshotEnvResult {
     // user's mental model of "the file is there".
     ensureDir(opts.envFilePath);
     writeFileSync(opts.envFilePath, "", "utf-8");
+  }
+
+  // Always tighten perms on a real run, even when no new keys were
+  // written and the file existed already. The reviewer's framing: if
+  // a user populated this file by hand with permissive defaults
+  // (0644), install should bring it to the standard 0600. Re-running
+  // install is idempotent — chmod to the same mode is a no-op.
+  if (apply && existsSync(opts.envFilePath)) {
+    chmodSync(opts.envFilePath, ENV_FILE_MODE);
   }
 
   return {

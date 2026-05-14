@@ -93,6 +93,17 @@ require "install running=true" echo "$INSTALL_OUT" | grep -q '"running": true'
 require "plist exists" test -f "$PLIST"
 require "launchctl knows label" launchctl print "gui/$UID/$LABEL" 2>/dev/null
 
+# Install returns when launchctl reports state=running. The daemon's
+# own pidfile is written by start.ts a few hundred ms later, after the
+# API binds the port. Real users hit this delay invisibly between
+# commands; the harness runs back-to-back and would race. Poll for the
+# pidfile so the rest of the script can lean on `status` consistently.
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  [[ -f "$DATA_DIR/arkeon.pid" ]] && break
+  sleep 0.5
+done
+require "pidfile present after install" test -f "$DATA_DIR/arkeon.pid"
+
 # --- 2. status (running) ---
 
 step "2. status --name $NAME (expect state=running, service.installed=true)"
