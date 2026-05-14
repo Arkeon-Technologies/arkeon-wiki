@@ -45,6 +45,11 @@ import { loadAgentConfig, type AgentConfig } from "./config.js";
 import { buildAgentRole } from "./role-builder.js";
 import { loadBundledTemplates } from "./templates.js";
 import { runAgent as defaultRunAgent } from "./runtime.js";
+import {
+  SpaceBusyError,
+  inFlightRole,
+  withSpaceMutex,
+} from "./space-mutex.js";
 import type { Space } from "../lib/sync.js";
 
 import { ALL_TOOLS } from "./tools.js";
@@ -148,9 +153,10 @@ export async function startScheduler(
     return { stop: async () => {} };
   }
 
-  // Per-space mutex. Held by an in-flight run; ticks that find it held
-  // log "skip (busy)" and reschedule from now.
-  let busy = false;
+  // The per-space mutex lives in space-mutex.ts so the manual
+  // `POST /:space/agents/:role/run` route obeys the same serialization
+  // as cron-fired ticks. `inFlight` here tracks our own most-recent
+  // run promise so stop() can wait for it bounded by gracePeriodMs.
   let inFlight: Promise<unknown> | null = null;
 
   let stopped = false;
@@ -180,14 +186,15 @@ export async function startScheduler(
   }
 
   async function fireTick(role: string, cron: string): Promise<void> {
-    if (busy) {
+    const holder = inFlightRole(opts.space.name);
+    if (holder) {
       console.log(
-        `[agent/scheduler] role=${role} space="${opts.space.name}" skip (busy)`,
+        `[agent/scheduler] role=${role} space="${opts.space.name}" skip (busy with ${holder})`,
       );
       scheduleNext(role, cron);
       return;
     }
-    busy = true;
+
     const built = (() => {
       try {
         return buildAgentRole(role, loadAgentConfig({ spaceDir: opts.space.watch_dir }));
@@ -199,12 +206,11 @@ export async function startScheduler(
       }
     })();
     if (!built) {
-      busy = false;
       scheduleNext(role, cron);
       return;
     }
 
-    const runPromise = (async () => {
+    const runPromise = withSpaceMutex(opts.space.name, role, async () => {
       try {
         await runAgent(
           built,
@@ -219,13 +225,24 @@ export async function startScheduler(
         );
         if (opts.rethrow) throw err;
       }
-    })();
+    }).catch((err) => {
+      // The pre-flight inFlightRole check should rule this out, but a
+      // race between two roles firing in the same JS tick is in theory
+      // possible if either's setTimeout callback contains an early
+      // await. Treat it the same as the explicit busy branch.
+      if (err instanceof SpaceBusyError) {
+        console.log(
+          `[agent/scheduler] role=${role} space="${opts.space.name}" skip (busy with ${err.inFlightRole})`,
+        );
+        return;
+      }
+      throw err;
+    });
     inFlight = runPromise;
 
     try {
       await runPromise;
     } finally {
-      busy = false;
       inFlight = null;
       scheduleNext(role, cron);
     }

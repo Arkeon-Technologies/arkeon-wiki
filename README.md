@@ -95,6 +95,7 @@ arkeon-wiki logs [-f]          # print/tail the daemon log
 arkeon-wiki init [name]        # register current directory as a space
 arkeon-wiki search <query>     # keyword search (ripgrep, defaults to bound space)
 arkeon-wiki sources scan       # list files by extension (supported vs unsupported)
+arkeon-wiki agent run <role>   # fire one role on demand (writer/editor/proposer/custom)
 arkeon-wiki config init        # write .arkeon/agents.yaml from a template
 arkeon-wiki config show        # print merged effective agent config
 arkeon-wiki config validate    # schema-check the YAML
