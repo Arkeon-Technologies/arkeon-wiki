@@ -89,7 +89,23 @@ system: |-
        list_entities(type="wiki", limit=100)
        list_redlinks(limit=50)
 
-  6. Identify the GAP. For each candidate question the source raises,
+  6. **Search the broader corpus** for adjacent material on the
+     source's main themes. The questions you propose will be
+     answered by the writer, who follows the plan's citations to
+     pick source material — so if the plan only mentions THIS
+     source, the writer never knows the rest of the corpus has
+     parallel material. For each major theme the source raises,
+     run search() across the rest of the source-class:
+
+       search(query=["<concept noun>", "<author-vocabulary variant>"],
+              type="file", limit=10)
+
+     (The corpus may organize sources by author, by paper, by
+     domain — search by content, not by directory. Read enough of
+     the top hits to confirm thematic relevance, then keep their
+     paths handy for step 8.)
+
+  7. Identify the GAP. For each candidate question the source raises,
      SKIP if:
        (a) An existing article that cites this source already covers
            it (the editor handled it in its tick).
@@ -101,7 +117,7 @@ system: |-
      NONE of (a)/(b)/(c) covers. 0-6 candidates per source is
      typical after gap-filtering.
 
-  7. `create_file` the plan wiki at **exactly** `wiki/_plans/<slug>.html`
+  8. `create_file` the plan wiki at **exactly** `wiki/_plans/<slug>.html`
      where `<slug>` is the source path under `sources/` with directory
      separators replaced by `__` (double underscore) and the file
      extension stripped:
@@ -124,7 +140,11 @@ system: |-
        (e) Cite the source inline in the Summary paragraph with a
            working `<a href>` — this is what makes the plan wiki
            legibly belong to the source.
-       (f) List proposed red links in `<h2>Proposed articles</h2>`.
+       (f) **Also cite the cross-source material you found in step
+           6** — name the adjacent sources by inline link in the
+           Summary so the writer's `read_files` chain picks them up
+           when it drains a red link from this plan.
+       (g) List proposed red links in `<h2>Proposed articles</h2>`.
            Use 0 entries if the editor fully integrated everything;
            the empty plan is still a legitimate artifact.
 
@@ -142,9 +162,13 @@ system: |-
          <body>
            <h1>Plan: <short title></h1>
            <h2>Summary</h2>
-           <p>One paragraph: what's in the source, and what the editor
-              already integrated (briefly). Cite the source:
-              <a href="../../sources/...">…</a>.</p>
+           <p>One paragraph: what's in the source, what the editor
+              already integrated, and which OTHER source(s) in the
+              corpus speak to the same themes (so the writer knows
+              where else to look). Cite the primary source inline:
+              <a href="../../sources/...">…</a>, plus any cross-source
+              parallels:
+              <a href="../../sources/...other...">…</a>.</p>
            <h2>Proposed articles</h2>
            <ul>
              <li><a href="../<slug>.html">question shaped as a sentence?</a>
@@ -154,7 +178,7 @@ system: |-
          </body>
          </html>
 
-  8. Mark the source as processed. The server reads the entity's
+  9. Mark the source as processed. The server reads the entity's
      current `source_hash` and stores it under the key
      `proposer.processed_hash` for you — you don't handle the hash
      yourself.
@@ -166,7 +190,7 @@ system: |-
      longer matches, and `tag_outdated="proposer.processed_hash"`
      re-surfaces the source in your queue.
 
-  9. Reply with ONE LINE summarizing the tick:
+  10. Reply with ONE LINE summarizing the tick:
        "Proposed 4 red links from sources/X.md (editor already
         integrated 3 concepts; 4 gaps remain)."
        "No gaps to propose from sources/X.md (editor integrated
