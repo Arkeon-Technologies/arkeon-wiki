@@ -37,7 +37,8 @@ import {
 interface InstallCliOptions {
   name?: string;
   envKey?: string[];
-  noEnv?: boolean;
+  // Commander's `--no-env` flag flips this to false; default is true.
+  env?: boolean;
 }
 
 const DEFAULT_ENV_KEYS = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"];
@@ -108,7 +109,7 @@ async function runInstall(opts: InstallCliOptions): Promise<void> {
   // Capture API keys from the current shell into ~/.arkeon-wiki/.env
   // so the service can authenticate after a reboot when there's no
   // shell session. Idempotent: never overwrites existing values.
-  const envKeys = opts.noEnv
+  const envKeys = opts.env === false
     ? []
     : Array.from(new Set([...DEFAULT_ENV_KEYS, ...(opts.envKey ?? [])]));
   const envResult = envKeys.length > 0

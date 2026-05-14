@@ -42,4 +42,26 @@ describe("parseLaunchctlPrint", () => {
     const out = "  state =   running  \n      pid =   77  \n";
     expect(parseLaunchctlPrint(out)).toEqual({ state: "running", pid: 77 });
   });
+
+  it("isn't fooled by nested 'state = active' inside coalition blocks", () => {
+    // Real-world launchctl output. Without the first-match rule the
+    // running state would get overwritten by the coalition's 'active'.
+    const out = `gui/501/tech.arkeon.wiki.svc = {
+\tactive count = 1
+\tstate = running
+
+\tpid = 40784
+
+\tresource coalition = {
+\t\tID = 103455
+\t\tstate = active
+\t}
+
+\tjetsam coalition = {
+\t\tstate = active
+\t}
+}
+`;
+    expect(parseLaunchctlPrint(out)).toEqual({ state: "running", pid: 40784 });
+  });
 });

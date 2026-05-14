@@ -76,18 +76,30 @@ export function parseLaunchctlPrint(stdout: string): LaunchctlPrintFields {
   let state: LaunchctlPrintFields["state"] = "unknown";
   let pid: number | null = null;
 
+  // `launchctl print` repeats the substring `state = ...` inside nested
+  // blocks for `resource coalition` and `jetsam coalition` (their state
+  // is the literal string "active"). The service's own `state = ` line
+  // appears before any nested block, so the FIRST match wins and we
+  // never overwrite. Same defensive policy for `pid = ` — the
+  // top-level pid line appears before any nested process listings.
   for (const line of stdout.split("\n")) {
     const trimmed = line.trim();
-    const stateMatch = trimmed.match(/^state\s*=\s*(.+)$/);
-    if (stateMatch) {
-      const v = stateMatch[1]!.trim();
-      if (v === "running") state = "running";
-      else if (v === "not running") state = "not running";
-      else state = "unknown";
-      continue;
+    if (state === "unknown") {
+      const stateMatch = trimmed.match(/^state\s*=\s*(.+)$/);
+      if (stateMatch) {
+        const v = stateMatch[1]!.trim();
+        if (v === "running") state = "running";
+        else if (v === "not running") state = "not running";
+        // Any other value (e.g. "active" from nested coalition blocks)
+        // we leave as "unknown" — but only on the first match. Subsequent
+        // state lines never overwrite a real running/not-running answer.
+        continue;
+      }
     }
-    const pidMatch = trimmed.match(/^pid\s*=\s*(\d+)$/);
-    if (pidMatch) pid = Number(pidMatch[1]);
+    if (pid === null) {
+      const pidMatch = trimmed.match(/^pid\s*=\s*(\d+)$/);
+      if (pidMatch) pid = Number(pidMatch[1]);
+    }
   }
 
   return { state, pid };
