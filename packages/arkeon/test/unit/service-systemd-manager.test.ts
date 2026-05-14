@@ -107,15 +107,72 @@ describe("createSystemdManager — install", () => {
     expect(existsSync(expectedPath)).toBe(true);
     expect(readFileSync(expectedPath, "utf-8")).toContain("Description=Arkeon Wiki daemon");
 
-    // Verb sequence on the systemctl side: daemon-reload → enable --now → show (poll)
+    // Verb sequence on the systemctl side:
+    //   daemon-reload → enable --now → try-restart → show (poll)
+    // try-restart is the key piece for re-install: enable --now is a
+    // no-op for an already-active service, so without try-restart a
+    // reinstall with changed config would leave the OLD process running.
     const systemctlSubs = calls
       .filter((c) => c.bin === "systemctl")
       .map((c) => (c.args[0] === "--user" ? c.args[1] : c.args[0]));
-    expect(systemctlSubs).toEqual(["daemon-reload", "enable", "show"]);
+    expect(systemctlSubs).toEqual(["daemon-reload", "enable", "try-restart", "show"]);
 
     // loginctl called with enable-linger <user>
     const linger = calls.find((c) => c.bin === "loginctl");
     expect(linger?.args).toEqual(["enable-linger", "testuser"]);
+
+    // Happy path: linger succeeded, result reflects it.
+    expect(result.lingerEnabled).toBe(true);
+  });
+
+  it("re-install with changed config restarts the running process via try-restart", async () => {
+    // First install spawns the supervisor with cliEntry A; second
+    // install with cliEntry B must (a) write the new unit body and
+    // (b) restart the running process so the supervisor picks up B.
+    const active1: SystemctlResult = {
+      stdout: "ActiveState=active\nMainPID=100\nLoadState=loaded\n",
+      stderr: "",
+      exitCode: 0,
+    };
+    const active2: SystemctlResult = {
+      stdout: "ActiveState=active\nMainPID=200\nLoadState=loaded\n",
+      stderr: "",
+      exitCode: 0,
+    };
+    const { systemctl, loginctl, calls } = fakeRunners({
+      show: [active1, active2],
+    });
+    const mgr = createSystemdManager({
+      runSystemctl: systemctl,
+      runLoginctl: loginctl,
+      home,
+      username: "x",
+      bootWaitMs: 0,
+    });
+
+    await mgr.install(INSTALL_OPTS);
+    calls.length = 0;
+
+    await mgr.install({
+      ...INSTALL_OPTS,
+      paths: { nodeBin: "/usr/bin/node", cliEntry: "/srv/arkeon-wiki/dist/index.js" },
+    });
+
+    const verbs = calls
+      .filter((c) => c.bin === "systemctl")
+      .map((c) => (c.args[0] === "--user" ? c.args[1] : c.args[0]));
+    // try-restart MUST appear after enable, and before the post-install show.
+    expect(verbs).toContain("try-restart");
+    expect(verbs.indexOf("try-restart")).toBeGreaterThan(verbs.indexOf("enable"));
+    expect(verbs.indexOf("try-restart")).toBeLessThan(verbs.indexOf("show"));
+
+    // The on-disk unit must reflect the SECOND install's cliEntry.
+    const body = readFileSync(
+      join(home, ".config/systemd/user/arkeon-wiki.service"),
+      "utf-8",
+    );
+    expect(body).toContain("/srv/arkeon-wiki/dist/index.js");
+    expect(body).not.toContain("/opt/arkeon-wiki/dist/index.js");
   });
 
   it("creates ~/.config/systemd/user/ if it doesn't exist", async () => {
@@ -161,10 +218,13 @@ describe("createSystemdManager — install", () => {
     await expect(mgr.install(INSTALL_OPTS)).rejects.toThrow(/enable --now/);
   });
 
-  it("does NOT fail install when loginctl enable-linger fails", async () => {
+  it("does NOT fail install when loginctl enable-linger fails, but surfaces lingerEnabled=false", async () => {
     // Polkit may refuse linger for non-root callers on some
     // distributions. Install should still succeed — user just gets
-    // a service that doesn't survive logout on headless boxes.
+    // a service that doesn't survive logout on headless boxes — but
+    // the result MUST carry lingerEnabled=false so the CLI can
+    // surface a warning to the user instead of silently shipping a
+    // half-broken install.
     const showActive: SystemctlResult = {
       stdout: "ActiveState=active\nMainPID=99\nLoadState=loaded\n",
       stderr: "",
@@ -183,6 +243,7 @@ describe("createSystemdManager — install", () => {
     });
     const result = await mgr.install(INSTALL_OPTS);
     expect(result.running).toBe(true);
+    expect(result.lingerEnabled).toBe(false);
     expect(calls.some((c) => c.bin === "loginctl")).toBe(true);
   });
 

@@ -154,6 +154,19 @@ async function runInstall(opts: InstallCliOptions): Promise<void> {
     paths,
   });
 
+  const nextSteps: string[] = [];
+  if (envResult.missing.length > 0) {
+    nextSteps.push(
+      `Missing keys: ${envResult.missing.join(", ")}. Add them to ${envResult.envFilePath} or set them in the shell where you ran install before retrying.`,
+    );
+  }
+  if (platform === "systemd" && result.lingerEnabled === false) {
+    nextSteps.push(
+      `loginctl enable-linger failed. The service won't survive logout on headless servers. ` +
+        `Run \`sudo loginctl enable-linger $USER\` (as admin) if this is a non-graphical session.`,
+    );
+  }
+
   output.result({
     operation: "install",
     name: instanceName,
@@ -162,6 +175,9 @@ async function runInstall(opts: InstallCliOptions): Promise<void> {
     label: result.label,
     running: result.running,
     pid: result.pid,
+    ...(result.lingerEnabled !== undefined
+      ? { linger_enabled: result.lingerEnabled }
+      : {}),
     env: envResult.envFilePath
       ? {
           file: envResult.envFilePath,
@@ -170,11 +186,6 @@ async function runInstall(opts: InstallCliOptions): Promise<void> {
           missing: envResult.missing,
         }
       : { skipped: true },
-    next_steps:
-      envResult.missing.length > 0
-        ? [
-            `Missing keys: ${envResult.missing.join(", ")}. Add them to ${envResult.envFilePath} or set them in the shell where you ran install before retrying.`,
-          ]
-        : undefined,
+    next_steps: nextSteps.length > 0 ? nextSteps : undefined,
   });
 }

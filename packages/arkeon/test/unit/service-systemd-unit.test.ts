@@ -144,4 +144,42 @@ WantedBy=default.target
   it("rejects an invalid name early", () => {
     expect(() => renderSystemdUnit({ ...DEFAULT_OPTS, name: "bad name" })).toThrow();
   });
+
+  it("quotes ExecStart paths that contain spaces", () => {
+    // systemd ExecStart is whitespace-tokenized — `/foo bar/node`
+    // parses as executable `/foo` + arg `bar/node` unless we quote.
+    // The instance-name validator catches spaces in `name`, but the
+    // snapshotted paths (nvm/fnm directory under "My Stuff/", etc.)
+    // are user-provided and can legitimately contain spaces.
+    const unit = renderSystemdUnit({
+      ...DEFAULT_OPTS,
+      paths: {
+        nodeBin: "/home/test/Code Stuff/node/bin/node",
+        cliEntry: "/home/test/arkeon-wiki/dist/index.js",
+      },
+    });
+    expect(unit).toContain(
+      'ExecStart="/home/test/Code Stuff/node/bin/node" /home/test/arkeon-wiki/dist/index.js start',
+    );
+  });
+
+  it("leaves safe paths unquoted (keeps unit files readable)", () => {
+    const unit = renderSystemdUnit(DEFAULT_OPTS);
+    expect(unit).toContain(
+      "ExecStart=/usr/bin/node /opt/arkeon-wiki/dist/index.js start",
+    );
+  });
+
+  it("escapes embedded quotes and backslashes in ExecStart args", () => {
+    const unit = renderSystemdUnit({
+      ...DEFAULT_OPTS,
+      paths: {
+        nodeBin: '/home/x "weird"/node',
+        cliEntry: "/home/x \\back/dist/index.js",
+      },
+    });
+    expect(unit).toContain(
+      'ExecStart="/home/x \\"weird\\"/node" "/home/x \\\\back/dist/index.js" start',
+    );
+  });
 });

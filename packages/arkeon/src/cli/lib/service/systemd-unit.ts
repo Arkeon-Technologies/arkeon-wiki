@@ -91,13 +91,20 @@ export function renderSystemdUnit(opts: InstallOptions): string {
   const perInstanceEnv = join(home, ".env");
   const logPath = join(home, "arkeon.log");
 
-  // ExecStart needs the absolute node binary + entry script + args.
-  // Systemd's ExecStart does NOT run a shell, so quoting concerns are
-  // limited to whitespace. We don't quote because the path validator
-  // rejected anything that could contain spaces.
-  const startArgs = isDefaultName(name)
-    ? `${paths.nodeBin} ${paths.cliEntry} start`
-    : `${paths.nodeBin} ${paths.cliEntry} start --name ${name}`;
+  // ExecStart is whitespace-tokenized — `/home/foo bar/node` parses
+  // as executable `/home/foo` + arg `bar/node`. The instance-name
+  // validator rejects spaces, but the snapshotted paths (nvm node
+  // binary, dist/index.js) can live anywhere, including dirs with
+  // spaces. Quote each token to keep the unit correct for those
+  // users.
+  //
+  // systemd recognizes double-quoted strings in ExecStart since v240+
+  // (Debian 11+, Ubuntu 20.04+, RHEL 8+) and treats `\"` as an
+  // embedded quote. We escape both backslashes and quotes.
+  const argTokens = isDefaultName(name)
+    ? [paths.nodeBin, paths.cliEntry, "start"]
+    : [paths.nodeBin, paths.cliEntry, "start", "--name", name];
+  const startArgs = argTokens.map(quoteExecArg).join(" ");
 
   return `[Unit]
 Description=${description}
@@ -118,4 +125,15 @@ StandardError=append:${logPath}
 [Install]
 WantedBy=default.target
 `;
+}
+
+/**
+ * Quote a single ExecStart argument for systemd. Wraps the value in
+ * double quotes and escapes backslashes and embedded quotes. Skips
+ * quoting when the value contains only safe characters — keeps unit
+ * files readable for the common case.
+ */
+function quoteExecArg(value: string): string {
+  if (/^[A-Za-z0-9_./:@+\-]+$/.test(value)) return value;
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }

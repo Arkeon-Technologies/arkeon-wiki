@@ -165,11 +165,38 @@ export function createSystemdManager(
       );
     }
 
+    // try-restart picks up a unit-file change on re-install. `enable
+    // --now` is a no-op when the service is already running, so
+    // without this the user would re-install with new ExecStart /
+    // paths / env files and the supervisor would keep running the
+    // OLD process — install would report success but changes
+    // wouldn't be live. try-restart restarts iff active, no-op
+    // otherwise; idempotent and exactly the verb we want here.
+    const tryRestart = await runSystemctl(["--user", "try-restart", filename]);
+    if (tryRestart.exitCode !== 0) {
+      throw new Error(
+        `systemctl --user try-restart ${filename} failed (exit ${tryRestart.exitCode}): ` +
+          `${tryRestart.stderr.trim() || tryRestart.stdout.trim()}`,
+      );
+    }
+
     // Best-effort linger enable. Required for headless servers (where
     // there's no graphical session keeping the user systemd alive
-    // after logout). Idempotent; warn on failure but don't fail
-    // install — users with persistent graphical sessions are unaffected.
-    await runLoginctl(["enable-linger", username]);
+    // after logout). Idempotent; we warn on failure but don't fail
+    // install — users with persistent graphical sessions are
+    // unaffected, and forcing them through a sudo prompt would be
+    // worse UX. We return `lingerEnabled` so the install command's
+    // JSON output reflects reality.
+    const linger = await runLoginctl(["enable-linger", username]);
+    const lingerEnabled = linger.exitCode === 0;
+    if (!lingerEnabled) {
+      console.warn(
+        `[arkeon-wiki] Warning: \`loginctl enable-linger ${username}\` failed — ` +
+          `the service won't survive logout on headless servers. ` +
+          `If you log in via a graphical session this is harmless. ` +
+          `Otherwise, ask an admin to run: sudo loginctl enable-linger ${username}`,
+      );
+    }
 
     // Poll for ActiveState=active. enable --now is synchronous in
     // that it returns once systemd has *started* the job, but the
@@ -186,6 +213,7 @@ export function createSystemdManager(
       label: filename.replace(/\.service$/, ""),
       running: last.running,
       pid: last.pid,
+      lingerEnabled,
     };
   }
 
