@@ -74,50 +74,90 @@ A strong `instructions:` answers four questions:
 - **What voice?** (Encyclopedia neutrality, primary-source-voice, opinionated, contrarian, etc.)
 - **Who's the audience?** (Practitioners, newcomers, you-six-months-from-now, etc.)
 
-Concrete example — a wiki built on Augustine and G. K. Chesterton, asking how their critique of pure reason applies to the modern world:
+**A trap worth flagging up front**: `defaults.model` is silently ignored for the bundled `editor`, `proposer`, and `writer` roles, because each bundled template has its own `model:` field that takes precedence in the resolution chain. To actually change the model for a bundled role, override it per role:
+
+```yaml
+roles:
+  editor:
+    model: gpt-5-mini
+  proposer:
+    model: gpt-5-mini
+  writer:
+    model: gpt-5-mini
+```
+
+`defaults.model` does apply to any *custom* role you define (that has no bundled template). Operator-defaults vs. bundled-template precedence is something the project may fix; track [#TBD](https://github.com/Arkeon-Technologies/arkeon-wiki/issues) if you care.
+
+Concrete worked example — a wiki built on Augustine and G. K. Chesterton, attacking specific modern phenomena (transhumanism, AI companionship, productivity culture, etc.) through their critique of pure reason. The biggest lever is **insisting articles name a modern target by name** and refusing generic concept-exposition:
 
 ```yaml
 defaults:
   provider: openai
-  model: gpt-5-mini
   instructions: |
-    This wiki develops a Christian critique of modern intellectual
-    prides — rationalism, scientism, and the unexamined faith in
-    pure reason. The corpus is Augustine and G. K. Chesterton,
-    primary texts only (Confessions, City of God, Orthodoxy,
-    Heretics).
+    This wiki uses Augustine and G. K. Chesterton as weapons
+    against specific 21st-century anxieties, technologies, and
+    prides. It is not a wiki *about* Augustine and Chesterton —
+    generic exposition of their concepts is out of scope.
 
-    The driving question: how would these authors apply their
-    Christian ideals to the modern world, and which of the modern
-    certainties they attacked still go unchallenged today?
+    Every article names a modern target by name and submits it to
+    the authors' diagnosis. Anchor on the things that actually
+    shape contemporary life: dating apps, AI companions,
+    doomscrolling, hustle culture, parasocial relationships,
+    secular mindfulness, optimization culture, longtermism,
+    "follow your passion," the loneliness epidemic, productivity
+    theology, scientism, AI doomerism, "live your truth."
 
-    What to write:
-    - Questions that surface when ancient/Christian thought meets
-      modern certainties.
-    - Articles that take a clear side. These authors had positions
-      — the wiki should not water them down into balanced
-      "perspectives" prose.
-    - Specific citations. Augustine by book + chapter
-      (Confessions VII.5; City of God I.1). Chesterton by chapter
-      title (Orthodoxy ch. III "The Suicide of Thought").
+    Slug shape: name the target by name.
+
+      GOOD:  is-ai-companionship-the-new-manichaeism.html
+      GOOD:  what-would-chesterton-say-about-tinder.html
+      GOOD:  how-augustine-explains-doomscrolling.html
+      GOOD:  why-self-actualization-is-cain-not-abel.html
+
+      BAD:   why-is-orthodoxy-revolutionary.html
+      BAD:   how-do-paradoxes-save-ethics.html
+      BAD:   why-must-god-be-transcendent.html
+
+    The BAD examples are generic concept articles. They explain
+    what the authors thought; they do not deploy it against
+    anything. Do not write them.
+
+    Article shape (Question / Current answer / Evidence / Open
+    threads — unchanged):
+      Question: name the modern thing. State the unspoken modern
+        assumption about it. Frame the question as "what does
+        this assumption conceal?"
+      Current answer: the authors' diagnosis, tied directly to
+        the named modern thing. No generic theory.
+      Evidence: inline citations to the sources (book + section
+        where possible). Each quote should be connected to the
+        modern target by name in the same paragraph — not just
+        paraphrased into encyclopedia voice.
+      Open threads: two or three OTHER modern phenomena the same
+        diagnosis would touch, as red links.
 
     Tone:
-    - Direct, opinionated, occasionally polemical. Match the voice
-      of the sources. Chesterton paradoxes are fine; Augustine's
-      confessional personalism is fine. Don't flatten either into
-      encyclopedia voice.
+      Polemical, sharp, partial. The reader should finish each
+      article with the feeling that something they assumed is
+      now in question. Hedging is forbidden — no "some have
+      argued" or "on the other hand."
 
     Out of scope:
-    - "How modern Christians have responded to X." Secondary
-      commentary doesn't belong here.
-    - Apologetics primers for newcomers.
-    - Hedging. Sentences that begin "Some have argued..." defeat
-      the project.
+      Generic exposition of the authors' concepts.
+      Apologetics primers — assume the reader knows the basics.
+      Both-sides framing.
 
     Audience:
-    - Readers familiar with these authors or willing to chase a
-      citation.
+      Practitioners of contrarian thought who use these authors
+      as weapons against modern certainties. Not students.
+
+roles:
+  editor:    { model: gpt-5-mini }
+  proposer:  { model: gpt-5-mini }
+  writer:    { model: gpt-5-mini }
 ```
+
+The `GOOD/BAD` slug examples are the single most useful lever — they shape the proposer's red-link slugs, which then constrain the writer's article titles, which constrains the writer's voice. Get this right and the wiki develops a point of view from the first article on.
 
 Verify the parse + the merged config:
 
@@ -133,6 +173,37 @@ The `instructions:` text will appear under `defaults:` in the `config show` outp
 Drop text files anywhere in the directory (any subfolder is fine — `sources/`, `notes/`, top-level, doesn't matter). The watcher picks them up automatically.
 
 **Supported extensions**: `.txt`, `.html` (outside `wiki/`), `.json`, `.csv`, `.xml`, `.rst`. Anything else is **silently ignored** — Markdown, PDFs, DOCX, images, binaries.
+
+### Prefer chapters / sections over whole books
+
+One source file = one editor tick = one proposer tick. Two practical consequences:
+
+- **Size**: every tick reads the source in full. A 1 MB+ file can overflow the model's effective context (we hit this with a full Augustine *City of God* volume on `gpt-5-mini`). Aim for under ~150 KB per source — most chapters or essay-length pieces fit easily.
+- **Granularity**: chapters give the proposer focused thematic territory to mine. A whole book covering 20 themes yields one plan wiki with 5 red links (most of the book's questions get compressed away); the same book split into 20 chapters yields 20 plan wikis, each surfacing the specific questions of that chapter.
+
+So if you've grabbed a book, split it by chapter or by argument-section before letting the agents see it. A typical layout:
+
+```
+sources/
+  augustine/
+    confessions/
+      book-01.txt
+      book-02.txt
+      ...
+    city-of-god/
+      book-01.txt
+      ...
+  chesterton/
+    orthodoxy/
+      ch-01-introduction.txt
+      ch-02-the-maniac.txt
+      ch-03-the-suicide-of-thought.txt
+      ...
+```
+
+A simple `pandoc` or Python regex splitter on chapter headings is usually enough. Each chapter file ends up 10-100 KB, well within context limits.
+
+### Convert binaries to text
 
 Check what the watcher actually sees:
 
@@ -157,7 +228,7 @@ A re-run of `sources scan` after conversion confirms zero unsupported files.
 Three roles cooperate, in order:
 
 - **`editor`** reads one source per tick and adds citations / open-thread red links to *existing* articles. On a fresh corpus with no articles yet, it tags-and-skips. **0 edits is the expected first-tick outcome — don't panic.**
-- **`proposer`** picks up the source the editor just tagged, identifies questions no article covers yet, and emits them as red links in a per-source plan wiki at `wiki/_plans/<source-path>.html`.
+- **`proposer`** picks up the source the editor just tagged, identifies questions no article covers yet, and emits them as red links in a per-source plan wiki at `wiki/_plans/<source-path>.html`. **An empty plan is also expected behavior**: when a new source's themes overlap with red links the queue already has, the proposer correctly refuses to duplicate them and emits an empty `<ul>`. That means the editor will instead integrate this source as citations into existing articles on subsequent ticks.
 - **`writer`** drains the highest-demand red link, one article per tick. This is where the corpus starts to fill in.
 
 Drive one manual cycle to verify your `instructions:` produces what you want before letting cron loose:
@@ -198,15 +269,27 @@ Bundled cron defaults:
 | `proposer` | hourly | Trails editor by data dependency (gates on `editor.processed_hash` tag). |
 | `writer` | every 15 min | Red-link queue-driven; the fastest mover. |
 
-For the first day or two, **slow the writer down** so you can observe before the corpus gets large. Override in `.arkeon/agents.yaml`:
+For the first day or two, **slow the writer down** so you can observe before the corpus gets large. Or for a fresh-corpus burst, speed all three up so you can watch the system fill in. Override in `.arkeon/agents.yaml`:
 
 ```yaml
 roles:
   writer:
     cron: "0 */1 * * *"     # every hour instead of every 15 minutes
+
+  # Or, for the initial-burst case:
+  editor:
+    cron: "*/3 * * * *"     # every 3 minutes
+  proposer:
+    cron: "*/3 * * * *"     # every 3 minutes
 ```
 
-The change takes effect on the next tick — no daemon restart needed.
+**Cron changes require a daemon restart** (`arkeon-wiki down && arkeon-wiki up`). The scheduler captures cron values at startup. Most other config — `instructions:`, `system:`, `tools:`, `model:` — hot-reloads on every tick, so edits to those land in seconds.
+
+**Editor source-order**: with `sort: updated_at`, the editor picks whichever source was most recently updated (synced or touched). If you bulk-imported and the editor keeps grinding through the same corner of the corpus, give a specific file a nudge to jump the queue:
+
+```bash
+printf "\n" >> sources/path/to/the/one/you-want-next.txt
+```
 
 Read articles in the browser:
 
@@ -243,7 +326,17 @@ arkeon-wiki down                    # stop the daemon
 
 **The voice is wrong / the structure is wrong / the articles are bland.** Tune `instructions:`. The single biggest lever in the system. If you want a fundamentally different article structure (different section names, different layout), override `roles.writer.system:` wholesale instead — `instructions:` layers onto the bundled prompt, it doesn't replace it.
 
+**Articles are too abstract — they explain concepts instead of attacking modern things.** Your `instructions:` need explicit GOOD/BAD slug examples and a "every article must name a 21st-century target by name" rule. The proposer follows the slug-shape patterns you give it; the writer follows the titles the proposer emits. See the worked example in Step 5.
+
 **A source I want indexed isn't showing up.** Run `arkeon-wiki sources scan`. If it's in the `unsupported` bucket, convert it (see Step 6). If it's not in either bucket, it's probably under a hidden directory (anything starting with `.`) or inside `node_modules`, `.git`, etc. — the watcher skips those by design.
+
+**`context_length_exceeded` 500 from `agent run`.** The source the agent picked is too big for the model's effective context. Split that source into chapters (see Step 6 — "Prefer chapters / sections over whole books"). If you can't split it for some reason, switch the affected role to a model with a larger context window (`roles.editor.model: ...`, etc. — and remember to restart the daemon if you also changed cron values).
+
+**The editor keeps picking the same corner of my corpus.** `sort: updated_at` means whichever sources were touched most recently get picked first. After a bulk import, the order is deterministic but often unintuitive. Bump a specific file with `printf "\n" >> sources/.../that-one.txt` to jump it to the front of the queue.
+
+**My `model:` change isn't taking effect.** `defaults.model` is silently ignored for the bundled `editor`, `proposer`, and `writer` roles — each bundled template has its own `model:` that wins. Override per-role under `roles:` (see Step 5).
+
+**The proposer created an empty plan wiki (no red links inside).** That's correct, not broken. The proposer refuses to emit red links that duplicate themes already covered by existing articles or queued red links. On the next editor tick, the same source will be integrated as citations into existing articles instead. Empty plans tend to appear on the 2nd, 3rd, etc. source of a thematically-cohesive corpus.
 
 **Multiple daemons running confused things.** `arkeon-wiki ls` lists them. The default-port daemon (started by plain `up`) takes precedence; if you also have named instances (`up --name foo`), pass `--api-url http://localhost:<port>` to target a specific one.
 
