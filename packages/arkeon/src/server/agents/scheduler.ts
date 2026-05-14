@@ -216,6 +216,12 @@ export async function startScheduler(
     }
     const queuedAt = Date.now();
     const runPromise = queueSpaceMutex(opts.space.name, role, async () => {
+      // If stop() fired while this tick was waiting in the queue, drop
+      // the run before invoking the model. The daemon-shutdown path
+      // doesn't strictly need this (the process is exiting), but
+      // long-lived handle.stop() callers like tests want a clean
+      // boundary: no agent invocations after stop() resolves.
+      if (stopped) return;
       const waitedMs = Date.now() - queuedAt;
       if (waitedMs >= 100) {
         console.log(

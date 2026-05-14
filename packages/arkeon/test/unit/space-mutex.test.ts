@@ -95,10 +95,34 @@ describe("space-mutex", () => {
     await first;
   });
 
-  it("withSpaceMutex reports a queued waiter as busy", async () => {
-    // Editor runs via queue; writer queues behind it. An HTTP-style
-    // `withSpaceMutex` probe must surface 'busy' (so the operator gets
-    // a 409 instead of jumping the queued tick).
+  it("withSpaceMutex rejects when only the queue is non-empty (no in-flight)", async () => {
+    // Hits the new queueTails branch specifically. Right after the
+    // synchronous portion of queueSpaceMutex runs, queueTails has the
+    // entry but inFlight has NOT been set yet (that happens in the
+    // microtask after `await previousTail`). Probing synchronously
+    // here lets withSpaceMutex see the queueTails-only state — the
+    // case the queued-waiter check was added to handle.
+    const editorRun = queueSpaceMutex("alpha", "editor", async () => {});
+    expect(inFlightRole("alpha")).toBeNull();
+
+    try {
+      await withSpaceMutex("alpha", "proposer", async () => "manual");
+      expect.fail("expected SpaceBusyError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(SpaceBusyError);
+      expect((err as SpaceBusyError).inFlightRole).toBe("editor");
+      expect((err as SpaceBusyError).spaceName).toBe("alpha");
+    }
+
+    await editorRun;
+    expect(inFlightRole("alpha")).toBeNull();
+  });
+
+  it("withSpaceMutex rejects while a queued waiter is pending behind an in-flight run", async () => {
+    // Multi-entry case: editor in-flight, writer queued. The inFlight
+    // branch fires (this is the same case the existing "blocks a
+    // concurrent run" test covers), but the assertion here is that
+    // queueing doesn't open a hole — writer still waits, doesn't run.
     let releaseEditor: () => void;
     const editorGate = new Promise<void>((r) => {
       releaseEditor = r;
@@ -108,15 +132,11 @@ describe("space-mutex", () => {
     await Promise.resolve();
     expect(inFlightRole("alpha")).toBe("editor");
 
-    // Queue a writer behind the editor.
     let writerStarted = false;
     const writerRun = queueSpaceMutex("alpha", "writer", async () => {
       writerStarted = true;
     });
-    await Promise.resolve();
-    expect(writerStarted).toBe(false);
 
-    // HTTP probe must 409 — neither editor nor writer should be jumped.
     await expect(
       withSpaceMutex("alpha", "proposer", async () => "manual"),
     ).rejects.toBeInstanceOf(SpaceBusyError);
