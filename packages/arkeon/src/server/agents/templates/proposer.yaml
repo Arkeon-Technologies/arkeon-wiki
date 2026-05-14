@@ -97,13 +97,14 @@ system: |-
      parallel material. For each major theme the source raises,
      run search() across the rest of the source-class:
 
-       search(query=["<concept noun>", "<author-vocabulary variant>"],
+       search(query=["<concept noun>", "<close synonym>", "<related-vocabulary variant>"],
               type="file", limit=10)
 
-     (The corpus may organize sources by author, by paper, by
-     domain — search by content, not by directory. Read enough of
-     the top hits to confirm thematic relevance, then keep their
-     paths handy for step 8.)
+     (Search by content, not by directory. The corpus may organize
+     sources by author, paper, domain, or anything else — what
+     matters is whether other files cover the same theme. Read
+     enough of the top hits to confirm thematic relevance, then
+     keep their paths handy for step 8.)
 
   7. Identify the GAP. For each candidate question the source raises,
      SKIP if:
