@@ -636,4 +636,178 @@ describe("scheduler", () => {
       delete process.env.OPENAI_API_KEY;
     }
   }, 10_000);
+
+  it("queues a contending cron tick instead of dropping it", async () => {
+    // Two cron-bearing roles in the same space, both firing every second.
+    // Whichever role's setTimeout fires first holds the mutex on a gate;
+    // the OTHER role's tick fires while the mutex is taken. With queueing,
+    // the second role's run must be observed after the first releases —
+    // not dropped to a skip-and-reschedule (which was the old behavior).
+    //
+    // The "whichever fires first" framing matters: with `* * * * * *`,
+    // both setTimeouts arm with delayMs ~equal to the next-second
+    // boundary, but a sub-millisecond difference during the synchronous
+    // scheduleNext loop can flip the order. Gating by name (e.g.
+    // "editor goes first") makes the test flaky on that race; gating
+    // by "first observed" is order-independent.
+    const cron = "* * * * * *";
+
+    process.env.OPENAI_API_KEY = "sk-test-fake";
+    mkdirSync(join(workdir, ".arkeon"), { recursive: true });
+    writeFileSync(
+      join(workdir, ".arkeon/agents.yaml"),
+      `roles:\n  editor:\n    cron: "${cron}"\n  writer:\n    cron: "${cron}"\n`,
+    );
+
+    const events: Array<{ role: string; phase: "start" | "end"; at: number }> = [];
+    const start0 = Date.now();
+    let firstRole: string | null = null;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((r) => {
+      releaseFirst = r;
+    });
+
+    type RunAgentFn = Parameters<typeof startScheduler>[0]["runAgentFn"];
+    const fakeRunAgent: RunAgentFn = async (role) => {
+      const name = role.name;
+      events.push({ role: name, phase: "start", at: Date.now() - start0 });
+      if (firstRole === null) {
+        firstRole = name;
+        // Hold the first observed run open so the other role's tick
+        // fires while the mutex is taken.
+        await firstGate;
+      }
+      events.push({ role: name, phase: "end", at: Date.now() - start0 });
+      return { skipped: false, edits: [], text: "ok", steps: 1 };
+    };
+
+    const handle = await startScheduler({
+      space: SPACE,
+      scheduleRoles: ["editor", "writer"],
+      runAgentFn: fakeRunAgent,
+      gracePeriodMs: 500,
+    });
+
+    try {
+      // Wait for one role to be observed running.
+      const startDeadline = Date.now() + 2500;
+      while (Date.now() < startDeadline && events.length === 0) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(events.length).toBeGreaterThanOrEqual(1);
+      expect(firstRole).not.toBeNull();
+      const secondRole = firstRole === "editor" ? "writer" : "editor";
+
+      // Give the other role's cron a chance to fire while we hold the
+      // gate. 1500ms covers a full second-boundary plus jitter.
+      await new Promise((r) => setTimeout(r, 1500));
+
+      // The second role must NOT have started yet — it's queued behind
+      // the gated first role.
+      expect(events.some((e) => e.role === secondRole)).toBe(false);
+      // The first role must NOT have finished yet — still gated.
+      expect(
+        events.some((e) => e.role === firstRole && e.phase === "end"),
+      ).toBe(false);
+
+      // Release; the second role should drain from the queue next.
+      releaseFirst();
+
+      // Wait for the second role to finish.
+      const secondDeadline = Date.now() + 2500;
+      while (
+        Date.now() < secondDeadline &&
+        !events.some((e) => e.role === secondRole && e.phase === "end")
+      ) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+
+      // Both runs observed, first's end strictly before second's start
+      // (proves queue serialized, not parallel).
+      const firstEnd = events.find(
+        (e) => e.role === firstRole && e.phase === "end",
+      );
+      const secondStart = events.find(
+        (e) => e.role === secondRole && e.phase === "start",
+      );
+      expect(firstEnd).toBeDefined();
+      expect(secondStart).toBeDefined();
+      expect(secondStart!.at).toBeGreaterThanOrEqual(firstEnd!.at);
+    } finally {
+      // Ensure the gate isn't left dangling if an expectation failed early.
+      releaseFirst();
+      await handle.stop();
+      delete process.env.OPENAI_API_KEY;
+    }
+  }, 10_000);
+
+  it("does not invoke runAgent for a queued tick after stop()", async () => {
+    // A tick that's queued (not yet running) when stop() is called
+    // must not invoke runAgent later, even if the head of the queue
+    // eventually releases. Otherwise long-lived handle.stop() callers
+    // (tests, embeddings) could see agent work leak past shutdown.
+    const cron = "* * * * * *";
+
+    process.env.OPENAI_API_KEY = "sk-test-fake";
+    mkdirSync(join(workdir, ".arkeon"), { recursive: true });
+    writeFileSync(
+      join(workdir, ".arkeon/agents.yaml"),
+      `roles:\n  editor:\n    cron: "${cron}"\n  writer:\n    cron: "${cron}"\n`,
+    );
+
+    const invocations: string[] = [];
+    let firstRole: string | null = null;
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((r) => {
+      releaseFirst = r;
+    });
+
+    type RunAgentFn = Parameters<typeof startScheduler>[0]["runAgentFn"];
+    const fakeRunAgent: RunAgentFn = async (role) => {
+      const name = role.name;
+      invocations.push(name);
+      if (firstRole === null) {
+        firstRole = name;
+        await firstGate;
+      }
+      return { skipped: false, edits: [], text: "ok", steps: 1 };
+    };
+
+    const handle = await startScheduler({
+      space: SPACE,
+      scheduleRoles: ["editor", "writer"],
+      runAgentFn: fakeRunAgent,
+      gracePeriodMs: 200,
+    });
+
+    try {
+      // Wait for one role to start (it'll block on the gate).
+      const startDeadline = Date.now() + 2500;
+      while (Date.now() < startDeadline && invocations.length === 0) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(invocations.length).toBeGreaterThanOrEqual(1);
+      expect(firstRole).not.toBeNull();
+      const secondRole = firstRole === "editor" ? "writer" : "editor";
+
+      // Let the other role's cron fire while the first holds the gate —
+      // it queues.
+      await new Promise((r) => setTimeout(r, 1500));
+      expect(invocations).not.toContain(secondRole);
+
+      // Stop the scheduler. First is still gated, so stop() will hit
+      // gracePeriodMs and return.
+      await handle.stop();
+
+      // Release; the queued tick's callback runs but must short-circuit
+      // on the stopped check before invoking the (fake) runAgent.
+      releaseFirst();
+      await new Promise((r) => setTimeout(r, 200));
+
+      expect(invocations).not.toContain(secondRole);
+    } finally {
+      releaseFirst();
+      delete process.env.OPENAI_API_KEY;
+    }
+  }, 10_000);
 });

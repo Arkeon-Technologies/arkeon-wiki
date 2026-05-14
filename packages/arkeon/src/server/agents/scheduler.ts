@@ -10,11 +10,14 @@
  *
  * Per-space serialization is enforced by an in-process mutex: at most
  * one role can be running in a given space at any time. If a role's
- * tick fires while another role's run is in flight, the tick is skipped
- * (skip-if-busy) and the next firing is computed from "now." Spaces
- * run independently — two spaces can both have agents running in
- * parallel, they just can't have two agents running concurrently
- * within the same space.
+ * tick fires while another role's run is in flight, the new tick
+ * queues behind it (`queueSpaceMutex`) and runs as soon as the FIFO
+ * head drains — ticks are never dropped to contention. Spaces run
+ * independently — two spaces can both have agents running in parallel,
+ * they just can't have two agents running concurrently within the
+ * same space. The manual `POST /:space/agents/:role/run` route uses
+ * the non-queueing `withSpaceMutex` so operator calls still fast-fail
+ * with 409 instead of blocking behind a long cron-fired run.
  *
  * There is no event queue, no file-watcher hookup, and no crash-safe
  * lease semantics — a single-daemon model with per-space mutexes
@@ -45,10 +48,7 @@ import { loadAgentConfig, type AgentConfig } from "./config.js";
 import { buildAgentRole } from "./role-builder.js";
 import { loadBundledTemplates } from "./templates.js";
 import { runAgent as defaultRunAgent } from "./runtime.js";
-import {
-  SpaceBusyError,
-  withSpaceMutex,
-} from "./space-mutex.js";
+import { inFlightRole, queueSpaceMutex } from "./space-mutex.js";
 import type { Space } from "../lib/sync.js";
 
 import { ALL_TOOLS } from "./tools.js";
@@ -200,16 +200,34 @@ export async function startScheduler(
       return;
     }
 
-    // `withSpaceMutex` is the single acquisition point. The route
-    // handler (`POST /:space/agents/:role/run`) uses the same mutex,
-    // so a manual run holding it surfaces here as SpaceBusyError —
-    // we treat it the same as a same-process cron contention: log
-    // skip and reschedule. Two cron timers firing in the same JS
-    // tick can't actually race in Node's single-threaded model
-    // because withSpaceMutex sets inFlight synchronously before any
-    // await, but treating busy as a normal observable outcome means
-    // the scheduler doesn't have to reason about that proof.
-    const runPromise = withSpaceMutex(opts.space.name, role, async () => {
+    // `queueSpaceMutex` orders cron ticks behind any in-flight or
+    // already-queued run in this space (FIFO). The manual HTTP route
+    // uses the non-queueing `withSpaceMutex`, so an operator call
+    // still 409s instead of blocking — and from this side, an HTTP
+    // run holding the mutex just means our queue entry waits one more
+    // hop. Two cron timers firing in the same JS tick are ordered by
+    // the order they call `queueSpaceMutex`, which matches the order
+    // their `setTimeout` callbacks fire.
+    const blockingRole = inFlightRole(opts.space.name);
+    if (blockingRole && blockingRole !== role) {
+      console.log(
+        `[agent/scheduler] role=${role} space="${opts.space.name}" queued behind ${blockingRole}`,
+      );
+    }
+    const queuedAt = Date.now();
+    const runPromise = queueSpaceMutex(opts.space.name, role, async () => {
+      // If stop() fired while this tick was waiting in the queue, drop
+      // the run before invoking the model. The daemon-shutdown path
+      // doesn't strictly need this (the process is exiting), but
+      // long-lived handle.stop() callers like tests want a clean
+      // boundary: no agent invocations after stop() resolves.
+      if (stopped) return;
+      const waitedMs = Date.now() - queuedAt;
+      if (waitedMs >= 100) {
+        console.log(
+          `[agent/scheduler] role=${role} space="${opts.space.name}" running (waited ${waitedMs}ms in queue)`,
+        );
+      }
       try {
         await runAgent(
           built,
@@ -224,14 +242,6 @@ export async function startScheduler(
         );
         if (opts.rethrow) throw err;
       }
-    }).catch((err) => {
-      if (err instanceof SpaceBusyError) {
-        console.log(
-          `[agent/scheduler] role=${role} space="${opts.space.name}" skip (busy with ${err.inFlightRole})`,
-        );
-        return;
-      }
-      throw err;
     });
     inFlight = runPromise;
 
