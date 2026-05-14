@@ -46,11 +46,17 @@ const TEMPLATE = `# .arkeon/agents.yaml
 defaults:
   provider: openai             # openai | anthropic | openai-compatible
   model: gpt-5-mini
-  # Operator-supplied focus / style notes. Appended to every role's
-  # system prompt. Use this to steer subjects, tone, scope.
+  # 'instructions' is THE knob that makes your wiki opinionated.
+  # It's appended to every role's system prompt — editor, proposer,
+  # writer — without disturbing their workflows. Use it to declare
+  # what the wiki is about, what it's NOT about, what tone to take,
+  # and who the audience is. Without this, agents will write a
+  # generic wiki on whatever they find. With it, the corpus develops
+  # a point of view.
   # instructions: |
-  #   This wiki tracks researchers in climate science. Skip subjects
-  #   not directly relevant. Cross-link to existing wikis.
+  #   This wiki is about <topic>. Skip <out-of-scope subjects>.
+  #   Bias toward <preferred source types>. Tone: <voice>.
+  #   Audience: <reader profile>.
 
 # Per-role overrides (the bundled roles inherit by name). Add
 # custom roles here too — they need at least 'system', 'tools',

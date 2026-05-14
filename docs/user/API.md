@@ -1,8 +1,15 @@
 # API reference
 
-Default base URL: `http://localhost:8000` (or the port reported by `arkeon-wiki status` for named instances).
+Default base URL: `http://localhost:8000` (or the port reported by `arkeon-wiki status` for named instances — derived from the instance name as `8000 + sha256(name) mod 999 + 1`).
 
-No auth. No content negotiation — every endpoint returns JSON. Errors follow the [error contract](../dev/ERROR_CONTRACT.md).
+No auth. JSON responses for the data routes; the reader routes return HTML (documented at the bottom). Errors follow the [error contract](../dev/ERROR_CONTRACT.md).
+
+Routes split into two halves:
+
+- **`/spaces` and `/{space}/...`** — JSON API for programmatic access.
+- **`/`, `/{space}/`, `/{space}/wiki/*`, `/{space}/*`** — human-facing reader (HTML).
+
+The reader is mounted last; `/{space}/*` only matches URLs no JSON route has claimed.
 
 ---
 
@@ -10,7 +17,7 @@ No auth. No content negotiation — every endpoint returns JSON. Errors follow t
 
 ### `GET /health`
 
-Liveness. Always returns `200` if the process is up.
+Liveness. Returns `200` if the process is up.
 
 ```json
 { "status": "ok" }
@@ -20,15 +27,11 @@ Liveness. Always returns `200` if the process is up.
 
 Readiness. Returns `200` if SQLite is reachable, `503` otherwise.
 
-```json
-{ "status": "ready" }
-```
-
 ---
 
 ## Spaces
 
-A space is a registered directory the daemon watches.
+A space is a registered directory the daemon watches. Spaces are keyed by **name** (the primary key) — there is no separate ULID.
 
 ### `POST /spaces`
 
@@ -40,21 +43,22 @@ Register a new space. The file watcher starts in the background; the response re
 { "name": "my-notes", "watch_dir": "/Users/me/notes" }
 ```
 
+`name` must match `[a-zA-Z0-9][a-zA-Z0-9._-]*` and be ≤100 chars (no slashes, no whitespace, no `..` — the name becomes a URL path segment). Collisions return `409`.
+
 **Response:** `201`
 
 ```json
-{ "id": "01JSG...", "name": "my-notes", "watch_dir": "/Users/me/notes" }
+{ "name": "my-notes", "watch_dir": "/Users/me/notes" }
 ```
 
 ### `GET /spaces`
 
-List all spaces with entity counts.
+List every registered space with its entity count.
 
 ```json
 {
   "spaces": [
     {
-      "id": "01JSG...",
       "name": "my-notes",
       "watch_dir": "/Users/me/notes",
       "created_at": "2026-04-26T18:00:00.000Z",
@@ -64,42 +68,44 @@ List all spaces with entity counts.
 }
 ```
 
-### `GET /spaces/:id`
+### `GET /spaces/:name`
 
-Single space. Returns `404` if not found.
+Single space + its entity count. Returns `404` if not found.
 
 ---
 
 ## Entities
 
-Three kinds live in the `entities` table and are surfaced through one endpoint:
+Two kinds live in the `entities` table:
 
-- `type='wiki'` — markdown files under `wiki/` with YAML frontmatter.
-- `type='file'` — every other file the watcher picks up (sources, notes, plain text).
-- `type='stub'` — placeholder entities created when a wiki body contains a `[[Label]]` or `[[Label|subject_type]]` reference whose target doesn't yet exist. Stubs hold the slot until a real wiki is written there, at which point the entity is upgraded in place. They're GC'd at the end of every sync once nothing points at them anymore.
+- `type='wiki'` — HTML files under `wiki/` with `<title>` + `<meta>` tags.
+- `type='file'` — every other indexed file (sources, notes, plain text).
 
-### `GET /entities`
+Identity is `(space_name, source_path)` — no separate ID column. Link targets without a matching entity row are **red links**, surfaced via `/{space}/redlinks`.
 
-Generic listing with structural, frontmatter, link-count, and recency filters.
+### `GET /{space}/entities`
+
+Filterable listing scoped to one space.
 
 **Query parameters:**
 
-| Param | Default | Notes |
-|---|---|---|
-| `space_id` | — | Filter to one space. |
-| `type` | — | Comma-separated: any of `wiki`, `file`, `stub`. Omit to include all types. |
-| `subject_type` | — | Match `properties.subject_type` exactly (e.g. `person`, `organization`). Wiki-only in practice — files and stubs don't carry frontmatter. |
-| `status` | — | Match `properties.status` exactly. Free-form. |
-| `label_contains` | — | Case-insensitive substring match on `label`. |
-| `inbound_min`, `inbound_max` | — | Inclusive bounds on inbound relationship count. `inbound_max=0` finds entities nothing points at — useful for "uncited sources". |
-| `outbound_min`, `outbound_max` | — | Inclusive bounds on outbound relationship count. |
-| `has_unresolved_outbound` | — | `true` finds entities with at least one outbound edge to a stub (i.e. wikis with open threads). `false` finds entities whose outbound links all resolve. |
-| `updated_since` | — | ISO timestamp; only entities with `updated_at >=` this. |
-| `edited_by_role` | — | Filter on the most-recent-edit's `by_role` (joins the `entity_latest_edit` view). Use `human` for filesystem-driven edits. |
-| `sort` | `updated_at` | `updated_at` (DESC), `label` (ASC), `inbound` (DESC), or `outbound` (DESC). |
-| `include` | — | Comma-separated. `relationships` adds a top-level `relationships` array (every edge touching a matched entity). `counts` attaches `{ inbound, outbound }` to each row. |
-| `limit` | `100` | Max `10000`. |
-| `offset` | `0` | Pagination offset. |
+| Param | Notes |
+|---|---|
+| `type` | Comma-separated: `wiki`, `file`, or both. Omit to include all. |
+| `label_contains` | Case-insensitive substring match on `label`. |
+| `path_contains` | Case-insensitive substring match on `source_path`. |
+| `inbound_min`, `inbound_max` | Inclusive bounds on inbound link count. `inbound_max=0` finds entities nothing points at. |
+| `outbound_min`, `outbound_max` | Inclusive bounds on outbound link count. |
+| `updated_since` | ISO timestamp; only entities with `updated_at >=` this. |
+| `edited_by_role` | Filter on the most-recent edit's `by_role` (joins `entity_edits`). Use `human` for filesystem-driven edits. |
+| `has_tag`, `not_has_tag` | Filter on the presence/absence of a top-level key in `entities.tags`. Dotted keys (`editor.processed_hash`) are handled verbatim. |
+| `tag_equals` | `key:value` — match entities whose `tags[key] == value`. Splits on the first colon, so values may contain colons. |
+| `tag_current` | Key name. Match entities where the stored tag value equals the entity's current `source_hash` — "already processed at the current content." |
+| `tag_outdated` | Inverse of `tag_current`: tag absent OR value doesn't match — covers "never processed" + "stale" in one query. |
+| `sort` | `updated_at` (DESC, default), `label` (ASC), `inbound` (DESC), or `outbound` (DESC). |
+| `include` | Comma-separated. `counts` attaches `{inbound, outbound}` to each row. |
+| `limit` | Default `100`, max `10000`. |
+| `offset` | Pagination offset. |
 
 **Response:**
 
@@ -107,20 +113,17 @@ Generic listing with structural, frontmatter, link-count, and recency filters.
 {
   "entities": [
     {
-      "id": "01JSG...",
-      "space_id": "01JSF...",
+      "space_name": "my-notes",
+      "source_path": "wiki/photosynthesis.html",
       "type": "wiki",
-      "label": "Claude Shannon",
-      "source_path": "wiki/person/claude-shannon.md",
-      "properties": { "subject_type": "person", "birth_year": 1916 },
+      "label": "Photosynthesis",
+      "source_hash": "ab12cd...",
+      "properties": { "short_description": "How plants convert light to chemical energy." },
+      "tags": { "editor.processed_hash": "ab12cd..." },
       "created_at": "2026-04-26T18:00:00.000Z",
       "updated_at": "2026-04-26T18:00:00.000Z",
-      "has_unresolved_outbound": false,
-      "last_edited_by": "human",
-      "counts": {
-        "inbound": 5,
-        "outbound": 1
-      }
+      "last_edited_by": "writer",
+      "counts": { "inbound": 3, "outbound": 5 }
     }
   ],
   "total": 142,
@@ -129,133 +132,191 @@ Generic listing with structural, frontmatter, link-count, and recency filters.
 }
 ```
 
-`properties` is stored as JSON text in SQLite but the API parses it before returning, so callers get an object (or array, or `null`) — not a string. `counts` is only present when `include=counts`. `has_unresolved_outbound` and `last_edited_by` are always present.
+`properties` (file-derived: `<meta>` tags + `file_type`) and `tags` (agent-applied bookkeeping) are stored as JSON text in SQLite but parsed before being returned. `counts` is only present with `include=counts`. `last_edited_by` is always present and is `null` if no edits have been recorded.
 
-### `GET /entities/:id`
+### `GET /{space}/entities/*`
 
-Properties plus incoming and outgoing relationships for any entity (wiki, file, or stub). Returns `404` if `id` is unknown.
+Single entity by path. The path is everything after `/entities/` — e.g. `/my-notes/entities/wiki/photosynthesis.html` resolves to the entity at `wiki/photosynthesis.html` in space `my-notes`. Returns `404` if the path is unknown.
 
 **Query parameters:**
 
 | Param | Notes |
 |---|---|
-| `include` | Comma-separated. `content` reads the file from disk and adds a `content` field (skipped for stubs, which don't have a file). |
+| `include` | Comma-separated. `content` reads the file from disk and adds a `content` field with the UTF-8 body (or `null` if unreadable). |
 
-**Response:**
+**Response:** the entity row plus `inbound` and `outbound` arrays of relationships:
 
 ```json
 {
-  "id": "01JSG...",
-  "space_id": "01JSF...",
+  "space_name": "my-notes",
+  "source_path": "wiki/photosynthesis.html",
   "type": "wiki",
-  "label": "Claude Shannon",
-  "source_path": "wiki/person/claude-shannon.md",
-  "properties": { "subject_type": "person" },
-  "created_at": "2026-04-26T18:00:00.000Z",
-  "updated_at": "2026-04-26T18:00:00.000Z",
-  "relationships": {
-    "outgoing": [
-      {
-        "id": "01JSH...",
-        "target_id": "01JSI...",
-        "predicate": "references",
-        "link_text": "Bell Labs",
-        "link_path": "../organization/bell-labs.md",
-        "target_label": "Bell Labs",
-        "target_type": "wiki",
-        "target_source_path": "wiki/organization/bell-labs.md"
-      }
-    ],
-    "incoming": []
-  }
+  "label": "Photosynthesis",
+  "source_hash": "ab12cd...",
+  "properties": { "short_description": "..." },
+  "tags": {},
+  "created_at": "...",
+  "updated_at": "...",
+  "last_edited_by": "writer",
+  "inbound": [
+    { "source_path": "wiki/plants.html", "link_text": "photosynthesis" }
+  ],
+  "outbound": [
+    { "target_path": "wiki/chloroplast.html", "link_text": "chloroplasts" }
+  ]
 }
 ```
 
-With `?include=content`, a `content` field is added with the file's full UTF-8 text (or `null` if the file isn't readable). Stubs always read back `content: null`.
+There is no separate "history" endpoint — see `/{space}/recent` for the edit feed.
 
-### `GET /entities/:id/history`
+---
 
-Chronological audit log of edits to this entity (newest first), sourced from the `entity_edits` table.
+## Red links
+
+### `GET /{space}/redlinks`
+
+Link targets in this space with no matching entity row, aggregated by `target_path` and ranked by demand (the number of relationships pointing at them). The writer drains this queue.
 
 **Query parameters:**
 
 | Param | Default | Notes |
 |---|---|---|
-| `limit` | `50` | Max `500`. |
+| `limit` | `100` | Max `10000`. |
 | `offset` | `0` | Pagination offset. |
-| `since` | — | ISO timestamp; only edits at-or-after this. |
-| `role` | — | Restrict to a single `by_role`. |
 
 **Response:**
 
 ```json
 {
-  "entity_id": "01JSG...",
+  "redlinks": [
+    {
+      "target_path": "wiki/why-grief-feels-sweet.html",
+      "demand": 3,
+      "linked_from": [
+        "wiki/_plans/Augustine__book-04.html",
+        "wiki/the-restless-heart.html",
+        "wiki/_plans/Augustine__book-09.html"
+      ]
+    }
+  ],
+  "total": 17,
+  "limit": 100,
+  "offset": 0
+}
+```
+
+`linked_from` carries the last 3 source paths pointing at each target (most recent first).
+
+---
+
+## Recent edits
+
+### `GET /{space}/recent`
+
+The `entity_edits` feed for this space, newest first.
+
+**Query parameters:**
+
+| Param | Default | Notes |
+|---|---|---|
+| `since` | — | ISO timestamp; only edits at-or-after this. |
+| `role` | — | Restrict to a single `by_role` (e.g. `human`, `writer`, `editor`). |
+| `limit` | `50` | Max `500`. |
+| `offset` | `0` | Pagination offset. |
+
+**Response:**
+
+```json
+{
+  "space": "my-notes",
   "edits": [
     {
-      "id": 42,
-      "by_role": "ingestor",
-      "edit_kind": "append",
-      "edit_note": "added Bell Labs paragraph",
+      "entity_path": "wiki/photosynthesis.html",
+      "by_role": "writer",
+      "edit_kind": "create",
+      "edit_note": null,
       "content_hash": "ab12cd...",
-      "at": "2026-04-26T19:30:00.000Z"
+      "at": "2026-04-26T19:30:00.123"
     }
   ]
 }
 ```
 
-### `DELETE /entities/:id`
-
-Remove an entity from the index. The file on disk is **not** deleted — but if it still exists, the watcher will re-index it on the next change. Returns `404` if `id` is unknown. Cascades through relationships and chunks.
-
-```json
-{ "deleted": true, "id": "01JSG...", "label": "Claude Shannon", "type": "wiki" }
-```
+`at` carries millisecond precision (sourced from `strftime('%f')`) so same-second writes don't collide.
 
 ---
 
 ## Search
 
-### `GET /search`
+### `GET /{space}/search`
 
-Keyword search via ripgrep. The daemon spawns ripgrep against each space's `watch_dir`, parses `--json` output, and joins the matched paths back to entities. Results are ranked by `match_count` descending; ties broken by `entity_id`.
+Keyword search via ripgrep, scoped to one space. The daemon spawns ripgrep against the space's `watch_dir`, parses `--json` output, and joins matched paths back to entities. Ranked by `match_count` descending.
 
 **Query parameters:**
 
 | Param | Default | Notes |
 |---|---|---|
-| `q` | — | **Required.** Literal substring by default. |
-| `space_id` | — | Restrict to one space. Omit to search every registered space. |
+| `q` | — | **Required.** Repeatable up to 10 times to OR patterns in one pass (`?q=foo&q=bar`). |
+| `type` | — | Comma-separated entity types to restrict hits to (`wiki`, `file`). |
 | `limit` | `20` | Max `200`. |
 | `snippets` | `3` | Max snippets per file. `0` returns counts only. Snippets are truncated to 240 chars. |
-| `regex` | `false` | When `true`, treat `q` as a regular expression. |
-
-ripgrep runs with `--smart-case`, skips `.arkeon/`, `.git/`, and `node_modules/`, and only searches files of types `md`, `txt`, `json`, `csv`, `xml`, `html`, `rst`.
+| `regex` | `false` | When `true`, treat each `q` as a regular expression. |
 
 **Response:**
 
 ```json
 {
   "query": "shannon",
-  "hits": [
-    {
-      "entity_id": "01JSG...",
-      "space_id": "01JSF...",
-      "type": "wiki",
-      "label": "Claude Shannon",
-      "source_path": "wiki/person/claude-shannon.md",
-      "match_count": 7,
-      "snippets": [
-        { "line_number": 12, "text": "Claude Shannon was the father..." },
-        { "line_number": 34, "text": "Shannon's 1948 paper..." }
-      ]
-    }
-  ],
-  "unmatched_files": 0
+  "keyword": {
+    "hits": [
+      {
+        "space_name": "my-notes",
+        "source_path": "wiki/claude-shannon.html",
+        "type": "wiki",
+        "label": "Claude Shannon",
+        "match_count": 7,
+        "snippets": [
+          { "line_number": 12, "text": "Claude Shannon was the father..." }
+        ]
+      }
+    ],
+    "total": 1,
+    "unmatched_files": 0
+  }
 }
 ```
 
-`unmatched_files` counts files ripgrep matched but for which no entity exists in the index — usually means the watcher hasn't caught up yet, or the file was matched outside the indexed file types.
+`query` echoes the input shape (string or string array). `unmatched_files` counts files ripgrep matched but for which no entity exists in the index — usually a watcher lag.
+
+---
+
+## Chat (Phase 3 stubs)
+
+Three routes are reserved for the chat-with-article feature. All currently return `501`:
+
+```
+POST   /{space}/chat
+GET    /{space}/chat/:conversation_id
+DELETE /{space}/chat/:conversation_id
+```
+
+The `conversations` and `conversation_messages` tables are in place; the handlers ship in Phase 3.
+
+---
+
+## Reader (HTML)
+
+The reader serves human-facing HTML pages. Always mounted last, so it never shadows a JSON route.
+
+| Route | Returns |
+|---|---|
+| `GET /` | Alphabetical list of registered spaces with per-space entity counts. |
+| `GET /{space}` | `301` redirect to `/{space}/`. |
+| `GET /{space}/` | Article index — `type='wiki'` entries alphabetical by `label`, with `short_description` subtitles. |
+| `GET /{space}/wiki/*` | Wiki article with `<div id="arkeon-chrome">` injected and link classes (`arkeon-wiki`, `arkeon-file`, `arkeon-redlink`). Anchors are decorated, not rewritten — the same HTML opens identically over `file://`. |
+| `GET /{space}/*` | Static-file fallback for non-wiki paths inside the watch dir. Markdown → `text/markdown`, PDF → `application/pdf`, images → `image/*`, etc. Path-traversal escapes return `404`. |
+
+URL structure mirrors disk structure within a space: `wiki/foo.html` on disk → `/{space}/wiki/foo.html` over HTTP.
 
 ---
 
