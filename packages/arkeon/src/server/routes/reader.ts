@@ -102,6 +102,7 @@ readerRouter.get("/:space/", async (c) => {
     SELECT source_path, label, properties
     FROM entities
     WHERE space_name = ${space} AND type = 'wiki'
+    ORDER BY updated_at DESC, source_path ASC
   `;
   const articles: ArticleIndexRow[] = rows.map((r) => {
     let shortDescription: string | null = null;
