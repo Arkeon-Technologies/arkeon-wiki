@@ -23,6 +23,7 @@ import type { Command } from "commander";
 import {
   applyName,
   arkeonDir,
+  ensureArkeonDir,
   isProcessAlive,
   readPidfile,
   removePidfile,
@@ -103,6 +104,14 @@ async function runInstall(opts: InstallCliOptions): Promise<void> {
   const instanceName = opts.name ?? DEFAULT_INSTANCE_NAME;
   if (opts.name) applyName(opts.name);
   const home = arkeonDir();
+
+  // Create the instance home dir BEFORE the supervisor starts the
+  // daemon. systemd's StandardOutput=append:<path> opens the log
+  // file before invoking ExecStart, so the dir must exist or the
+  // unit fails to start with status=209/STDOUT. Launchd is less
+  // strict here, but creating the dir up front is correct on both
+  // platforms.
+  ensureArkeonDir();
 
   // Refuse to install while a `up`-spawned daemon is running on the
   // same instance. The supervisor's first start would race the
