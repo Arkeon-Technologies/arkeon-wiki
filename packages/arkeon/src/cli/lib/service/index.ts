@@ -21,6 +21,13 @@ import type { Platform, ServiceManager } from "./types.js";
 export * from "./types.js";
 export { snapshotPaths } from "./path-snapshot.js";
 export { snapshotEnv, readEnvKeys } from "./env-snapshot.js";
+export {
+  DEFAULT_LAUNCHD_LABEL,
+  launchdLabel,
+  launchdPlistPath,
+  renderLaunchdPlist,
+  validateInstanceName,
+} from "./launchd-plist.js";
 
 /**
  * Detect which service supervisor we should target. Pure: only reads
