@@ -4,8 +4,21 @@
 /**
  * `arkeon-wiki init [name]` — register the current directory as a space.
  *
- * Creates a space in the running Arkeon instance. The daemon automatically
- * starts watching the directory and syncs all files.
+ * First run: creates a space in the running Arkeon instance (POST
+ * /spaces), writes `.arkeon/state.json`, gitignores `.env` + state,
+ * creates `wiki/`, and lays down `.arkeon/agents.yaml` from a named
+ * template.
+ *
+ * Re-run (state.json already present): reconcile mode. Skips the API
+ * call, leaves state.json alone, but still ensures `.gitignore`,
+ * `wiki/`, and `.arkeon/agents.yaml` exist. All three helpers are
+ * idempotent (no clobber on existing files), so a user who deleted
+ * `.arkeon/agents.yaml` by hand or init'd with a pre-template version
+ * of the CLI can recover by re-running `init` — no need for a
+ * separate `config init` step.
+ *
+ * The `name` argument is ignored in reconcile mode; the existing
+ * space_name from state.json is canonical.
  */
 
 import type { Command } from "commander";
@@ -52,42 +65,55 @@ async function runInit(
   template: string,
 ): Promise<void> {
   const cwd = process.cwd();
-  const spaceName = name ?? basename(cwd);
   const apiUrl = process.env.ARKE_API_URL ?? `http://localhost:${DEFAULT_API_PORT}`;
 
-  // Check if already initialized
+  // Branch on whether the space is already known locally. Reconcile
+  // mode skips the API call and the state.json write but still runs
+  // the three idempotent fill-in-missing-pieces helpers below.
   const existing = loadRepoState();
+  let space: { name: string; watch_dir: string };
+  const reconciled = existing !== null;
+
   if (existing) {
-    console.log(`This directory is already initialized (space: ${existing.space_name}).`);
-    return;
+    space = { name: existing.space_name, watch_dir: resolve(cwd) };
+  } else {
+    const spaceName = name ?? basename(cwd);
+
+    // Create space via API — the server will automatically start watching
+    const res = await fetch(`${apiUrl}/spaces`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: spaceName, watch_dir: resolve(cwd) }),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as Record<string, unknown>;
+      throw new Error(
+        `Failed to create space: ${res.status} ${(body as { error?: { message?: string } }).error?.message ?? res.statusText}`,
+      );
+    }
+
+    space = (await res.json()) as { name: string; watch_dir: string };
+
+    // Write .arkeon/state.json
+    const arkeonDir = join(cwd, ".arkeon");
+    if (!existsSync(arkeonDir)) mkdirSync(arkeonDir, { recursive: true });
+
+    const state: RepoState = {
+      api_url: apiUrl,
+      space_name: space.name,
+      created_at: new Date().toISOString(),
+    };
+    writeFileSync(join(arkeonDir, "state.json"), JSON.stringify(state, null, 2));
   }
 
-  // Create space via API — the server will automatically start watching
-  const res = await fetch(`${apiUrl}/spaces`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name: spaceName, watch_dir: resolve(cwd) }),
-  });
-
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({})) as Record<string, unknown>;
-    throw new Error(
-      `Failed to create space: ${res.status} ${(body as { error?: { message?: string } }).error?.message ?? res.statusText}`,
-    );
-  }
-
-  const space = (await res.json()) as { name: string; watch_dir: string };
-
-  // Write .arkeon/state.json
-  const arkeonDir = join(cwd, ".arkeon");
-  if (!existsSync(arkeonDir)) mkdirSync(arkeonDir, { recursive: true });
-
-  const state: RepoState = {
-    api_url: apiUrl,
-    space_name: space.name,
-    created_at: new Date().toISOString(),
-  };
-  writeFileSync(join(arkeonDir, "state.json"), JSON.stringify(state, null, 2));
+  // ── Reconcile pass (runs in both first-init and re-run) ────────
+  //
+  // All three helpers are idempotent: ensureGitignoreEntries skips
+  // already-present lines, mkdirSync `recursive` is a no-op on an
+  // existing dir, and writeAgentsYamlTemplate refuses to overwrite
+  // an existing file unless `force` is set. So a re-run repairs
+  // anything missing without clobbering hand-edits.
 
   // Gitignore the per-clone state file AND `.env` (where API keys
   // land). `.arkeon/agents.yaml` and any other configuration in the
@@ -104,29 +130,45 @@ async function runInit(
   const wikiDir = join(cwd, "wiki");
   if (!existsSync(wikiDir)) mkdirSync(wikiDir, { recursive: true });
 
-  // Lay down .arkeon/agents.yaml from a named template. Idempotent:
-  // if the file already exists we leave it alone so re-running `init`
-  // (or `init` after a manual edit) never clobbers operator config.
+  // Lay down .arkeon/agents.yaml from a named template.
   const agentsYaml = writeAgentsYamlTemplate({ targetDir: cwd, template });
 
   output.result({
     operation: "init",
     space_name: space.name,
     watch_dir: resolve(cwd),
+    reconciled,
     agents_yaml: {
       path: agentsYaml.path,
       created: agentsYaml.created,
       template: agentsYaml.template,
     },
     gitignore_updated: gitignoreChanged,
-    hint:
-      agentsYaml.created
-        ? "The daemon is now watching this directory. Edit .arkeon/agents.yaml " +
-          "to set your provider/model and operator instructions, then drop your " +
-          "API key in ~/.arkeon-wiki/.env or ./.env."
-        : "The daemon is now watching this directory. Any files you add will be " +
-          "synced automatically.",
+    hint: buildHint({ reconciled, agentsYamlCreated: agentsYaml.created, gitignoreChanged }),
   });
+}
+
+function buildHint(args: {
+  reconciled: boolean;
+  agentsYamlCreated: boolean;
+  gitignoreChanged: boolean;
+}): string {
+  if (!args.reconciled) {
+    // First init — point the user at config next.
+    return (
+      "The daemon is now watching this directory. Edit .arkeon/agents.yaml " +
+      "to set your provider/model and operator instructions, then drop your " +
+      "API key in ~/.arkeon-wiki/.env or ./.env."
+    );
+  }
+  // Re-run — be explicit about what (if anything) was filled in.
+  const filled: string[] = [];
+  if (args.agentsYamlCreated) filled.push(".arkeon/agents.yaml");
+  if (args.gitignoreChanged) filled.push(".gitignore");
+  if (filled.length === 0) {
+    return "Already initialized — nothing to reconcile.";
+  }
+  return `Already initialized — restored missing: ${filled.join(", ")}.`;
 }
 
 /**
