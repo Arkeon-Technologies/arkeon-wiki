@@ -45,6 +45,10 @@ import { loadAgentConfig, type AgentConfig } from "./config.js";
 import { buildAgentRole } from "./role-builder.js";
 import { loadBundledTemplates } from "./templates.js";
 import { runAgent as defaultRunAgent } from "./runtime.js";
+import {
+  SpaceBusyError,
+  withSpaceMutex,
+} from "./space-mutex.js";
 import type { Space } from "../lib/sync.js";
 
 import { ALL_TOOLS } from "./tools.js";
@@ -148,9 +152,10 @@ export async function startScheduler(
     return { stop: async () => {} };
   }
 
-  // Per-space mutex. Held by an in-flight run; ticks that find it held
-  // log "skip (busy)" and reschedule from now.
-  let busy = false;
+  // The per-space mutex lives in space-mutex.ts so the manual
+  // `POST /:space/agents/:role/run` route obeys the same serialization
+  // as cron-fired ticks. `inFlight` here tracks our own most-recent
+  // run promise so stop() can wait for it bounded by gracePeriodMs.
   let inFlight: Promise<unknown> | null = null;
 
   let stopped = false;
@@ -180,14 +185,6 @@ export async function startScheduler(
   }
 
   async function fireTick(role: string, cron: string): Promise<void> {
-    if (busy) {
-      console.log(
-        `[agent/scheduler] role=${role} space="${opts.space.name}" skip (busy)`,
-      );
-      scheduleNext(role, cron);
-      return;
-    }
-    busy = true;
     const built = (() => {
       try {
         return buildAgentRole(role, loadAgentConfig({ spaceDir: opts.space.watch_dir }));
@@ -199,12 +196,20 @@ export async function startScheduler(
       }
     })();
     if (!built) {
-      busy = false;
       scheduleNext(role, cron);
       return;
     }
 
-    const runPromise = (async () => {
+    // `withSpaceMutex` is the single acquisition point. The route
+    // handler (`POST /:space/agents/:role/run`) uses the same mutex,
+    // so a manual run holding it surfaces here as SpaceBusyError —
+    // we treat it the same as a same-process cron contention: log
+    // skip and reschedule. Two cron timers firing in the same JS
+    // tick can't actually race in Node's single-threaded model
+    // because withSpaceMutex sets inFlight synchronously before any
+    // await, but treating busy as a normal observable outcome means
+    // the scheduler doesn't have to reason about that proof.
+    const runPromise = withSpaceMutex(opts.space.name, role, async () => {
       try {
         await runAgent(
           built,
@@ -219,13 +224,20 @@ export async function startScheduler(
         );
         if (opts.rethrow) throw err;
       }
-    })();
+    }).catch((err) => {
+      if (err instanceof SpaceBusyError) {
+        console.log(
+          `[agent/scheduler] role=${role} space="${opts.space.name}" skip (busy with ${err.inFlightRole})`,
+        );
+        return;
+      }
+      throw err;
+    });
     inFlight = runPromise;
 
     try {
       await runPromise;
     } finally {
-      busy = false;
       inFlight = null;
       scheduleNext(role, cron);
     }
