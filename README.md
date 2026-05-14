@@ -102,14 +102,15 @@ arkeon-wiki start              # foreground (for use under pm2/launchd/etc.)
 
 ## Agents (LLM-powered)
 
-arkeon-wiki ships a three-role agent pipeline — `editor`, `proposer`, `writer` — that ingests sources, proposes the questions worth answering, and drafts the HTML articles. All three run on cron, serialized per-space. Configure them in `.arkeon/agents.yaml` (committed) and put your API key in `~/.arkeon-wiki/.env` (per-user, machine-local).
+arkeon-wiki ships a three-role agent pipeline — `editor`, `proposer`, `writer` — that ingests sources, proposes the questions worth answering, and drafts the HTML articles. All three run on cron, serialized per-space. `arkeon-wiki init` lays down `.arkeon/agents.yaml` from the bundled `wiki` template (committed so the team shares it); secrets go in `~/.arkeon-wiki/.env` (per-user, machine-local).
 
 ```bash
-arkeon-wiki config init                                       # template config
 echo "OPENAI_API_KEY=sk-..." > ~/.arkeon-wiki/.env             # one key for all spaces
 $EDITOR .arkeon/agents.yaml                                    # set provider/model/instructions
 arkeon-wiki config show                                        # confirm what'll run
 ```
+
+`init` skips the template if `.arkeon/agents.yaml` already exists. To re-create one (or pick a different template later) run `arkeon-wiki config init --template <name>` (use `--force` to overwrite).
 
 Roles run on OpenAI, Anthropic, or any OpenAI-compatible backend (Ollama, LM Studio, OpenRouter, Groq, vLLM, …). Each role can use a different provider; secrets stay in `.env`, never YAML. Custom user-defined roles are first-class.
 
@@ -143,7 +144,7 @@ All state lives in `~/.arkeon-wiki/` (override with `ARKEON_WIKI_HOME` or `--dat
 | `--port <port>` flag | API port (default: 8000) |
 | `--name <name>` flag | Run a named instance side-by-side with others |
 | `~/.arkeon-wiki/.env` | Universal API keys (OpenAI, Anthropic, etc.) — auto-loaded |
-| `<repo>/.env` | Per-repo API key override (gitignored by `init`) |
+| `<repo>/.env` | Per-repo API key override. Gitignored by `init` (alongside `.arkeon/state.json`). |
 | `.arkeon/agents.yaml` | Per-repo agent config: providers, models, operator instructions, custom roles. Committed. See [AGENT_RUNTIME.md](./docs/user/AGENT_RUNTIME.md). |
 
 ## Development

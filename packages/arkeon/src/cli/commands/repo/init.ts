@@ -15,6 +15,11 @@ import { basename, join, resolve } from "node:path";
 import { DEFAULT_API_PORT } from "../../lib/local-runtime.js";
 import { output } from "../../lib/output.js";
 import { loadRepoState, type RepoState } from "../../lib/repo-state.js";
+import {
+  AGENTS_YAML_TEMPLATES,
+  DEFAULT_AGENTS_TEMPLATE,
+  writeAgentsYamlTemplate,
+} from "./config.js";
 
 // --api-url is declared on the root program (src/index.ts); the
 // preAction hook moves the value into ARKE_API_URL. Don't redeclare
@@ -26,9 +31,15 @@ export function registerInitCommand(program: Command): void {
     .command("init")
     .argument("[name]", "Space name (defaults to directory name)")
     .description("Register this directory as an Arkeon space")
-    .action(async (name: string | undefined) => {
+    .option(
+      "--template <name>",
+      `agents.yaml template to lay down (default: ${DEFAULT_AGENTS_TEMPLATE}). ` +
+        `Available: ${Object.keys(AGENTS_YAML_TEMPLATES).sort().join(", ")}.`,
+      DEFAULT_AGENTS_TEMPLATE,
+    )
+    .action(async (name: string | undefined, options: { template: string }) => {
       try {
-        await runInit(name);
+        await runInit(name, options.template);
       } catch (error) {
         output.error(error, { operation: "init" });
         process.exitCode = 1;
@@ -36,7 +47,10 @@ export function registerInitCommand(program: Command): void {
     });
 }
 
-async function runInit(name: string | undefined): Promise<void> {
+async function runInit(
+  name: string | undefined,
+  template: string,
+): Promise<void> {
   const cwd = process.cwd();
   const spaceName = name ?? basename(cwd);
   const apiUrl = process.env.ARKE_API_URL ?? `http://localhost:${DEFAULT_API_PORT}`;
@@ -75,42 +89,84 @@ async function runInit(name: string | undefined): Promise<void> {
   };
   writeFileSync(join(arkeonDir, "state.json"), JSON.stringify(state, null, 2));
 
-  // Gitignore only the per-clone state file. `.arkeon/agents.yaml` and
-  // any other configuration that lives in the .arkeon dir are intended
-  // to be committed so the team shares them.
-  const gitignorePath = join(cwd, ".gitignore");
-  if (existsSync(gitignorePath)) {
-    const gitignoreContent = readFileSync(gitignorePath, "utf-8");
-    const stale = ".arkeon/";
-    const target = ".arkeon/state.json";
-    let updated = gitignoreContent;
-    // Migrate any pre-existing `.arkeon/` (which would also hide
-    // committed config) to the narrower `.arkeon/state.json`.
-    if (
-      updated.split("\n").some((line) => line.trim() === stale) &&
-      !updated.includes(target)
-    ) {
-      updated = updated
-        .split("\n")
-        .map((line) => (line.trim() === stale ? target : line))
-        .join("\n");
-    }
-    if (!updated.includes(target)) {
-      updated = `${updated.trimEnd()}\n${target}\n`;
-    }
-    if (updated !== gitignoreContent) {
-      writeFileSync(gitignorePath, updated);
-    }
-  }
+  // Gitignore the per-clone state file AND `.env` (where API keys
+  // land). `.arkeon/agents.yaml` and any other configuration in the
+  // .arkeon dir are intended to be committed so the team shares them.
+  // If `.gitignore` doesn't exist yet we create it — leaking a
+  // provider key is a worse outcome than silently materializing a
+  // one-line file.
+  const gitignoreChanged = ensureGitignoreEntries(cwd, [
+    ".arkeon/state.json",
+    ".env",
+  ]);
 
   // Create wiki/ directory
   const wikiDir = join(cwd, "wiki");
   if (!existsSync(wikiDir)) mkdirSync(wikiDir, { recursive: true });
 
+  // Lay down .arkeon/agents.yaml from a named template. Idempotent:
+  // if the file already exists we leave it alone so re-running `init`
+  // (or `init` after a manual edit) never clobbers operator config.
+  const agentsYaml = writeAgentsYamlTemplate({ targetDir: cwd, template });
+
   output.result({
     operation: "init",
     space_name: space.name,
     watch_dir: resolve(cwd),
-    hint: "The daemon is now watching this directory. Any files you add will be synced automatically.",
+    agents_yaml: {
+      path: agentsYaml.path,
+      created: agentsYaml.created,
+      template: agentsYaml.template,
+    },
+    gitignore_updated: gitignoreChanged,
+    hint:
+      agentsYaml.created
+        ? "The daemon is now watching this directory. Edit .arkeon/agents.yaml " +
+          "to set your provider/model and operator instructions, then drop your " +
+          "API key in ~/.arkeon-wiki/.env or ./.env."
+        : "The daemon is now watching this directory. Any files you add will be " +
+          "synced automatically.",
   });
+}
+
+/**
+ * Ensure each entry exists in `<cwd>/.gitignore`, creating the file
+ * if it doesn't exist. Returns true if any write happened. Also
+ * migrates the legacy `.arkeon/` line (which would hide committed
+ * config) to the narrower `.arkeon/state.json` when the latter is
+ * one of the requested entries.
+ */
+function ensureGitignoreEntries(cwd: string, entries: string[]): boolean {
+  const gitignorePath = join(cwd, ".gitignore");
+  const existed = existsSync(gitignorePath);
+  const original = existed ? readFileSync(gitignorePath, "utf-8") : "";
+  let updated = original;
+
+  // Legacy `.arkeon/` → `.arkeon/state.json` migration. Only relevant
+  // when `.arkeon/state.json` is being ensured.
+  const stateEntry = ".arkeon/state.json";
+  if (entries.includes(stateEntry)) {
+    const stale = ".arkeon/";
+    const hasStale = updated.split("\n").some((line) => line.trim() === stale);
+    if (hasStale && !updated.includes(stateEntry)) {
+      updated = updated
+        .split("\n")
+        .map((line) => (line.trim() === stale ? stateEntry : line))
+        .join("\n");
+    }
+  }
+
+  // Per-line presence check — `.env` would match `.envrc` if we used
+  // `includes`, so compare trimmed lines exactly.
+  const presentLines = new Set(updated.split("\n").map((l) => l.trim()));
+  const toAdd = entries.filter((e) => !presentLines.has(e));
+  if (toAdd.length > 0) {
+    updated = `${updated.trimEnd()}\n${toAdd.join("\n")}\n`;
+    // If the file was empty/missing, drop the leading newline.
+    if (!existed) updated = updated.replace(/^\n/, "");
+  }
+
+  if (updated === original) return false;
+  writeFileSync(gitignorePath, updated);
+  return true;
 }
