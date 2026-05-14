@@ -28,6 +28,12 @@ export {
   renderLaunchdPlist,
   validateInstanceName,
 } from "./launchd-plist.js";
+export {
+  renderSystemdUnit,
+  systemdUnitName,
+  systemdUnitPath,
+  UNIT_PREFIX as SYSTEMD_UNIT_PREFIX,
+} from "./systemd-unit.js";
 
 /**
  * Detect which service supervisor we should target. Pure: only reads

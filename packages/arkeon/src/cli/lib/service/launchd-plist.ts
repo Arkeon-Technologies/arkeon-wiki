@@ -23,38 +23,12 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { isDefaultName, validateInstanceName } from "./naming.js";
 import type { InstallOptions } from "./types.js";
 
+export { DEFAULT_INSTANCE_NAME, validateInstanceName } from "./naming.js";
+
 export const DEFAULT_LAUNCHD_LABEL = "tech.arkeon.wiki";
-export const DEFAULT_INSTANCE_NAME = "default";
-
-/**
- * `default` is the sentinel for "the unnamed install" used across the
- * CLI (`instances.ts`). Everything else is a real `--name` instance.
- */
-function isDefaultName(name: string): boolean {
-  return name === DEFAULT_INSTANCE_NAME;
-}
-
-/**
- * Allow only filesystem-safe characters in instance names. Anything
- * outside this set would either break filename construction or risk
- * shell interpretation inside the plist's `ProgramArguments` — easier
- * to reject up front than guard every escape boundary.
- */
-const NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
-
-export function validateInstanceName(name: string): void {
-  if (!name) {
-    throw new Error("instance name must be non-empty");
-  }
-  if (!NAME_PATTERN.test(name)) {
-    throw new Error(
-      `instance name "${name}" contains characters outside [A-Za-z0-9._-]. ` +
-        "Pick a name made of letters, digits, dot, underscore, or hyphen.",
-    );
-  }
-}
 
 /**
  * Derive the launchd label for a given instance name. Stable across
