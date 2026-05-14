@@ -16,7 +16,7 @@
 
 import { platform as osPlatform } from "node:os";
 
-import type { Platform, ServiceManager } from "./types.js";
+import type { Platform, ServiceManager, ServiceStatus } from "./types.js";
 
 export * from "./types.js";
 export { snapshotPaths } from "./path-snapshot.js";
@@ -42,6 +42,38 @@ export function detectPlatform(): Platform {
   if (p === "darwin") return "launchd";
   if (p === "linux") return "systemd";
   return "unsupported";
+}
+
+/**
+ * If a service is installed for the given instance, return its status
+ * + the platform's manager. Returns null on unsupported platforms,
+ * when no service is registered for this name, or when status query
+ * fails for any reason.
+ *
+ * Used by `up`, `down`, and `status` to coordinate with the
+ * supervisor: if a service exists, the supervisor owns the daemon's
+ * lifecycle and the CLI delegates to it instead of spawning a
+ * detached child the supervisor doesn't track.
+ *
+ * Failing closed (return null on any error) is deliberate. The
+ * fallback in callers is "behave like there's no service" — the
+ * pre-install behavior. We never want a transient launchctl glitch to
+ * make `up` refuse to start.
+ */
+export async function findInstalledService(name: string): Promise<{
+  manager: ServiceManager;
+  status: ServiceStatus;
+} | null> {
+  const platform = detectPlatform();
+  if (platform === "unsupported") return null;
+  try {
+    const manager = await getServiceManager(platform);
+    const status = await manager.status({ name });
+    if (!status.installed) return null;
+    return { manager, status };
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -44,6 +44,7 @@ import type {
   InstallResult,
   ServiceManager,
   ServiceStatus,
+  StartResult,
   UninstallOptions,
   UninstallResult,
 } from "./types.js";
@@ -186,10 +187,40 @@ export function createLaunchdManager(
     };
   }
 
+  async function start({ name }: { name: string }): Promise<StartResult> {
+    const label = launchdLabel(name);
+    const unitPath = plistPathFor(name);
+    if (!existsSync(unitPath)) {
+      throw new Error(
+        `service is not installed for ${name === "default" ? "the default instance" : `instance "${name}"`}. ` +
+          `Run \`arkeon-wiki install${name === "default" ? "" : ` --name ${name}`}\` first.`,
+      );
+    }
+
+    // kickstart -k = "kill any existing process, then start". Safe
+    // because we only call start() when the supervisor's view of state
+    // is "not running", and harmless when it's actually running.
+    await run(["kickstart", "-k", domain(label)]);
+
+    const deadline = Date.now() + bootWaitMs;
+    let last = await readStatus(name);
+    while (!last.running && Date.now() < deadline) {
+      await sleep(bootIntervalMs);
+      last = await readStatus(name);
+    }
+
+    return {
+      running: last.running,
+      pid: last.pid,
+      unitPath,
+    };
+  }
+
   return {
     install,
     uninstall,
     status: ({ name }) => readStatus(name),
+    start,
   };
 }
 

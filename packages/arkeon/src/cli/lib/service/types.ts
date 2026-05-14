@@ -68,14 +68,29 @@ export interface ServiceStatus {
   unitPath: string | null;
 }
 
+export interface StartResult {
+  /** True if the supervisor reports the service running after the call. */
+  running: boolean;
+  /** PID per the supervisor, if any. */
+  pid: number | null;
+  /** Path of the unit/plist the supervisor is managing. */
+  unitPath: string;
+}
+
 /**
  * Per-platform surface. `launchd.ts` and `systemd.ts` each export a
  * `manager: ServiceManager` that satisfies this interface.
+ *
+ * `start()` is the "bring an already-installed service up" operation
+ * — distinct from `install()` which also writes the plist/unit. Used
+ * by `arkeon-wiki up` to delegate to the supervisor instead of
+ * spawning a detached child that the supervisor doesn't track.
  */
 export interface ServiceManager {
   install(opts: InstallOptions): Promise<InstallResult>;
   uninstall(opts: UninstallOptions): Promise<UninstallResult>;
   status(opts: { name: string }): Promise<ServiceStatus>;
+  start(opts: { name: string }): Promise<StartResult>;
 }
 
 export type Platform = "launchd" | "systemd" | "unsupported";

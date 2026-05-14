@@ -216,6 +216,45 @@ describe("createLaunchdManager — uninstall", () => {
   });
 });
 
+describe("createLaunchdManager — start", () => {
+  it("refuses when no plist is installed", async () => {
+    const { run } = fakeLaunchctl({});
+    const mgr = createLaunchdManager({
+      runLaunchctl: run,
+      home,
+      uid: 501,
+      bootWaitMs: 0,
+    });
+    await expect(mgr.start({ name: "default" })).rejects.toThrow(/not installed/);
+  });
+
+  it("kickstarts an installed service and polls until running", async () => {
+    const printRunning = {
+      stdout: "state = running\npid = 7777\n",
+      stderr: "",
+      exitCode: 0,
+    };
+    // Two responses: one consumed by install's post-bootstrap poll, one
+    // for start's post-kickstart poll.
+    const { run, calls } = fakeLaunchctl({ print: [printRunning, printRunning] });
+    const mgr = createLaunchdManager({
+      runLaunchctl: run,
+      home,
+      uid: 501,
+      bootWaitMs: 0,
+    });
+
+    await mgr.install(INSTALL_OPTS);
+    calls.length = 0;
+
+    const result = await mgr.start({ name: "default" });
+    expect(result.running).toBe(true);
+    expect(result.pid).toBe(7777);
+    expect(calls.map((c) => c.args[0])).toEqual(["kickstart", "print"]);
+    expect(calls[0].args).toEqual(["kickstart", "-k", "gui/501/tech.arkeon.wiki"]);
+  });
+});
+
 describe("createLaunchdManager — status", () => {
   it("returns installed=false when no plist exists", async () => {
     const { run } = fakeLaunchctl({});
