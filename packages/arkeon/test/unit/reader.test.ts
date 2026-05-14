@@ -69,6 +69,22 @@ describe("classifyAnchor", () => {
       "arkeon-redlink",
     ]);
   });
+
+  it("matches percent-escaped hrefs against decoded entity paths", () => {
+    // Filenames with spaces/`&` are URL-encoded in hrefs but stored as
+    // real characters in entities.source_path. Without decoding, these
+    // would falsely flag as red links.
+    const knownEncoded = new Set([
+      "files/Milestones & Schedules/README.md",
+    ]);
+    expect(
+      classifyAnchor(
+        "../files/Milestones%20%26%20Schedules/README.md",
+        from,
+        knownEncoded,
+      ),
+    ).toEqual(["arkeon-file"]);
+  });
 });
 
 describe("instrumentArticle", () => {
