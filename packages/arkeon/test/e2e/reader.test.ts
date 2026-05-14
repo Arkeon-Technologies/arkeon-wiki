@@ -69,7 +69,7 @@ beforeAll(async () => {
 <a href="ghost-article.html">a missing article</a>.</p>
 <p>See <a href="../sources/shannon-1948.txt">Shannon 1948</a> and
 <a href="../sources/missing.txt">a missing source</a> and
-<a href="../sources/notes.md">scratch notes</a> and
+<a href="../sources/notes.pdf">scratch notes pdf</a> and
 <a href="https://wikipedia.org">wikipedia</a>.</p>
 </body>
 </html>`,
@@ -85,20 +85,20 @@ beforeAll(async () => {
 </html>`,
   );
 
-  // Indexed source (`.txt` is in INDEX_EXTENSIONS) — produces an entity row.
+  // Indexed source (`.txt` is in TEXT_EXTENSIONS) — produces an entity row.
   writeFileSync(
     join(workdir, "sources/shannon-1948.txt"),
     `A mathematical theory of communication.\n`,
   );
 
-  // Deliberately NOT indexed (markdown was removed in #126). Still exists on
-  // disk and gets served raw by the static-file fallback with the MIME table's
-  // `text/markdown` content type — exercises the passthrough path for any
-  // non-indexed file type. From the wiki's perspective it's a red link
-  // because no entity row exists.
+  // Deliberately NOT indexed (PDF is in BINARY_EXTENSIONS — fast-rejected).
+  // Still exists on disk and gets served raw by the static-file fallback
+  // with the MIME table's `application/pdf` content type — exercises the
+  // passthrough path for any non-indexed file type. From the wiki's
+  // perspective it's a red link because no entity row exists.
   writeFileSync(
-    join(workdir, "sources/notes.md"),
-    `# Scratch notes\n\nNot indexed, served raw.\n`,
+    join(workdir, "sources/notes.pdf"),
+    `%PDF-1.4\nPretend bytes, served raw.\n`,
   );
 
   writeFileSync(
@@ -192,12 +192,12 @@ describe("Phase 2 reader", () => {
     expect(body).toContain(
       `<a href="../sources/missing.txt" class="arkeon-file arkeon-redlink">`,
     );
-    // Non-indexed file type (markdown isn't in INDEX_EXTENSIONS) — the file
+    // Non-indexed file type (PDF is in BINARY_EXTENSIONS) — the file
     // exists on disk but there's no entity row, so the reader classifies it
     // as a red link. The static-file route below verifies the bytes still
     // come through.
     expect(body).toContain(
-      `<a href="../sources/notes.md" class="arkeon-file arkeon-redlink">`,
+      `<a href="../sources/notes.pdf" class="arkeon-file arkeon-redlink">`,
     );
     // External link untouched
     expect(body).toContain(`<a href="https://wikipedia.org">wikipedia</a>`);
@@ -213,15 +213,16 @@ describe("Phase 2 reader", () => {
     expect(body).not.toContain("arkeon-chrome");
   });
 
-  it("GET /:space/sources/*.md serves non-indexed markdown raw via MIME table passthrough", async () => {
-    // Markdown isn't indexed but the static-file fallback still serves it
-    // with text/markdown so browsers display it natively. Same principle
-    // covers PDFs, images, JSON, etc. — the MIME table is the contract.
-    const res = await fetch(`${baseUrl}/${SPACE}/sources/notes.md`);
+  it("GET /:space/sources/*.pdf serves non-indexed binaries raw via MIME table passthrough", async () => {
+    // PDFs aren't indexed but the static-file fallback still serves them
+    // with application/pdf so browsers display them natively. Same
+    // principle covers images, video, archives — the MIME table is the
+    // contract for any non-indexed extension.
+    const res = await fetch(`${baseUrl}/${SPACE}/sources/notes.pdf`);
     expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toMatch(/text\/markdown/);
+    expect(res.headers.get("content-type")).toMatch(/application\/pdf/);
     const body = await res.text();
-    expect(body).toContain("Scratch notes");
+    expect(body).toContain("Pretend bytes");
     expect(body).not.toContain("arkeon-chrome");
   });
 

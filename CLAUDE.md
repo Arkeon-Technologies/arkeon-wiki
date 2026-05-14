@@ -60,7 +60,7 @@ Parsing uses a real HTML parser (`node-html-parser`), not regex — apostrophe-i
 
 There is no YAML frontmatter on wikis, no `[[wikilink]]` syntax, no placeholder rows. A link to a target that doesn't exist on disk is a **red link** — a `relationships` row with no matching `entities` row. Resolution is a LEFT JOIN at query time; surfaced via `GET /{space}/redlinks` and the `list_redlinks` agent tool.
 
-Source files (anywhere outside `wiki/`) are indexed as `type='file'` with `{file_type: <ext>}`. Supported extensions: `.txt`, `.json`, `.csv`, `.xml`, `.rst`, `.html` outside `wiki/`. Markdown is intentionally unsupported — HTML is the only authoring format. Structured metadata lives in `<meta name="X" content="Y">` tags on the wiki itself.
+Source files (anywhere outside `wiki/`) are indexed as `type='file'` with `{file_type: <ext>}`. Eligibility is a three-tier check in `src/server/lib/fs-watcher.ts`: (1) `BINARY_EXTENSIONS` denylist short-circuits known-binary formats (`.pdf`, `.docx`, `.png`, fonts, archives, etc.), (2) `TEXT_EXTENSIONS` allowlist short-circuits common text formats (`.txt`, `.html`, `.md`, `.json`, `.csv`, `.yaml`, source code, etc.), (3) anything else is decided by `sniffIsText()` — read the first 8 KB, look for NUL bytes. No NUL → text → indexed. This is the same heuristic `git`/`grep -I`/`file(1)` use; it lets us cover any text file (extensionless `README`/`LICENSE`, unfamiliar `.cfg` variants, etc.) without an ever-growing allowlist. Wikis themselves are still authored in HTML only — the eligibility rules above are for *source* material the agents read. Structured metadata lives in `<meta name="X" content="Y">` tags on the wiki itself.
 
 ## Writing (three roles: `editor`, `proposer`, `writer`)
 

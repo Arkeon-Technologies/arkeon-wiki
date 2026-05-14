@@ -172,7 +172,15 @@ The `instructions:` text will appear under `defaults:` in the `config show` outp
 
 Drop text files anywhere in the directory (any subfolder is fine — `sources/`, `notes/`, top-level, doesn't matter). The watcher picks them up automatically.
 
-**Supported extensions**: `.txt`, `.html` (outside `wiki/`), `.json`, `.csv`, `.xml`, `.rst`. Anything else is **silently ignored** — Markdown, PDFs, DOCX, images, binaries.
+**What gets indexed**: any text file the watcher can read. The decision is three-tier:
+
+1. **Known-binary extensions are rejected outright** — `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.png`, `.jpg`, `.mp3`, `.mp4`, `.zip`, fonts, native binaries, etc. (Full list: `BINARY_EXTENSIONS` in `src/server/lib/fs-watcher.ts`.)
+2. **Known-text extensions are accepted outright** — `.txt`, `.html`, `.md`, `.json`, `.csv`, `.tsv`, `.xml`, `.yaml`, `.toml`, `.log`, `.rst`, `.tex`, and most common source-code extensions. (Full list: `TEXT_EXTENSIONS`.)
+3. **Everything else** — extensionless files (`README`, `LICENSE`), unfamiliar extensions, etc. — is decided by a **content sniff**: the watcher reads the first 8 KB and checks for NUL bytes. No NUL → text → indexed. NUL → binary → ignored. Same rule `git`, `grep -I`, and `file(1)` use.
+
+Net effect: drop any text file into the watch dir and it gets indexed, regardless of extension. Binaries (PDFs, DOCX, images) need conversion to text first — see below. Wikis themselves are still authored in HTML only; everything described here is for *source* material the agents read.
+
+> **Heads-up — source code is indexed too.** `.ts`, `.py`, `.go`, `.rs`, `.java`, `.sh`, `.sql`, CSS, and most other source-code extensions live in `TEXT_EXTENSIONS`. If you point arkeon-wiki at a project root (e.g. `~/projects/my-app`), expect every file outside `node_modules`/`.git`/etc. to land in the index — including the codebase itself. That's intentional (agents can reason over code-as-source), but it means a "personal knowledge base" watch dir and a "checked-out repo" watch dir behave very differently. Use `arkeon-wiki sources scan` to preview before letting the daemon loose.
 
 ### Prefer chapters / sections over whole books
 
@@ -216,10 +224,14 @@ The output partitions every file into supported / unsupported. Unsupported entri
 | Source | Recommended converter |
 |--------|----------------------|
 | PDF | `pdftotext file.pdf file.txt` (poppler-utils) |
-| DOCX | `pandoc file.docx -o file.txt` |
-| Markdown | `cp file.md file.txt`, or convert with `pandoc -o file.html` if you want HTML semantics |
-| HTML web pages | already supported as `.txt` if you save the page text; or use `pandoc` to clean |
-| EPUB | `pandoc file.epub -o file.txt` |
+| DOCX | `pandoc file.docx -o file.md` |
+| PPTX | `pandoc file.pptx -o file.md` |
+| XLSX | export per sheet to `.csv`, or `pandoc -t csv` per sheet |
+| Markdown | already supported — drop `.md` files directly |
+| HTML web pages | save as `.html` outside `wiki/`, or use `pandoc` to clean |
+| EPUB | `pandoc file.epub -o file.md` |
+
+Anything text-shaped that lands in the watch dir gets indexed without conversion — even files with no extension or unfamiliar suffixes. Conversion is only needed for binary formats (the rows above).
 
 Install the converters if you don't have them: `brew install pandoc poppler` on macOS, `apt install pandoc poppler-utils` on Debian/Ubuntu, or equivalents for your package manager.
 
