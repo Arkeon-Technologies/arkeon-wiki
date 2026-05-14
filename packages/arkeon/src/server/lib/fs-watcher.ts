@@ -36,13 +36,21 @@ const IGNORE_DIRS = new Set([".arkeon", ".git", "node_modules", ".claude", "__py
 // random source code, README/LICENSE with no extension) without us having to
 // chase an ever-growing allowlist.
 
+// "BINARY" here is a slight misnomer — the set is "extensions we refuse
+// to index, regardless of content." Most entries are literal binary
+// formats; a few (".svg", ".env", credentials) are text but excluded for
+// reasons noted inline.
 export const BINARY_EXTENSIONS = new Set([
   // Documents
   ".pdf", ".epub", ".mobi",
-  // Office formats (zip-wrapped XML, not directly text)
+  // Office formats (zip-wrapped XML, not directly text). ".key" here is
+  // Apple Keynote; the cryptographic-key sense is covered in the
+  // credentials block below.
   ".docx", ".doc", ".dotx", ".pptx", ".ppt", ".xlsx", ".xls",
   ".odt", ".ods", ".odp", ".pages", ".numbers", ".key",
-  // Images
+  // Images. ".svg" is technically text (XML) but treated as binary: its
+  // bytes are presentation data, not corpus material the agents would
+  // benefit from indexing.
   ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".bmp",
   ".tiff", ".tif", ".heic", ".heif", ".avif", ".raw",
   // Audio / video
@@ -59,6 +67,17 @@ export const BINARY_EXTENSIONS = new Set([
   ".db", ".sqlite", ".sqlite3", ".mdb", ".pyc", ".pyo",
   // Disk images / installers
   ".dmg", ".iso", ".pkg", ".deb", ".rpm", ".msi", ".apk", ".ipa",
+  // Secret-bearing extensions. These are usually text (key=value, PEM,
+  // etc.) but the sniff alone would auto-index them, defeating the
+  // purpose of having a "don't watch dotfiles" rule. Listing them here
+  // makes rejection explicit and content-independent. Literal dotfiles
+  // (`.env`, `.envrc`) are also caught by shouldIgnorePath; this set
+  // covers the `*.env` suffix case (`production.env`, `staging.env`,
+  // etc.) the path-prefix rule misses.
+  ".env", ".envrc", ".secret",
+  ".pem", ".cer", ".crt", ".der", ".p7b", ".p7c", ".p8",
+  ".p12", ".pfx", ".jks", ".keystore", ".truststore",
+  ".asc", ".gpg", ".pgp", ".kdbx",
 ]);
 
 export const TEXT_EXTENSIONS = new Set([
@@ -68,7 +87,9 @@ export const TEXT_EXTENSIONS = new Set([
   ".json", ".jsonl", ".ndjson", ".csv", ".tsv", ".xml",
   // Config
   ".yaml", ".yml", ".toml", ".ini", ".conf", ".cfg", ".properties",
-  ".env", ".envrc", ".editorconfig",
+  // ".env" / ".envrc" are in BINARY_EXTENSIONS (above) — text content but
+  // refused indexing because they're almost always secret-bearing.
+  ".editorconfig",
   // Logs / output
   ".log",
   // Source code (agents can read code-as-source)

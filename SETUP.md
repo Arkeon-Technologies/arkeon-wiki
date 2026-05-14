@@ -180,6 +180,8 @@ Drop text files anywhere in the directory (any subfolder is fine — `sources/`,
 
 Net effect: drop any text file into the watch dir and it gets indexed, regardless of extension. Binaries (PDFs, DOCX, images) need conversion to text first — see below. Wikis themselves are still authored in HTML only; everything described here is for *source* material the agents read.
 
+> **Heads-up — source code is indexed too.** `.ts`, `.py`, `.go`, `.rs`, `.java`, `.sh`, `.sql`, CSS, and most other source-code extensions live in `TEXT_EXTENSIONS`. If you point arkeon-wiki at a project root (e.g. `~/projects/my-app`), expect every file outside `node_modules`/`.git`/etc. to land in the index — including the codebase itself. That's intentional (agents can reason over code-as-source), but it means a "personal knowledge base" watch dir and a "checked-out repo" watch dir behave very differently. Use `arkeon-wiki sources scan` to preview before letting the daemon loose.
+
 ### Prefer chapters / sections over whole books
 
 One source file = one editor tick = one proposer tick. Two practical consequences:
