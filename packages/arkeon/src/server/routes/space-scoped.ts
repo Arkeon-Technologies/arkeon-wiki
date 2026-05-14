@@ -251,6 +251,13 @@ spaceScopedRouter.post("/:space/agents/:role/run", async (c) => {
 
   const startedAt = Date.now();
   try {
+    // Args match `scheduler.fireTick`'s invocation shape: same
+    // AgentInput (`{ space, meta: {} }`), same registry (ALL_TOOLS —
+    // the scheduler exposes a `toolRegistry` injection seam for
+    // tests, but in production both call sites resolve to ALL_TOOLS),
+    // same empty `RunAgentOptions`. Keeping them aligned by hand for
+    // now; if a third call site lands, fold both into a shared
+    // `invokeRole(space, role)` helper.
     const result = await withSpaceMutex(space, role, () =>
       runAgent(built, { space: spaceRow, meta: {} }, ALL_TOOLS, {}),
     );

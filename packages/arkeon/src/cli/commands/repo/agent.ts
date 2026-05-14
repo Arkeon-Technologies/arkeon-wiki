@@ -88,13 +88,26 @@ async function runAgentCmd(
   );
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    const errShape = (body as { error?: { message?: string; code?: string } }).error;
+    const errShape = (body as {
+      error?: {
+        message?: string;
+        code?: string;
+        details?: Record<string, unknown>;
+      };
+    }).error;
     const message = errShape?.message ?? res.statusText;
+    // Attach structured fields the daemon returned (code, status,
+    // details) onto the Error — `output.error` reads them back to
+    // emit a JSON payload that scripts can branch on. Without this,
+    // a 409 `space_busy` and a 400 `validation_error` would collapse
+    // to the same human string.
     const err = new Error(`agent run failed: ${res.status} ${message}`) as Error & {
       code?: string;
       statusCode?: number;
+      details?: Record<string, unknown>;
     };
     if (errShape?.code) err.code = errShape.code;
+    if (errShape?.details) err.details = errShape.details;
     err.statusCode = res.status;
     throw err;
   }

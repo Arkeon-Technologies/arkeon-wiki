@@ -47,7 +47,6 @@ import { loadBundledTemplates } from "./templates.js";
 import { runAgent as defaultRunAgent } from "./runtime.js";
 import {
   SpaceBusyError,
-  inFlightRole,
   withSpaceMutex,
 } from "./space-mutex.js";
 import type { Space } from "../lib/sync.js";
@@ -186,15 +185,6 @@ export async function startScheduler(
   }
 
   async function fireTick(role: string, cron: string): Promise<void> {
-    const holder = inFlightRole(opts.space.name);
-    if (holder) {
-      console.log(
-        `[agent/scheduler] role=${role} space="${opts.space.name}" skip (busy with ${holder})`,
-      );
-      scheduleNext(role, cron);
-      return;
-    }
-
     const built = (() => {
       try {
         return buildAgentRole(role, loadAgentConfig({ spaceDir: opts.space.watch_dir }));
@@ -210,6 +200,15 @@ export async function startScheduler(
       return;
     }
 
+    // `withSpaceMutex` is the single acquisition point. The route
+    // handler (`POST /:space/agents/:role/run`) uses the same mutex,
+    // so a manual run holding it surfaces here as SpaceBusyError —
+    // we treat it the same as a same-process cron contention: log
+    // skip and reschedule. Two cron timers firing in the same JS
+    // tick can't actually race in Node's single-threaded model
+    // because withSpaceMutex sets inFlight synchronously before any
+    // await, but treating busy as a normal observable outcome means
+    // the scheduler doesn't have to reason about that proof.
     const runPromise = withSpaceMutex(opts.space.name, role, async () => {
       try {
         await runAgent(
@@ -226,10 +225,6 @@ export async function startScheduler(
         if (opts.rethrow) throw err;
       }
     }).catch((err) => {
-      // The pre-flight inFlightRole check should rule this out, but a
-      // race between two roles firing in the same JS tick is in theory
-      // possible if either's setTimeout callback contains an early
-      // await. Treat it the same as the explicit busy branch.
       if (err instanceof SpaceBusyError) {
         console.log(
           `[agent/scheduler] role=${role} space="${opts.space.name}" skip (busy with ${err.inFlightRole})`,
