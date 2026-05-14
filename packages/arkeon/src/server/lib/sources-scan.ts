@@ -4,10 +4,12 @@
 /**
  * Source inventory for a space's watch directory.
  *
- * Walks the directory once, partitions every regular file by
- * extension against the indexable set (INDEX_EXTENSIONS), and reports
- * counts plus a handful of example paths per unsupported extension so
- * the operator (or an LLM agent) can decide what to convert.
+ * Walks the directory once, partitions every regular file via
+ * `isEligibleFile()` (the same three-tier check the watcher applies:
+ * binary-ext denylist → text-ext allowlist → content sniff), and
+ * reports counts plus a handful of example paths per unsupported
+ * extension so the operator (or an LLM agent) can decide what to
+ * convert.
  *
  * The walk reuses the ignore rules from fs-watcher (shouldIgnorePath)
  * so what the scan reports lines up exactly with what the watcher
@@ -17,7 +19,7 @@
 import { readdirSync } from "node:fs";
 import { extname, join } from "node:path";
 
-import { INDEX_EXTENSIONS, shouldIgnorePath } from "./fs-watcher.js";
+import { isEligibleFile, shouldIgnorePath } from "./fs-watcher.js";
 
 /** Per-extension counts, sorted descending by count. */
 export interface ExtensionBucket {
@@ -66,7 +68,8 @@ export function scanSources(watchDir: string): ScanResult {
     // with no suffix, and silently lumping them with `.xyz` would hide
     // them from the conversion plan.
     const bucketKey = ext === "" ? "(none)" : ext;
-    if (ext !== "" && INDEX_EXTENSIONS.has(ext)) {
+    const absPath = join(watchDir, relativePath);
+    if (isEligibleFile(relativePath, absPath)) {
       supportedByExt[bucketKey] = (supportedByExt[bucketKey] ?? 0) + 1;
     } else {
       unsupportedByExt[bucketKey] = (unsupportedByExt[bucketKey] ?? 0) + 1;

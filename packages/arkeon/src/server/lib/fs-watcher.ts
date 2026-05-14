@@ -13,7 +13,7 @@
  * cron-paced — they query entities directly on each tick.
  */
 
-import { watch, type FSWatcher, existsSync, readdirSync } from "node:fs";
+import { watch, type FSWatcher, existsSync, readdirSync, openSync, readSync, closeSync } from "node:fs";
 import { join, extname } from "node:path";
 
 import { startScheduler } from "../agents/scheduler.js";
@@ -24,11 +24,99 @@ type SchedulerHandle = Awaited<ReturnType<typeof startScheduler>>;
 // Directories to skip during walk + watch.
 const IGNORE_DIRS = new Set([".arkeon", ".git", "node_modules", ".claude", "__pycache__", ".venv"]);
 
-// File extensions we index. Anything else is invisible to the system.
-// Exported so callers like the sources-scan endpoint can partition a
-// directory listing against the same set the watcher applies — keeps
-// "what's indexable" defined in exactly one place.
-export const INDEX_EXTENSIONS = new Set([".txt", ".json", ".csv", ".xml", ".html", ".rst"]);
+// Eligibility decision is three-tier:
+//
+//   1. BINARY_EXTENSIONS — known-binary, never indexed (fast reject, no I/O).
+//   2. TEXT_EXTENSIONS — known-text, indexed without inspection (fast accept).
+//   3. Everything else — open the file, read the first SNIFF_BYTES, treat as
+//      text iff there's no NUL byte. Same rule `git`, `grep -I`, and `file(1)`
+//      use to decide "text vs binary."
+//
+// This lets the agents reach files with unfamiliar extensions (custom configs,
+// random source code, README/LICENSE with no extension) without us having to
+// chase an ever-growing allowlist.
+
+export const BINARY_EXTENSIONS = new Set([
+  // Documents
+  ".pdf", ".epub", ".mobi",
+  // Office formats (zip-wrapped XML, not directly text)
+  ".docx", ".doc", ".dotx", ".pptx", ".ppt", ".xlsx", ".xls",
+  ".odt", ".ods", ".odp", ".pages", ".numbers", ".key",
+  // Images
+  ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".bmp",
+  ".tiff", ".tif", ".heic", ".heif", ".avif", ".raw",
+  // Audio / video
+  ".mp3", ".mp4", ".webm", ".mov", ".wav", ".flac", ".ogg", ".oga",
+  ".m4a", ".m4v", ".avi", ".wmv", ".mkv", ".aac", ".opus",
+  // Archives
+  ".zip", ".gz", ".tar", ".tgz", ".bz2", ".xz", ".7z", ".rar", ".lz", ".zst",
+  // Binaries / native code
+  ".exe", ".dll", ".so", ".dylib", ".a", ".o", ".bin", ".class", ".jar", ".war",
+  ".wasm", ".obj",
+  // Fonts
+  ".ttf", ".otf", ".woff", ".woff2", ".eot",
+  // Databases / compiled
+  ".db", ".sqlite", ".sqlite3", ".mdb", ".pyc", ".pyo",
+  // Disk images / installers
+  ".dmg", ".iso", ".pkg", ".deb", ".rpm", ".msi", ".apk", ".ipa",
+]);
+
+export const TEXT_EXTENSIONS = new Set([
+  // Authoring / docs
+  ".txt", ".html", ".htm", ".md", ".markdown", ".mdx", ".rst", ".tex", ".adoc",
+  // Structured data
+  ".json", ".jsonl", ".ndjson", ".csv", ".tsv", ".xml",
+  // Config
+  ".yaml", ".yml", ".toml", ".ini", ".conf", ".cfg", ".properties",
+  ".env", ".envrc", ".editorconfig",
+  // Logs / output
+  ".log",
+  // Source code (agents can read code-as-source)
+  ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+  ".py", ".rb", ".go", ".rs", ".java", ".kt", ".swift",
+  ".c", ".cc", ".cpp", ".h", ".hpp", ".m", ".mm",
+  ".sh", ".bash", ".zsh", ".fish", ".ps1",
+  ".sql", ".graphql", ".gql",
+  ".css", ".scss", ".sass", ".less",
+  ".lua", ".php", ".pl", ".r", ".jl", ".scala", ".clj", ".cljs", ".ex", ".exs", ".erl",
+]);
+
+const SNIFF_BYTES = 8192;
+
+/**
+ * Read the first SNIFF_BYTES of `absPath` and decide text-vs-binary
+ * by looking for NUL bytes. Same heuristic as `git`, `grep -I`,
+ * and `file(1)`. Returns false on any I/O error (the file is then
+ * not eligible — same outcome as truly-binary).
+ *
+ * Empty files have zero NULs and are reported as text. That's the
+ * right default: an empty `README` is text we'd want indexed once
+ * the user fills it in, and `syncFile()` handles empty bodies fine.
+ */
+export function sniffIsText(absPath: string): boolean {
+  let fd: number;
+  try {
+    fd = openSync(absPath, "r");
+  } catch {
+    return false;
+  }
+  try {
+    const buf = Buffer.alloc(SNIFF_BYTES);
+    const bytesRead = readSync(fd, buf, 0, SNIFF_BYTES, 0);
+    for (let i = 0; i < bytesRead; i++) {
+      if (buf[i] === 0) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  } finally {
+    try {
+      closeSync(fd);
+    } catch {
+      // ignore
+    }
+  }
+}
 
 const watchers = new Map<string, FSWatcher>();
 const schedulers = new Map<string, SchedulerHandle>();
@@ -54,10 +142,28 @@ export function shouldIgnorePath(relativePath: string): boolean {
   return false;
 }
 
-function isEligibleFile(relativePath: string): boolean {
+/**
+ * Path-only eligibility (no I/O). Use to gate watcher events cheaply:
+ * rejects hidden dirs and known-binary extensions, lets anything else
+ * through. Pair with `isEligibleFile()` (which adds the content sniff)
+ * before actually indexing.
+ */
+export function isPathPotentiallyEligible(relativePath: string): boolean {
   if (shouldIgnorePath(relativePath)) return false;
   const ext = extname(relativePath).toLowerCase();
-  return INDEX_EXTENSIONS.has(ext);
+  if (ext && BINARY_EXTENSIONS.has(ext)) return false;
+  return true;
+}
+
+/**
+ * Full eligibility — applies the three-tier check. May open the file
+ * for sniffing if the extension is unknown.
+ */
+export function isEligibleFile(relativePath: string, absPath: string): boolean {
+  if (!isPathPotentiallyEligible(relativePath)) return false;
+  const ext = extname(relativePath).toLowerCase();
+  if (ext && TEXT_EXTENSIONS.has(ext)) return true;
+  return sniffIsText(absPath);
 }
 
 /**
@@ -83,7 +189,8 @@ export function walkEligibleFiles(root: string, prefix = ""): string[] {
       if (IGNORE_DIRS.has(entry.name)) continue;
       results.push(...walkEligibleFiles(root, relativePath));
     } else if (entry.isFile()) {
-      if (isEligibleFile(relativePath)) {
+      const absPath = join(root, relativePath);
+      if (isEligibleFile(relativePath, absPath)) {
         results.push(relativePath);
       }
     }
@@ -132,7 +239,11 @@ export async function startWatching(space: Space): Promise<void> {
       if (!filename) return;
 
       const relativePath = filename.replace(/\\/g, "/");
-      if (!isEligibleFile(relativePath)) return;
+      // Cheap pre-filter: drops hidden / ignored paths and known-binary
+      // extensions without I/O. The content sniff for unknown extensions
+      // happens inside handleFileEvent before syncFile, so deletes (where
+      // sniffing isn't possible) still flow through.
+      if (!isPathPotentiallyEligible(relativePath)) return;
 
       const absPath = join(space.watch_dir, relativePath);
       const existing = debounceTimers.get(absPath);
@@ -162,6 +273,10 @@ async function handleFileEvent(space: Space, relativePath: string): Promise<void
   const absPath = join(space.watch_dir, relativePath);
 
   if (existsSync(absPath)) {
+    // Full eligibility (may sniff content). A file that passes the
+    // path-only pre-filter but turns out to be binary on inspection
+    // gets dropped here — not indexed.
+    if (!isEligibleFile(relativePath, absPath)) return;
     try {
       const result = await syncFile(space, relativePath);
       if (result.action !== "unchanged") {
