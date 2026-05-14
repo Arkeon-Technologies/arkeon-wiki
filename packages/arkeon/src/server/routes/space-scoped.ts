@@ -9,6 +9,7 @@
  *   GET    /:space/redlinks                  red-link queue
  *   GET    /:space/recent                    entity_edits feed
  *   GET    /:space/search?q=...              keyword search
+ *   GET    /:space/sources/scan              file inventory by extension
  *   POST   /:space/chat                      Phase 3 stub (501)
  *   GET    /:space/chat/:conversation_id     Phase 3 stub (501)
  *   DELETE /:space/chat/:conversation_id     Phase 3 stub (501)
@@ -35,6 +36,7 @@ import {
   searchKeyword,
   type KeywordSearchResult,
 } from "../lib/search.js";
+import { scanSources } from "../lib/sources-scan.js";
 
 export const spaceScopedRouter = new Hono<AppBindings>();
 
@@ -121,6 +123,20 @@ spaceScopedRouter.get("/:space/redlinks", async (c) => {
     offset: parseNumQuery(c.req.query("offset"), "offset"),
   });
   return c.json(result);
+});
+
+// ── /:space/sources/scan ──────────────────────────────────────────
+// File inventory by extension. Partitions every file in the watch
+// directory into supported (the watcher indexes it) vs unsupported
+// (silently ignored) — the operator's signal to convert binary
+// sources to text before letting the agents loose. Cheap synchronous
+// walk; not paginated.
+
+spaceScopedRouter.get("/:space/sources/scan", async (c) => {
+  const space = c.req.param("space");
+  const watchDir = await spaceWatchDir(space);
+  const result = scanSources(watchDir);
+  return c.json({ space, watch_dir: watchDir, ...result });
 });
 
 // ── /:space/recent ────────────────────────────────────────────────
