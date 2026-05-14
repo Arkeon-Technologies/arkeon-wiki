@@ -135,8 +135,13 @@ async function runInit(
  * migrates the legacy `.arkeon/` line (which would hide committed
  * config) to the narrower `.arkeon/state.json` when the latter is
  * one of the requested entries.
+ *
+ * Exported for direct unit testing — the legacy-migration and
+ * empty/missing-file branches are non-trivial enough that exercising
+ * them only through `runInit` (which requires a live daemon) is too
+ * thin a coverage net.
  */
-function ensureGitignoreEntries(cwd: string, entries: string[]): boolean {
+export function ensureGitignoreEntries(cwd: string, entries: string[]): boolean {
   const gitignorePath = join(cwd, ".gitignore");
   const existed = existsSync(gitignorePath);
   const original = existed ? readFileSync(gitignorePath, "utf-8") : "";

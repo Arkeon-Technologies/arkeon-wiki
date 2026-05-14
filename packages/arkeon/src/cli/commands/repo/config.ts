@@ -31,9 +31,6 @@ import { output } from "../../lib/output.js";
 
 export const AGENTS_YAML_RELATIVE_PATH = join(".arkeon", "agents.yaml");
 
-// Kept as a const for back-compat with anything still importing it.
-const REPO_RELATIVE_PATH = AGENTS_YAML_RELATIVE_PATH;
-
 export const DEFAULT_AGENTS_TEMPLATE = "wiki";
 
 const WIKI_TEMPLATE = `# .arkeon/agents.yaml
@@ -245,7 +242,7 @@ async function runInit(force: boolean, template: string): Promise<void> {
 
 async function runValidate(): Promise<void> {
   const cwd = process.cwd();
-  const target = resolve(cwd, REPO_RELATIVE_PATH);
+  const target = resolve(cwd, AGENTS_YAML_RELATIVE_PATH);
 
   if (!existsSync(target)) {
     output.result({
