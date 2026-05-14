@@ -21,7 +21,6 @@ describe("resolveApiUrl", () => {
   it("returns ARKE_API_URL when set, regardless of running daemons", () => {
     const url = resolveApiUrl({
       env: { ARKE_API_URL: "http://elsewhere:9999" },
-      findInstance: () => mkInst("default", 8000),
       listInstances: () => [mkInst("default", 8000)],
     });
     expect(url).toBe("http://elsewhere:9999");
@@ -30,7 +29,6 @@ describe("resolveApiUrl", () => {
   it("returns the default instance's api_url when one is running", () => {
     const url = resolveApiUrl({
       env: {},
-      findInstance: (name) => (name === "default" ? mkInst("default", 8000) : null),
       listInstances: () => [mkInst("default", 8000), mkInst("dev", 8123)],
     });
     expect(url).toBe("http://localhost:8000");
@@ -39,7 +37,6 @@ describe("resolveApiUrl", () => {
   it("falls back to a sole named instance when no default is running", () => {
     const url = resolveApiUrl({
       env: {},
-      findInstance: () => null,
       listInstances: () => [mkInst("dev", 8123)],
     });
     expect(url).toBe("http://localhost:8123");
@@ -49,7 +46,6 @@ describe("resolveApiUrl", () => {
     expect(() =>
       resolveApiUrl({
         env: {},
-        findInstance: () => null,
         listInstances: () => [],
       }),
     ).toThrow(/No arkeon-wiki daemon is running/);
@@ -60,7 +56,6 @@ describe("resolveApiUrl", () => {
     try {
       resolveApiUrl({
         env: {},
-        findInstance: () => null,
         listInstances: () => [mkInst("dev-a", 8101), mkInst("dev-b", 8102)],
       });
     } catch (e) {
@@ -77,9 +72,26 @@ describe("resolveApiUrl", () => {
   it("env override beats default and named (priority 1 highest)", () => {
     const url = resolveApiUrl({
       env: { ARKE_API_URL: "http://override:9000" },
-      findInstance: () => mkInst("default", 8000),
       listInstances: () => [mkInst("default", 8000), mkInst("dev", 8123)],
     });
     expect(url).toBe("http://override:9000");
+  });
+
+  // Encodes the invariant that fixed the back-door the original PR
+  // review caught: `listInstances` is responsible for pruning stale
+  // (dead-pid) registry entries, so a crashed daemon's leftover
+  // `default.json` is already gone by the time we look. From
+  // resolveApiUrl's perspective this is indistinguishable from
+  // "no daemon was ever running" — which is exactly the contract
+  // we want.
+  it("treats a pruned-stale registry as 'no daemon running'", () => {
+    expect(() =>
+      resolveApiUrl({
+        env: {},
+        // listInstances returns [] because the stale default.json
+        // had a dead pid and was pruned at lookup time.
+        listInstances: () => [],
+      }),
+    ).toThrow(/No arkeon-wiki daemon is running/);
   });
 });

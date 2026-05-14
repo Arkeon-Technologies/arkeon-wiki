@@ -27,7 +27,6 @@ import { basename, join, resolve } from "node:path";
 
 import {
   DEFAULT_INSTANCE_NAME,
-  findInstance,
   listInstances,
   type Instance,
 } from "../../lib/instances.js";
@@ -194,30 +193,32 @@ function buildHint(args: {
  *      message that names the running instances and tells the user
  *      to pass `--api-url`.
  *
+ * Both lookups go through `listInstances()`, which prunes stale
+ * registry entries (dead PIDs) before returning. A crashed daemon's
+ * leftover `default.json` therefore can't fool us into returning a
+ * dead api_url and producing the exact `fetch failed` UX this helper
+ * exists to eliminate.
+ *
  * The `deps` argument exists for unit tests — production callers omit
- * it and the registry lookups go through the real filesystem.
+ * it and the registry lookup goes through the real filesystem.
  */
 export interface ResolveApiUrlDeps {
   env?: NodeJS.ProcessEnv;
-  findInstance?: (name: string) => Instance | null;
   listInstances?: () => Instance[];
 }
 
 export function resolveApiUrl(deps: ResolveApiUrlDeps = {}): string {
   const env = deps.env ?? process.env;
-  const findInst = deps.findInstance ?? findInstance;
   const listInst = deps.listInstances ?? listInstances;
 
   // (1) Explicit override.
   const fromEnv = env.ARKE_API_URL;
   if (fromEnv) return fromEnv;
 
-  // (2) Default unnamed daemon.
-  const defaultInst = findInst(DEFAULT_INSTANCE_NAME);
-  if (defaultInst) return defaultInst.api_url;
-
-  // (3) Unique named instance.
+  // (2)+(3) live-pid-filtered registry.
   const running = listInst();
+  const defaultInst = running.find((i) => i.name === DEFAULT_INSTANCE_NAME);
+  if (defaultInst) return defaultInst.api_url;
   if (running.length === 1) return running[0].api_url;
 
   // (4) Error path — describe what we found so the user can choose.
