@@ -221,17 +221,19 @@ The port for a named instance is `8000 + sha256(name) mod 999 + 1`.
 `arkeon-wiki up` spawns a detached child that survives shell exit but not reboot. `arkeon-wiki install` registers the daemon with the platform's service supervisor so it starts at login and restarts on crash.
 
 - **macOS:** writes `~/Library/LaunchAgents/tech.arkeon.wiki[.<name>].plist` and bootstraps it into the user's launchd domain (`gui/$UID`). No sudo. `KeepAlive: { SuccessfulExit: false, Crashed: true }` means a clean `arkeon-wiki down` stays down, but a crashed daemon comes back within `ThrottleInterval` (10s).
-- **Linux:** systemd user unit (`arkeon-wiki[@<name>].service`), `loginctl enable-linger $USER` so it survives logout on headless servers. *Planned for PR2; tracked in [#146](https://github.com/Arkeon-Technologies/arkeon-wiki/issues/146).*
+- **Linux:** writes `~/.config/systemd/user/arkeon-wiki[-<name>].service` and enables it via `systemctl --user enable --now`. Also runs `loginctl enable-linger $USER` (best-effort — polkit may refuse for non-root callers, but the service still works for users with a graphical session). No sudo. `Restart=on-failure` + `RestartSec=10` parallel the launchd contract: clean down stays down, crash → restart after 10s. On non-systemd Linux (Alpine, WSL1, OpenRC distros) the install refuses with actionable manual instructions instead of writing a unit that can't load.
 
 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` are not stored in the plist (plists are world-readable on multi-user Macs). Install captures them into `~/.arkeon-wiki/.env`, where the existing env-loader (`server/agents/env-loader.ts:42`) reads them at startup. Idempotent: never overwrites an existing value.
 
 When a service is installed, `up` / `down` / `status` automatically coordinate with the supervisor instead of fighting it:
 
-- `up` detects the installed plist and delegates to `launchctl kickstart -k` instead of spawning a detached child (which would create an orphan launchd doesn't track). Reports `managed_by: "service"` in the result.
-- `down` uses `SIGTERM`, the daemon exits cleanly (exit code 0), and launchd respects `SuccessfulExit: false` — does not auto-restart. The daemon stays down until next `up` or login.
+- `up` detects an installed service and delegates to the supervisor (`launchctl kickstart -k` on macOS, `systemctl --user start` on Linux) instead of spawning a detached child (which would create an orphan the supervisor doesn't track). Reports `managed_by: "service"` in the result.
+- `down` uses `SIGTERM`, the daemon exits cleanly (exit code 0), and the supervisor respects `SuccessfulExit: false` (launchd) / `Restart=on-failure` (systemd) — does not auto-restart. The daemon stays down until next `up` or login.
 - `status` reports a `service` field (`installed`, `running`, `pid`, `unit_path`) so consumers see service state independently of pidfile state.
 
-Manual e2e: `packages/arkeon/scripts/test-service.sh` runs the full install → kill -9 → down → up → uninstall lifecycle with `--name service-smoke-test`, asserting state at each step. ~30s. PR authors run this on their Mac before merging. (Linux variant arrives with PR2.)
+Manual e2e: `packages/arkeon/scripts/test-service.sh` runs the full install → kill -9 → down → up → uninstall lifecycle with `--name service-smoke-test`, asserting state at each step. Platform-aware — works on both macOS and Linux. ~30s.
+
+For Mac developers who want to validate the Linux path before shipping (no Linux box handy), `packages/arkeon/test/systemd-integration/run.sh` spins up real systemd inside a Docker container (jrei/systemd-debian, qemu-emulated linux/amd64 on Apple Silicon) and runs the same 8-step lifecycle inside. ~60s. Requires Docker daemon running.
 
 ## Testing
 
@@ -253,6 +255,7 @@ E2e tests start a real stack in-process — no running daemon needed.
 - `~/.arkeon-wiki/instances/<name>.json` — registry of running instances
 - `~/.arkeon-wiki/.env` — user-global env file. `install` writes API keys here; the agent runtime reads them at startup. Never overwritten — values rotate by editing the file.
 - `~/Library/LaunchAgents/tech.arkeon.wiki[.<name>].plist` — service plist when `install` has been run on macOS. Owned by the user; survives reboot.
+- `~/.config/systemd/user/arkeon-wiki[-<name>].service` — service unit when `install` has been run on Linux. Symlinked from `default.target.wants/` after `enable`; survives reboot with `loginctl enable-linger`.
 - `.arkeon/state.json` — per-directory space binding (`{api_url, space_name, created_at}`). The old `space_id` field is gone — names are PKs now.
 
 Override the state dir with `ARKEON_WIKI_HOME` env var or `--data-dir`.
