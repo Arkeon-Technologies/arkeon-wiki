@@ -86,7 +86,7 @@ roles:
     model: gpt-5-mini
 ```
 
-`defaults.model` does apply to any *custom* role you define (that has no bundled template). Operator-defaults vs. bundled-template precedence is something the project may fix; track [#TBD](https://github.com/Arkeon-Technologies/arkeon-wiki/issues) if you care.
+`defaults.model` does apply to any *custom* role you define (that has no bundled template). Operator-defaults vs. bundled-template precedence is tracked in [#148](https://github.com/Arkeon-Technologies/arkeon-wiki/issues/148).
 
 Concrete worked example — a wiki built on Augustine and G. K. Chesterton, attacking specific modern phenomena (transhumanism, AI companionship, productivity culture, etc.) through their critique of pure reason. The biggest lever is **insisting articles name a modern target by name** and refusing generic concept-exposition:
 
@@ -221,6 +221,8 @@ The output partitions every file into supported / unsupported. Unsupported entri
 | HTML web pages | already supported as `.txt` if you save the page text; or use `pandoc` to clean |
 | EPUB | `pandoc file.epub -o file.txt` |
 
+Install the converters if you don't have them: `brew install pandoc poppler` on macOS, `apt install pandoc poppler-utils` on Debian/Ubuntu, or equivalents for your package manager.
+
 A re-run of `sources scan` after conversion confirms zero unsupported files.
 
 ## 7. First-cycle smoke test
@@ -338,7 +340,7 @@ arkeon-wiki down                    # stop the daemon
 
 **The proposer created an empty plan wiki (no red links inside).** That's correct, not broken. The proposer refuses to emit red links that duplicate themes already covered by existing articles or queued red links. On the next editor tick, the same source will be integrated as citations into existing articles instead. Empty plans tend to appear on the 2nd, 3rd, etc. source of a thematically-cohesive corpus.
 
-**Multiple daemons running confused things.** `arkeon-wiki ls` lists them. The default-port daemon (started by plain `up`) takes precedence; if you also have named instances (`up --name foo`), pass `--api-url http://localhost:<port>` to target a specific one.
+**Multiple daemons running confused things.** `arkeon-wiki ls` lists them. To target a specific one, pass `--api-url http://localhost:<port>` (the port for a named daemon is printed by `arkeon-wiki up --name <name>` and visible in `ls`). If `init` is hitting the wrong daemon — see [#144](https://github.com/Arkeon-Technologies/arkeon-wiki/pull/144) for auto-discovery, after which plain `arkeon-wiki up` (no `--name`) is preferred and `init` will find it automatically.
 
 ## What's next
 
