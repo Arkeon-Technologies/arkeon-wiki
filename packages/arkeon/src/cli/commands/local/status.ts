@@ -11,7 +11,9 @@ import {
   readPidfile,
   removePidfile,
 } from "../../lib/local-runtime.js";
+import { DEFAULT_INSTANCE_NAME } from "../../lib/instances.js";
 import { output } from "../../lib/output.js";
+import { findInstalledService } from "../../lib/service/index.js";
 
 interface StatusOptions {
   name?: string;
@@ -39,13 +41,29 @@ async function runStatus(opts: StatusOptions): Promise<void> {
   const port = Number(opts.port ?? named?.port ?? DEFAULT_API_PORT);
   const apiUrl = `http://localhost:${port}`;
   const pid = readPidfile();
+  const instanceName = opts.name ?? DEFAULT_INSTANCE_NAME;
+
+  // Look up service status independently — the daemon can be running
+  // (pidfile alive) while no service is installed, or vice versa.
+  const service = await findInstalledService(instanceName);
+  const serviceField = service
+    ? {
+        installed: true,
+        running: service.status.running,
+        pid: service.status.pid,
+        unit_path: service.status.unitPath,
+      }
+    : { installed: false };
 
   if (!pid) {
     output.result({
       operation: "status",
       state: "not_running",
       state_dir: arkeonDir(),
-      hint: "Run `arkeon-wiki start` to start the stack.",
+      service: serviceField,
+      hint: service
+        ? `Service is installed but no pidfile. Run \`arkeon-wiki up${opts.name ? ` --name ${opts.name}` : ""}\` to start via the supervisor.`
+        : "Run `arkeon-wiki up` to start the stack, or `arkeon-wiki install` for a persistent service.",
     });
     process.exit(2);
   }
@@ -58,6 +76,7 @@ async function runStatus(opts: StatusOptions): Promise<void> {
       reason: "stale_pidfile",
       stale_pid: pid,
       state_dir: arkeonDir(),
+      service: serviceField,
     });
     process.exit(2);
   }
@@ -72,6 +91,7 @@ async function runStatus(opts: StatusOptions): Promise<void> {
       api_url: apiUrl,
       health: false,
       state_dir: arkeonDir(),
+      service: serviceField,
     });
     process.exit(1);
   }
@@ -83,6 +103,7 @@ async function runStatus(opts: StatusOptions): Promise<void> {
     api_url: apiUrl,
     health: true,
     state_dir: arkeonDir(),
+    service: serviceField,
   });
   process.exit(0);
 }

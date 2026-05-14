@@ -29,6 +29,7 @@ import {
 } from "../../lib/local-runtime.js";
 import { DEFAULT_INSTANCE_NAME, findInstance, findInstanceByPort } from "../../lib/instances.js";
 import { output } from "../../lib/output.js";
+import { findInstalledService } from "../../lib/service/index.js";
 
 interface UpOptions {
   name?: string;
@@ -60,6 +61,28 @@ async function runUp(options: UpOptions): Promise<void> {
   const named = options.name ? applyName(options.name) : null;
   const apiPort = Number(options.port ?? named?.port ?? DEFAULT_API_PORT);
   const timeoutMs = Number(options.timeout ?? "60") * 1000;
+  const instanceName = options.name ?? DEFAULT_INSTANCE_NAME;
+
+  // If a service is installed for this instance, delegate to the
+  // supervisor instead of spawning a detached child. Spawning would
+  // create an orphan the supervisor doesn't track — pid in pidfile,
+  // launchctl reporting state=not running, and no auto-restart.
+  const service = await findInstalledService(instanceName);
+  if (service) {
+    if (options.port) {
+      output.progress(
+        `[arkeon-wiki] --port is ignored when the service is installed — the supervisor uses the port baked into the plist at install time.`,
+      );
+    }
+    await runServiceManagedUp({
+      service,
+      instanceName,
+      apiPort,
+      timeoutMs,
+      options,
+    });
+    return;
+  }
 
   // Refuse if a live daemon already owns the pidfile for this home.
   const existingPid = readPidfile();
@@ -155,17 +178,102 @@ async function runUp(options: UpOptions): Promise<void> {
 
   // The spawn() child.pid may be a wrapper (e.g. npx in dev mode); the
   // daemon registers its own pid once /health passes. Prefer that.
-  const registered = findInstance(options.name ?? DEFAULT_INSTANCE_NAME);
+  const registered = findInstance(instanceName);
 
   output.result({
     operation: "up",
-    name: options.name ?? DEFAULT_INSTANCE_NAME,
+    name: instanceName,
     pid: registered?.pid ?? child.pid,
     api_url: `http://localhost:${apiPort}`,
     health_url: `http://localhost:${apiPort}/health`,
     state_dir: arkeonDir(),
     log: logPath,
+    managed_by: "spawn",
   });
+
+  // One-line nudge after the first successful detached spawn. Goes to
+  // stderr so it doesn't pollute the JSON result on stdout — scripts
+  // parsing the result aren't disturbed.
+  output.progress(
+    `[arkeon-wiki] Tip: run \`arkeon-wiki install${options.name ? ` --name ${options.name}` : ""}\` to start automatically at login + survive crashes.`,
+  );
+}
+
+/**
+ * Bring up the daemon via the platform's service supervisor.
+ *
+ * Idempotent: if the supervisor already reports the service running,
+ * we just confirm /health and return. Otherwise we delegate to
+ * `manager.start()` (which does `launchctl kickstart -k`), then poll
+ * /health to confirm the API is actually reachable.
+ *
+ * Polling here is plain /health — no log tail, no orphan-cleanup. The
+ * supervisor owns the process; if it crashes during boot the
+ * supervisor handles the restart, not us.
+ */
+async function runServiceManagedUp(params: {
+  service: NonNullable<Awaited<ReturnType<typeof findInstalledService>>>;
+  instanceName: string;
+  apiPort: number;
+  timeoutMs: number;
+  options: UpOptions;
+}): Promise<void> {
+  const { service, instanceName, apiPort, timeoutMs, options } = params;
+  const healthUrl = `http://localhost:${apiPort}/health`;
+
+  if (service.status.running) {
+    const ready = await pollHealth(healthUrl, 5000);
+    output.result({
+      operation: "up",
+      name: instanceName,
+      pid: service.status.pid,
+      api_url: `http://localhost:${apiPort}`,
+      health_url: healthUrl,
+      state_dir: arkeonDir(),
+      managed_by: "service",
+      state: ready ? "running" : "running_unhealthy",
+      unit_path: service.status.unitPath,
+    });
+    return;
+  }
+
+  output.progress(
+    `[arkeon-wiki] Service is installed; starting via supervisor...`,
+  );
+
+  const startResult = await service.manager.start({ name: instanceName });
+
+  const ready = await pollHealth(healthUrl, timeoutMs);
+  if (!ready) {
+    throw new Error(
+      `Service started via supervisor (pid ${startResult.pid ?? "?"}) but /health did not come up within ${timeoutMs / 1000}s. ` +
+        `See logs: arkeon-wiki logs${options.name ? ` --name ${options.name}` : ""}`,
+    );
+  }
+
+  output.result({
+    operation: "up",
+    name: instanceName,
+    pid: startResult.pid,
+    api_url: `http://localhost:${apiPort}`,
+    health_url: healthUrl,
+    state_dir: arkeonDir(),
+    managed_by: "service",
+    state: "running",
+    unit_path: startResult.unitPath,
+  });
+}
+
+async function pollHealth(url: string, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) return true;
+    } catch { /* still coming up */ }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  return false;
 }
 
 /**

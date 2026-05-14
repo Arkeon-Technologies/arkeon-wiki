@@ -4,11 +4,13 @@
 import { Command } from "commander";
 
 import { registerDownCommand } from "./down.js";
+import { registerInstallCommand } from "./install.js";
 import { registerLogsCommand } from "./logs.js";
 import { registerLsCommand } from "./ls.js";
 import { registerStartCommand } from "./start.js";
 import { registerStatusCommand } from "./status.js";
 import { registerStopCommand } from "./stop.js";
+import { registerUninstallCommand } from "./uninstall.js";
 import { registerUpCommand } from "./up.js";
 
 export function registerLocalCommands(program: Command): void {
@@ -19,4 +21,6 @@ export function registerLocalCommands(program: Command): void {
   registerStatusCommand(program);
   registerLsCommand(program);
   registerLogsCommand(program);
+  registerInstallCommand(program);
+  registerUninstallCommand(program);
 }

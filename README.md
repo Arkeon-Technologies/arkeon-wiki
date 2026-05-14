@@ -15,6 +15,8 @@ arkeon-wiki up
 
 This starts the daemon as a detached background process — it survives your terminal closing. Stop it with `arkeon-wiki down`. State (SQLite database, pidfile, log) lives in `~/.arkeon-wiki/`.
 
+For a daemon that also survives reboot and restarts on crash, run `arkeon-wiki install` (macOS launchd today; Linux systemd planned). See [§Persistent service](#persistent-service).
+
 **2. Register a directory**
 
 ```bash
@@ -102,7 +104,27 @@ arkeon-wiki config init        # write .arkeon/agents.yaml from a template
 arkeon-wiki config show        # print merged effective agent config
 arkeon-wiki config validate    # schema-check the YAML
 arkeon-wiki start              # foreground (for use under pm2/launchd/etc.)
+arkeon-wiki install            # persistent service: starts at login, restarts on crash
+arkeon-wiki uninstall          # remove the service
 ```
+
+## Persistent service
+
+`arkeon-wiki up` runs as a detached child — survives your shell, but not a reboot. For a daemon that comes back automatically at login and restarts on crash, install it as a service:
+
+```bash
+arkeon-wiki install                  # default instance
+arkeon-wiki install --name dev-a     # a specific --name instance
+arkeon-wiki uninstall                # remove the service (leaves data dir intact)
+```
+
+**macOS** writes `~/Library/LaunchAgents/tech.arkeon.wiki[.<name>].plist` and bootstraps it into the user's launchd domain. No sudo. The plist's `KeepAlive: { SuccessfulExit: false, Crashed: true }` contract means `arkeon-wiki down` stays down (clean exit), but a crashed daemon comes back within ~10s.
+
+**Linux** (systemd user unit + `loginctl enable-linger`) is planned for PR2 — tracked in [#146](https://github.com/Arkeon-Technologies/arkeon-wiki/issues/146).
+
+API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) live in `~/.arkeon-wiki/.env`, *not* in the plist (plists are world-readable). `install` captures keys from your shell if they're set there but not in the file yet — it never overwrites existing values. Rotate keys by editing the file.
+
+When a service is installed, `up`/`down`/`status` coordinate with the supervisor automatically: `up` delegates to `launchctl kickstart` instead of spawning an orphan; `down` produces a clean exit the supervisor respects; `status` surfaces a `service` field with installed/running/pid.
 
 ## Agents (LLM-powered)
 
