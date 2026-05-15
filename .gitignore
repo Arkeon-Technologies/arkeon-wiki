@@ -45,3 +45,4 @@ tasks/
 # Misc
 *.log
 2026-*.txt
+.claude/
