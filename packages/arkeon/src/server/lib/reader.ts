@@ -28,7 +28,7 @@
  */
 
 import { parse } from "node-html-parser";
-import { posix } from "node:path";
+import { posix, resolve as fsResolve, sep as fsSep } from "node:path";
 
 import { resolveHref } from "./html-links.js";
 
@@ -65,6 +65,73 @@ export function classifyAnchor(
   return classes;
 }
 
+export interface CrossSpaceTarget {
+  /** The other space's name. */
+  space: string;
+  /** The path within that space's watch_dir. */
+  path: string;
+  /** Any `#fragment` or `?query` suffix on the original href. */
+  suffix: string;
+}
+
+/**
+ * Detect whether a relative href on disk actually resolves into
+ * another registered space's watch_dir. Returns the cross-space
+ * target if so — the reader uses this to rewrite the rendered `href`
+ * back to `/{otherSpace}/{path}` for http:// click-through, since
+ * `../../work/other/wiki/foo.html` would otherwise resolve to a URL
+ * the daemon doesn't serve.
+ *
+ * Returns null for in-space relative hrefs, externals, fragments,
+ * server-absolute paths, and unresolvable escapes (`../../etc/passwd`
+ * style — they're not under any registered space).
+ */
+export function crossSpaceTarget(
+  href: string,
+  fromPath: string,
+  thisSpaceName: string,
+  thisWatchDir: string,
+  spaces: ReadonlyMap<string, string>,
+): CrossSpaceTarget | null {
+  if (!href) return null;
+  if (href.startsWith("#")) return null;
+  if (SCHEME_RE.test(href)) return null;
+  if (href.startsWith("//")) return null;
+  if (href.startsWith("/")) return null;
+
+  const splitAt = href.search(/[#?]/);
+  const pathPart = splitAt === -1 ? href : href.slice(0, splitAt);
+  const suffix = splitAt === -1 ? "" : href.slice(splitAt);
+  if (!pathPart) return null;
+
+  let decoded: string;
+  try {
+    decoded = pathPart
+      .split("/")
+      .map((s) => decodeURIComponent(s))
+      .join("/");
+  } catch {
+    return null;
+  }
+
+  const articleAbsDir = fsResolve(thisWatchDir, posix.dirname(fromPath));
+  const absTarget = fsResolve(articleAbsDir, decoded);
+
+  for (const [otherName, otherDir] of spaces) {
+    if (otherName === thisSpaceName) continue;
+    const normDir = fsResolve(otherDir);
+    if (absTarget === normDir) continue; // bare watch_dir, no file
+    if (!absTarget.startsWith(normDir + fsSep)) continue;
+    const within = absTarget
+      .slice(normDir.length + 1)
+      .split(fsSep)
+      .join("/");
+    if (!within) continue;
+    return { space: otherName, path: within, suffix };
+  }
+  return null;
+}
+
 const CHROME_CSS = `
 #arkeon-chrome {
   position: sticky;
@@ -98,17 +165,62 @@ a.arkeon-redlink:hover { color: #900; text-decoration: underline; }
  * element we skip re-injecting (defensive against double-renders, not a
  * real concern since articles on disk never contain one).
  */
+export interface InstrumentOpts {
+  /**
+   * The article's own space's `watch_dir`, absolute. Needed to
+   * resolve cross-space relative hrefs against the filesystem.
+   * Optional — when omitted (older callers), cross-space rewriting
+   * is disabled.
+   */
+  watchDir?: string;
+  /**
+   * Every registered space, keyed by name → absolute `watch_dir`.
+   * Used to detect cross-space relative hrefs and translate them to
+   * the routed `/{space}/{path}` form for http:// click-through.
+   * Defaults to an empty map (no cross-space rewriting).
+   */
+  spaces?: ReadonlyMap<string, string>;
+}
+
 export function instrumentArticle(
   html: string,
   fromPath: string,
   knownPaths: Set<string>,
   spaceName: string,
+  opts: InstrumentOpts = {},
 ): string {
   const root = parse(html);
+  const watchDir = opts.watchDir;
+  const spaces = opts.spaces ?? new Map<string, string>();
 
   for (const a of root.querySelectorAll("a")) {
     const href = a.getAttribute("href");
     if (!href) continue;
+
+    // Detect cross-space links FIRST: a relative href like
+    // `../../work/other/wiki/foo.html` is a perfectly valid
+    // filesystem-relative path on disk (file:// follows it) but a
+    // 404 over http:// since the daemon serves `/{space}/...`, not
+    // `/work/other/...`. Rewrite the rendered href to the routed
+    // form so click-through works.
+    if (watchDir) {
+      const cross = crossSpaceTarget(href, fromPath, spaceName, watchDir, spaces);
+      if (cross) {
+        const newHref =
+          spaceUrlEncode(cross.space, cross.path) + cross.suffix;
+        a.setAttribute("href", newHref);
+        const className = cross.path.toLowerCase().endsWith(".html")
+          ? "arkeon-wiki"
+          : "arkeon-file";
+        const existing = (a.getAttribute("class") ?? "").trim();
+        a.setAttribute(
+          "class",
+          existing ? `${existing} ${className}` : className,
+        );
+        continue;
+      }
+    }
+
     const added = classifyAnchor(href, fromPath, knownPaths);
     if (added.length === 0) continue;
     const existing = (a.getAttribute("class") ?? "").trim();
@@ -267,6 +379,20 @@ export function renderNotFound(spaceName: string, path: string): string {
 </body>
 </html>
 `;
+}
+
+/**
+ * Build a routed `/{space}/{path}` href with each path segment
+ * URL-encoded. Mirrors the construction used in
+ * `renderArticleIndex` so the reader's rewritten hrefs hit the same
+ * decode path that resolves to entities on the way back in.
+ */
+function spaceUrlEncode(spaceName: string, path: string): string {
+  const encodedPath = path
+    .split("/")
+    .map((seg) => encodeURIComponent(seg))
+    .join("/");
+  return `/${encodeURIComponent(spaceName)}/${encodedPath}`;
 }
 
 function escapeHtml(s: string): string {

@@ -60,6 +60,18 @@ async function knownPathsFor(spaceName: string): Promise<Set<string>> {
   return out;
 }
 
+async function allSpaceWatchDirs(): Promise<Map<string, string>> {
+  const sql = createSql();
+  const rows = await sql`
+    SELECT name, watch_dir FROM spaces WHERE watch_dir IS NOT NULL
+  `;
+  const map = new Map<string, string>();
+  for (const row of rows) {
+    map.set(row.name as string, row.watch_dir as string);
+  }
+  return map;
+}
+
 // ── GET / — daemon landing ────────────────────────────────────────
 
 readerRouter.get("/", async (c) => {
@@ -154,7 +166,11 @@ readerRouter.get("/:space/wiki/*", async (c) => {
 
   const original = readFileSync(abs, "utf-8");
   const knownPaths = await knownPathsFor(space);
-  const instrumented = instrumentArticle(original, articlePath, knownPaths, space);
+  const spaces = await allSpaceWatchDirs();
+  const instrumented = instrumentArticle(original, articlePath, knownPaths, space, {
+    watchDir,
+    spaces,
+  });
   return c.html(instrumented);
 });
 
