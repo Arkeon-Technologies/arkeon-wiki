@@ -187,13 +187,13 @@ function computeCrossSpaceRelative(
   // correctly. Output is normalized back to posix below.
   const normDir = fsResolve(otherWatchDir);
   const targetAbs = fsResolve(otherWatchDir, targetInOtherSpace);
-  // Refuse if the resolved target falls outside the destination
-  // space's watch_dir. Without this guard, `/other/../../etc/passwd`
-  // resolves to `/etc/passwd` and the rewriter happily produces a
-  // valid filesystem-relative href escaping every space root.
-  if (targetAbs !== normDir && !targetAbs.startsWith(normDir + fsSep)) {
-    return null;
-  }
+  // Refuse if the resolved target is the bare watch_dir (no file
+  // path) or falls outside it. The watch_dir-only case matches the
+  // explicit skip in `detectCrossSpace`; the outside case prevents
+  // `/other/../../etc/passwd` from producing a working
+  // filesystem-relative href escaping every space root.
+  if (targetAbs === normDir) return null;
+  if (!targetAbs.startsWith(normDir + fsSep)) return null;
   const articleAbsDir = fsResolve(thisWatchDir, posix.dirname(fromPath));
   const rel = fsRelative(articleAbsDir, targetAbs);
   const normalized = rel.split(/[\\/]/g).join("/");

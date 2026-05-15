@@ -277,4 +277,31 @@ describe("rewriteHrefsForWrite — full document", () => {
     const out = rewriteHrefsForWrite(frag, makeOpts());
     expect(out).toContain(`href="q.html"`);
   });
+
+  it("rewrites <img src> independently of <a href>", () => {
+    const html = `<p><img src="/primary/assets/diagram.png" alt="d"></p>`;
+    const out = rewriteHrefsForWrite(html, makeOpts());
+    expect(out).toContain(`src="../assets/diagram.png"`);
+    expect(out).not.toContain(`/primary/`);
+  });
+
+  it("rewrites <link href> independently of <a href>", () => {
+    const html = `<link rel="stylesheet" href="/primary/styles/site.css">`;
+    const out = rewriteHrefsForWrite(html, makeOpts());
+    expect(out).toContain(`href="../styles/site.css"`);
+  });
+
+  it("leaves <img src> alone for external URLs and unresolvable spaces", () => {
+    const html = `<img src="https://cdn.example/a.png">
+<img src="/nonexistent/assets/b.png">`;
+    const out = rewriteHrefsForWrite(html, makeOpts());
+    expect(out).toContain(`src="https://cdn.example/a.png"`);
+    expect(out).toContain(`src="/nonexistent/assets/b.png"`);
+  });
+
+  it("rewrites <img src> across spaces", () => {
+    const html = `<img src="/other/assets/photo.png">`;
+    const out = rewriteHrefsForWrite(html, makeOpts());
+    expect(out).toContain(`src="../../work/other/assets/photo.png"`);
+  });
 });

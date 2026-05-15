@@ -61,7 +61,6 @@ async function knownPathsFor(spaceName: string): Promise<Set<string>> {
   return out;
 }
 
-
 // ── GET / — daemon landing ────────────────────────────────────────
 
 readerRouter.get("/", async (c) => {

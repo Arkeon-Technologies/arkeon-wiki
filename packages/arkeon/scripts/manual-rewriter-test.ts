@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Arkeon Technologies, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 // Manual rewriter smoke test — fires a real LLM via the bundled
 // writer role against a fresh tiny corpus, then inspects the
 // on-disk output and the relationships table.
