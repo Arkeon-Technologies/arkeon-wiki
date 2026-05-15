@@ -27,6 +27,7 @@ import { createSql, withTransaction, type SqlClient } from "./sql.js";
 import { getEditContext, type EditKind } from "./edit-context.js";
 import { parseHtmlMeta } from "./html-meta.js";
 import { extractHtmlLinks } from "./html-links.js";
+import { loadSpacesMap } from "./spaces.js";
 
 export interface Space {
   name: string;
@@ -99,7 +100,12 @@ async function syncWiki(
     basename(relativePath, ".html");
 
   const propsJson = JSON.stringify(meta.properties);
-  const links = extractHtmlLinks(content, relativePath);
+  const spaces = await loadSpacesMap();
+  const links = extractHtmlLinks(content, relativePath, {
+    thisSpaceName: space.name,
+    thisWatchDir: space.watch_dir,
+    spaces,
+  });
   const resolvedLinks = links.filter((l): l is typeof l & { resolved: string } => l.resolved !== null);
 
   await withTransaction(async (tx) => {

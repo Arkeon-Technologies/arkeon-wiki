@@ -240,6 +240,230 @@ describe("read-gate", () => {
   });
 });
 
+describe("href rewriter — end-to-end through create_file / edit_file / sync", () => {
+  const exec = execTool;
+
+  it("create_file rewrites space-URL hrefs to relative on disk and records canonical relationships", async () => {
+    const ctx = makeContext(SPACE, "writer");
+    const create = getTool("create_file", ctx);
+
+    // Seed a source so the citation has a target.
+    mkdirSync(join(workdir, "sources"), { recursive: true });
+    writeFileSync(join(workdir, "sources/notes.txt"), "the source content");
+    await syncFile(SPACE, "sources/notes.txt");
+
+    await exec(create, {
+      path: "wiki/grief.html",
+      html: `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Why grief is sweet</title></head>
+<body>
+<h1>Why grief is sweet</h1>
+<p>See <a href="/${SPACE.name}/sources/notes.txt">notes</a> and
+<a href="/${SPACE.name}/wiki/sibling.html">sibling</a>.</p>
+</body>
+</html>`,
+    });
+
+    // On disk: hrefs are now plain relative paths, not /{space}/-prefixed.
+    const onDisk = readFileSync(join(workdir, "wiki/grief.html"), "utf-8");
+    expect(onDisk).toContain(`href="../sources/notes.txt"`);
+    expect(onDisk).toContain(`href="sibling.html"`);
+    expect(onDisk).not.toContain(`href="/${SPACE.name}/`);
+
+    // Relationships row resolves to the canonical in-space form.
+    const sql = createSql();
+    const rels = await sql`
+      SELECT target_path FROM relationships
+      WHERE space_name = ${SPACE.name} AND source_path = 'wiki/grief.html'
+      ORDER BY target_path
+    ` as unknown as Array<{ target_path: string }>;
+    expect(rels.map((r) => r.target_path)).toEqual([
+      "sources/notes.txt",
+      "wiki/sibling.html",
+    ]);
+  });
+
+  it("edit_file str_replace rewrites new_string only — old_string must match disk verbatim", async () => {
+    writeFileSync(
+      join(workdir, "wiki/x.html"),
+      `<!doctype html>
+<html><head><meta charset="utf-8"><title>X</title></head>
+<body><p>See <a href="../sources/old.md">old</a>.</p></body></html>`,
+    );
+    await syncFile(SPACE, "wiki/x.html");
+
+    const ctx = makeContext(SPACE, "writer");
+    const read = getTool("read_file", ctx);
+    const edit = getTool("edit_file", ctx);
+
+    await exec(read, { path: "wiki/x.html" });
+    await exec(edit, {
+      mode: "str_replace",
+      path: "wiki/x.html",
+      // old_string copied verbatim from on-disk (the rewritten form).
+      old_string: `<a href="../sources/old.md">old</a>`,
+      // new_string uses space-URL form — rewriter handles it.
+      new_string: `<a href="/${SPACE.name}/sources/new.md">new</a>`,
+    });
+
+    const after = readFileSync(join(workdir, "wiki/x.html"), "utf-8");
+    expect(after).toContain(`href="../sources/new.md"`);
+    expect(after).not.toContain(`/${SPACE.name}/`);
+  });
+
+  it("edit_file insert_at_line rewrites the inserted content", async () => {
+    writeFileSync(
+      join(workdir, "wiki/x.html"),
+      `<!doctype html>
+<html><head><meta charset="utf-8"><title>X</title></head>
+<body>
+<h1>X</h1>
+<p>existing</p>
+</body></html>`,
+    );
+    await syncFile(SPACE, "wiki/x.html");
+
+    const ctx = makeContext(SPACE, "writer");
+    const read = getTool("read_file", ctx);
+    const edit = getTool("edit_file", ctx);
+
+    await exec(read, { path: "wiki/x.html" });
+    await exec(edit, {
+      mode: "insert_at_line",
+      path: "wiki/x.html",
+      line_number: 6,
+      content: `<p>cite <a href="/${SPACE.name}/sources/n.md">n</a>.</p>`,
+    });
+
+    const after = readFileSync(join(workdir, "wiki/x.html"), "utf-8");
+    expect(after).toContain(`href="../sources/n.md"`);
+  });
+
+  it("refuses to rewrite a path-traversal href; the broken bytes land verbatim", async () => {
+    const ctx = makeContext(SPACE, "writer");
+    const create = getTool("create_file", ctx);
+
+    await exec(create, {
+      path: "wiki/evil.html",
+      html: `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Evil</title></head>
+<body><a href="/${SPACE.name}/../../etc/passwd">evil</a></body>
+</html>`,
+    });
+
+    const onDisk = readFileSync(join(workdir, "wiki/evil.html"), "utf-8");
+    // Untouched — left as the agent wrote it. No file-system escape.
+    expect(onDisk).toContain(`href="/${SPACE.name}/../../etc/passwd"`);
+    expect(onDisk).not.toContain(`../../../etc/passwd`);
+  });
+
+  it("rewrites a cross-space href to filesystem-relative and emits a canonical /{other}/ target_path", async () => {
+    // The second space sits as a SIBLING of the primary on disk, not
+    // nested inside it. Nested watch_dirs are a footgun: the rewriter
+    // emits a path that stays inside the parent's watch_dir, which
+    // sync's resolveHref then treats as an in-space link (the "is
+    // this an escape?" check fires only when the resolution actually
+    // goes up out of the watch_dir).
+    const otherDir = mkdtempSync(join(tmpdir(), "arkeon-rt-other-"));
+    mkdirSync(join(otherDir, "wiki"), { recursive: true });
+    const sql = createSql();
+    await sql`INSERT INTO spaces(name, watch_dir) VALUES('other', ${otherDir})`;
+
+    try {
+      const ctx = makeContext(SPACE, "writer");
+      const create = getTool("create_file", ctx);
+      await exec(create, {
+        path: "wiki/cross.html",
+        html: `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Cross</title></head>
+<body><p>See <a href="/other/wiki/over-there.html">over there</a>.</p></body>
+</html>`,
+      });
+
+      // On disk: filesystem-relative across watch_dirs. The
+      // primary's parent → other's relative path is something like
+      // ../arkeon-rt-other-XXXXX/wiki/over-there.html — assert on
+      // the suffix so the random tmpdir doesn't fight the assertion.
+      const onDisk = readFileSync(join(workdir, "wiki/cross.html"), "utf-8");
+      expect(onDisk).toMatch(
+        /href="\.\.\/\.\.\/arkeon-rt-other-[^/]+\/wiki\/over-there\.html"/,
+      );
+
+      // Relationships row: canonical /{otherSpace}/{path} form.
+      const rels = await sql`
+        SELECT target_path FROM relationships
+        WHERE space_name = ${SPACE.name} AND source_path = 'wiki/cross.html'
+      ` as unknown as Array<{ target_path: string }>;
+      expect(rels).toEqual([{ target_path: "/other/wiki/over-there.html" }]);
+    } finally {
+      rmSync(otherDir, { recursive: true, force: true });
+    }
+  });
+
+  it("cross-space red links are filtered out of list_redlinks", async () => {
+    const otherDir = mkdtempSync(join(tmpdir(), "arkeon-rt-other2-"));
+    mkdirSync(join(otherDir, "wiki"), { recursive: true });
+    const sql = createSql();
+    await sql`INSERT INTO spaces(name, watch_dir) VALUES('other2', ${otherDir})`;
+
+    try {
+      const ctx = makeContext(SPACE, "writer");
+      const create = getTool("create_file", ctx);
+      await exec(create, {
+        path: "wiki/c.html",
+        html: `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>C</title></head>
+<body>
+<a href="/other2/wiki/ghost.html">cross-redlink</a>
+<a href="/${SPACE.name}/wiki/own-ghost.html">own-redlink</a>
+</body></html>`,
+      });
+
+      const listRedlinks = getTool("list_redlinks", ctx);
+      const out = await exec<{ redlinks: Array<{ target_path: string }> }>(
+        listRedlinks,
+        {},
+      );
+      const paths = out.redlinks.map((r) => r.target_path);
+      expect(paths).toContain("wiki/own-ghost.html");
+      expect(paths).not.toContain("/other2/wiki/ghost.html");
+    } finally {
+      rmSync(otherDir, { recursive: true, force: true });
+    }
+  });
+
+  it("round-trips: agent writes space-URL form, reads back disk form, edits with mixed forms", async () => {
+    const ctx = makeContext(SPACE, "writer");
+    const create = getTool("create_file", ctx);
+    await exec(create, {
+      path: "wiki/r.html",
+      html: `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>R</title></head>
+<body><p><a href="/${SPACE.name}/sources/a.md">a</a></p></body></html>`,
+    });
+
+    // Read it back — content reflects the rewritten disk form.
+    const read = getTool("read_file", ctx);
+    const out = await exec<{ content: string }>(read, { path: "wiki/r.html" });
+    expect(out.content).toContain(`href="../sources/a.md"`);
+    expect(out.content).not.toContain(`/${SPACE.name}/`);
+
+    // Edit using the form we just read; should work with old_string=disk bytes.
+    const edit = getTool("edit_file", ctx);
+    await exec(edit, {
+      mode: "str_replace",
+      path: "wiki/r.html",
+      old_string: `<a href="../sources/a.md">a</a>`,
+      new_string: `<a href="/${SPACE.name}/sources/b.md">b</a>`,
+    });
+    const after = readFileSync(join(workdir, "wiki/r.html"), "utf-8");
+    expect(after).toContain(`href="../sources/b.md"`);
+  });
+});
+
 describe("get_entity tool", () => {
   type EdgeRow = { target_path?: string; source_path?: string; link_text: string | null };
   interface GetEntityFound {

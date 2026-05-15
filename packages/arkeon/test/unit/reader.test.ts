@@ -160,6 +160,60 @@ describe("instrumentArticle", () => {
     expect(out).toContain("&lt;bad&gt;");
     expect(out).not.toContain("<bad>");
   });
+
+  describe("cross-space inverse rewrite", () => {
+    const crossHtml = `<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>X</title></head>
+<body>
+<p><a href="../../work/other/wiki/bar.html">cross-space</a></p>
+<p><a href="chloroplast.html">in-space</a></p>
+<p><a href="../../etc/passwd">escape</a></p>
+</body>
+</html>`;
+
+    it("rewrites a filesystem-relative cross-space href to /{otherSpace}/...", () => {
+      const out = instrumentArticle(crossHtml, articlePath, known, "demo", {
+        watchDir: "/tmp/demo",
+        spaces: new Map([
+          ["demo", "/tmp/demo"],
+          ["other", "/tmp/work/other"],
+        ]),
+      });
+      expect(out).toContain(`href="/other/wiki/bar.html"`);
+      expect(out).toContain(`class="arkeon-wiki"`);
+    });
+
+    it("leaves in-space relative links alone after rewriting cross-space ones", () => {
+      const out = instrumentArticle(crossHtml, articlePath, known, "demo", {
+        watchDir: "/tmp/demo",
+        spaces: new Map([
+          ["demo", "/tmp/demo"],
+          ["other", "/tmp/work/other"],
+        ]),
+      });
+      expect(out).toContain(`<a href="chloroplast.html" class="arkeon-wiki">`);
+    });
+
+    it("leaves escapes that don't land in any registered space alone", () => {
+      const out = instrumentArticle(crossHtml, articlePath, known, "demo", {
+        watchDir: "/tmp/demo",
+        spaces: new Map([
+          ["demo", "/tmp/demo"],
+          ["other", "/tmp/work/other"],
+        ]),
+      });
+      // /tmp/etc/passwd isn't inside any registered space; href stays as-is.
+      expect(out).toContain(`href="../../etc/passwd"`);
+    });
+
+    it("falls back to standard classification when no spaces map is supplied", () => {
+      const out = instrumentArticle(crossHtml, articlePath, known, "demo");
+      // Backward-compat call site: cross-space anchor untouched, escape
+      // path stays unclassified.
+      expect(out).toContain(`href="../../work/other/wiki/bar.html"`);
+    });
+  });
 });
 
 describe("renderSpaceIndex", () => {

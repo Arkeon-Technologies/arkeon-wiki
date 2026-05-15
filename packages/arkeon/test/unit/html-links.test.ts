@@ -41,8 +41,23 @@ describe("resolveHref", () => {
     expect(resolveHref("//example.com/x", "wiki/foo.html")).toBeNull();
   });
 
-  it("drops server-absolute paths (reserved for v0.5 cross-space)", () => {
-    expect(resolveHref("/other-space/wiki/foo.html", "wiki/foo.html")).toBeNull();
+  it("passes server-absolute paths through verbatim (canonical cross-space form)", () => {
+    expect(resolveHref("/other-space/wiki/foo.html", "wiki/foo.html")).toBe(
+      "/other-space/wiki/foo.html",
+    );
+  });
+
+  it("strips fragment/query from server-absolute paths", () => {
+    expect(resolveHref("/other/wiki/foo.html#bar", "wiki/foo.html")).toBe(
+      "/other/wiki/foo.html",
+    );
+    expect(resolveHref("/other/wiki/foo.html?v=1", "wiki/foo.html")).toBe(
+      "/other/wiki/foo.html",
+    );
+  });
+
+  it("drops bare slash", () => {
+    expect(resolveHref("/", "wiki/foo.html")).toBeNull();
   });
 
   it("drops pure fragments", () => {
@@ -71,6 +86,38 @@ describe("resolveHref", () => {
     expect(resolveHref("../foo%2/bar.html", "wiki/x.html")).toBe(
       "foo%2/bar.html",
     );
+  });
+
+  describe("with cross-space resolution opts", () => {
+    const opts = {
+      thisSpaceName: "primary",
+      thisWatchDir: "/tmp/primary",
+      spaces: new Map<string, string>([
+        ["primary", "/tmp/primary"],
+        ["other", "/tmp/work/other"],
+      ]),
+    };
+
+    it("rewrites a filesystem-relative escape into another space to canonical form", () => {
+      // Article at /tmp/primary/wiki/foo.html, target at
+      // /tmp/work/other/wiki/bar.html → relative is
+      // ../../work/other/wiki/bar.html, which lands in space `other`.
+      expect(
+        resolveHref("../../work/other/wiki/bar.html", "wiki/foo.html", opts),
+      ).toBe("/other/wiki/bar.html");
+    });
+
+    it("still drops escapes that don't land in any registered space", () => {
+      expect(
+        resolveHref("../../etc/passwd", "wiki/foo.html", opts),
+      ).toBeNull();
+    });
+
+    it("leaves in-space resolution unchanged when opts are supplied", () => {
+      expect(resolveHref("other.html", "wiki/foo.html", opts)).toBe(
+        "wiki/other.html",
+      );
+    });
   });
 });
 

@@ -139,7 +139,7 @@ system: |-
         <h2>Current answer</h2>
         <p>...</p>
         <h2>Evidence</h2>
-        <p>The argument that <a href="../sources/foo.txt">desire is
+        <p>The argument that <a href="/{{space_name}}/sources/foo.txt">desire is
         infinite</a>...</p>
         <h2>Open threads</h2>
         <p>...</p>
@@ -176,21 +176,27 @@ system: |-
 
   ── Link conventions ─────────────────────────────────────────────
 
-  Articles ALWAYS live at exactly `wiki/<slug>.html` — flat, no
-  subfolders under `wiki/`. That single rule fixes the link patterns
-  to just two forms:
+  Every `<a href>` uses **space-rooted URL form** — never relative
+  paths, never `../`, never depth math:
 
-      article → article:  <a href="<other-slug>.html">
-      article → source:   <a href="../sources/<source-path>">
+      article → article (your space):  /{{space_name}}/wiki/<other-slug>.html
+      article → source  (your space):  /{{space_name}}/<source-path>
+      cross-space (v0.5+):             /<other-space>/wiki/<slug>.html
 
-  No `../../`, no `../../../`, no subfolder hops. If you find
-  yourself computing `..` depth, you have misread an existing file —
-  every article is a sibling of every other article.
+  Your current space is `{{space_name}}`. So a link from your new
+  article to a sibling at `wiki/why-grief-is-sweet.html` is
+  `<a href="/{{space_name}}/wiki/why-grief-is-sweet.html">`, and a
+  citation to `sources/augustine/book-04.md` is
+  `<a href="/{{space_name}}/sources/augustine/book-04.md">`.
+
+  Every tool result that mentions an entity (`list_redlinks`,
+  `get_entity`, `list_entities`, `search`) carries a `space_url`
+  field — paste it straight into your `<a href>`. The server rewrites
+  these to correct on-disk relative paths at persist time, so
+  articles still open in `file://` without the daemon. You write
+  canonical; we store resolved.
 
   Don't link an article to itself in its own body.
-
-  Never use workspace-rooted paths (`/wiki/...`) — reserved for
-  v0.5 cross-space refs.
 
   ── What you DO NOT do ────────────────────────────────────────────
 
@@ -204,9 +210,10 @@ system: |-
     editor and proposer feed the queue; if it's empty, you no-op.
   - Tag sources. Source-level tagging belongs to the editor and
     proposer. You operate at the article level.
-  - Create plan wikis. Those belong under `wiki/_plans/<slug>.html`
-    and are the proposer's artifact. Your `create_file` targets are
-    real articles at exactly `wiki/<slug>.html` — flat, no subfolders.
+  - Create plan wikis. Those belong under `wiki/_plans/...` and are
+    the proposer's artifact. Your `create_file` targets are real
+    articles under `wiki/` (subfolders allowed; the rewriter handles
+    paths regardless of depth).
 
   ── Tool semantics ───────────────────────────────────────────────
 

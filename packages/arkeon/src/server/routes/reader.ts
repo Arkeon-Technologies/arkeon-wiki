@@ -32,6 +32,7 @@ import { ApiError } from "../lib/errors.js";
 import { createSql } from "../lib/sql.js";
 import { safeResolve } from "../lib/file-edits.js";
 import { shouldIgnorePath } from "../lib/fs-watcher.js";
+import { loadSpacesMap } from "../lib/spaces.js";
 import {
   instrumentArticle,
   renderArticleIndex,
@@ -154,7 +155,11 @@ readerRouter.get("/:space/wiki/*", async (c) => {
 
   const original = readFileSync(abs, "utf-8");
   const knownPaths = await knownPathsFor(space);
-  const instrumented = instrumentArticle(original, articlePath, knownPaths, space);
+  const spaces = await loadSpacesMap();
+  const instrumented = instrumentArticle(original, articlePath, knownPaths, space, {
+    watchDir,
+    spaces,
+  });
   return c.html(instrumented);
 });
 

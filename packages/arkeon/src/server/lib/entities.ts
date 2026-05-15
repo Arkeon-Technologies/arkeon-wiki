@@ -354,6 +354,12 @@ export async function listRedLinks(
   //
   // Replaces the previous N+1 form (aggregate query + per-row linkers
   // fetch). Same shape out, one round-trip instead of (1 + N).
+  //
+  // `target_path NOT LIKE '/%'` filters out cross-space red links
+  // (canonical `/{otherSpace}/{path}` form). The writer is scoped
+  // to its own space and shouldn't try to fulfill another space's
+  // gaps; cross-space inbound edges still live in `relationships`
+  // for graph queries, just not in the per-space writer queue.
   const redlinksSql = `
     WITH red AS (
       SELECT
@@ -366,7 +372,9 @@ export async function listRedLinks(
       FROM relationships r
       LEFT JOIN entities e
         ON e.space_name = r.space_name AND e.source_path = r.target_path
-      WHERE r.space_name = ? AND e.source_path IS NULL
+      WHERE r.space_name = ?
+        AND e.source_path IS NULL
+        AND r.target_path NOT LIKE '/%'
     )
     SELECT
       target_path,
@@ -391,7 +399,9 @@ export async function listRedLinks(
     FROM relationships r
     LEFT JOIN entities e
       ON e.space_name = r.space_name AND e.source_path = r.target_path
-    WHERE r.space_name = ? AND e.source_path IS NULL
+    WHERE r.space_name = ?
+      AND e.source_path IS NULL
+      AND r.target_path NOT LIKE '/%'
   `;
   const totalRow = (await sql.query(totalSql, [opts.space_name])) as unknown as Array<{
     total: number;

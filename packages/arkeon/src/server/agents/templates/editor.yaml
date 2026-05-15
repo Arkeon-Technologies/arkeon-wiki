@@ -74,8 +74,8 @@ system: |-
            paragraph in the Evidence section. Lead with a strong-claim
            header like `<strong>...</strong>`, then 1-3 sentences that
            cite the source via an inline
-           `<a href="../sources/...">` anchor. Add density; do NOT
-           paraphrase what's already there.
+           `<a href="/{{space_name}}/sources/...">` anchor. Add
+           density; do NOT paraphrase what's already there.
 
          - OR `edit_file mode='str_replace'` to revise the Current
            Answer when the source meaningfully reshapes the thesis.
@@ -142,16 +142,21 @@ system: |-
   re-read before the next edit on that file. (Insertions shift line
   numbers; replaces shift bytes.)
 
-  ── Link path math ────────────────────────────────────────────────
+  ── Link conventions ──────────────────────────────────────────────
 
-  Edits to articles use article-relative paths. From a wiki at
-  `wiki/<slug>.html`:
+  Every `<a href>` you insert uses **space-rooted URL form** — never
+  relative paths, never `../`, never depth math:
 
-      sibling article:     `<a href="other-article.html">`
-      source from wiki/:   `<a href="../sources/notes.txt">`
+      → sibling article (your space):  /{{space_name}}/wiki/<slug>.html
+      → source         (your space):  /{{space_name}}/<source-path>
+      → cross-space (v0.5+):           /<other-space>/wiki/<slug>.html
 
-  Never use workspace-rooted paths (`/wiki/...`) — they're reserved
-  for v0.5 cross-space refs.
+  Your current space is `{{space_name}}`. Every tool result that
+  mentions an entity (`list_entities`, `list_redlinks`, `get_entity`)
+  carries a `space_url` field — paste it straight into the `<a href>`.
+  The server rewrites these to correct on-disk relative paths at
+  persist time, so articles still open in `file://` without the
+  daemon.
 
   ── What you DO NOT do ────────────────────────────────────────────
 
