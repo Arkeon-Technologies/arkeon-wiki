@@ -24,6 +24,8 @@ const REQUIRED_ROUTES = [
   "GET  /{space}/recent",
   "GET  /{space}/search",
   "GET  /{space}/sources/scan",
+  "POST /{space}/inbox",
+  "PUT /{space}/sources/{path}",
   "POST /{space}/agents/{role}/run",
 ];
 

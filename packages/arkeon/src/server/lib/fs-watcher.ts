@@ -105,6 +105,20 @@ export const TEXT_EXTENSIONS = new Set([
 const SNIFF_BYTES = 8192;
 
 /**
+ * Same NUL-byte heuristic as `sniffIsText`, but against an in-memory
+ * buffer. Used by the source-write endpoints to gate uploads before
+ * they hit disk. Only the first `SNIFF_BYTES` bytes are checked —
+ * matches what we'd inspect after the file lands.
+ */
+export function sniffBufferIsText(buf: Buffer): boolean {
+  const limit = Math.min(buf.length, SNIFF_BYTES);
+  for (let i = 0; i < limit; i++) {
+    if (buf[i] === 0) return false;
+  }
+  return true;
+}
+
+/**
  * Read the first SNIFF_BYTES of `absPath` and decide text-vs-binary
  * by looking for NUL bytes. Same heuristic as `git`, `grep -I`,
  * and `file(1)`. Returns false on any I/O error (the file is then
