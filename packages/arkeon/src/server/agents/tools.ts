@@ -34,6 +34,7 @@ import {
   listRedLinks,
   parseEntityTypes,
   setEntityTag,
+  type EntityDetail,
   type EntityType,
 } from "../lib/entities.js";
 
@@ -73,6 +74,23 @@ const SPACE_PARAM_DESC =
   "(the triggering space). Omit on a multi-space role to fan out across " +
   "every allowed space (results are tagged with `space` so you can tell " +
   "them apart).";
+
+/**
+ * Build the canonical space-rooted URL form (`/{space}/{path}`) for a
+ * path inside the named space. This is what tool outputs surface as
+ * `space_url` so the agent can copy it straight into an `<a href>` —
+ * the server rewrites that form back to the correct on-disk relative
+ * path at write time.
+ *
+ * Already-canonical inputs (a `target_path` that already starts with
+ * `/` because step 4's `resolveHref` widening produced a cross-space
+ * pointer) pass through unchanged.
+ */
+function spaceUrl(spaceName: string, path: string): string {
+  if (path.startsWith("/")) return path;
+  const segments = path.split("/").map(encodeURIComponent).join("/");
+  return `/${encodeURIComponent(spaceName)}/${segments}`;
+}
 
 /**
  * Format a file's content with line-number prefixes for `read_file`.
@@ -124,6 +142,7 @@ const readFileTool = defineTool("read_file", {
     return {
       path,
       space: target.name,
+      space_url: spaceUrl(target.name, path),
       content: withLineNumbers(raw),
     };
   },
@@ -192,6 +211,7 @@ const readFilesTool = defineTool("read_files", {
         return {
           path,
           space: target.name,
+          space_url: spaceUrl(target.name, path),
           content: withLineNumbers(raw),
         };
       } catch (err) {
@@ -290,10 +310,18 @@ const searchTool = defineTool("search", {
       maxSnippetsPerFile: max_snippets_per_file,
     });
 
+    const decorated = {
+      ...raw,
+      hits: raw.hits.map((h) => ({
+        ...h,
+        space_url: spaceUrl(h.space_name, h.source_path),
+      })),
+    };
+
     return {
       query,
       spaces: targets.map((s) => s.name),
-      keyword: raw,
+      keyword: decorated,
     };
   },
   summarize: (r) => {
@@ -315,8 +343,10 @@ const listEntitiesTool = defineTool("list_entities", {
     "Use to check whether a subject already has a wiki, find unprocessed " +
     "sources (type=file inbound_max=0 → 'nothing links to this file yet'), " +
     "or surface recently-updated articles. Each row carries `space_name`, " +
-    "`source_path`, `type`, `label`, `source_hash`, `properties`, `tags`, " +
-    "and optional `counts.inbound`/`counts.outbound`. `source_hash` is the " +
+    "`source_path`, `space_url` (the canonical `/{space}/{path}` form — " +
+    "paste directly into an <a href>), `type`, `label`, `source_hash`, " +
+    "`properties`, `tags`, and optional `counts.inbound`/`counts.outbound`. " +
+    "`source_hash` is the " +
     "SHA-256 of the file content at last sync — pass it as the `value` to " +
     "`tag_entity` when marking 'I processed this' so content-change " +
     "invalidation works automatically. `properties` is file-derived " +
@@ -517,7 +547,10 @@ const listEntitiesTool = defineTool("list_entities", {
     }
 
     return {
-      entities: allEntities,
+      entities: allEntities.map((e) => ({
+        ...e,
+        space_url: spaceUrl(e.space_name, e.source_path),
+      })),
       total,
       spaces: targets.map((s) => s.name),
     };
@@ -534,10 +567,12 @@ const listEntitiesTool = defineTool("list_entities", {
 const listRedLinksTool = defineTool("list_redlinks", {
   description:
     "List link targets in this space that have no entity (yet). Returns " +
-    "`{target_path, demand, linked_from[]}`, ranked by demand. Use this to " +
-    "find the next article worth writing: high `demand` = many existing " +
-    "articles want this concept defined. `linked_from` shows the last 3 " +
-    "source articles that pointed at the missing target.",
+    "`{target_path, space_url, demand, linked_from[]}`, ranked by demand. " +
+    "`space_url` is the canonical `/{space}/{path}` form — paste directly " +
+    "into the path arg of `create_file` when fulfilling. Use this to find " +
+    "the next article worth writing: high `demand` = many existing articles " +
+    "want this concept defined. `linked_from` shows the last 3 source " +
+    "articles that pointed at the missing target.",
   inputSchema: z.object({
     limit: z
       .number()
@@ -557,12 +592,22 @@ const listRedLinksTool = defineTool("list_redlinks", {
   }),
   call: async ({ limit, offset, space }, ctx) => {
     const targets = resolveToolScope(ctx, space);
-    const all: Array<{ space: string; target_path: string; demand: number; linked_from: string[] }> = [];
+    const all: Array<{
+      space: string;
+      target_path: string;
+      space_url: string;
+      demand: number;
+      linked_from: string[];
+    }> = [];
     let total = 0;
     for (const t of targets) {
       const result = await listRedLinks({ space_name: t.name, limit, offset });
       for (const rl of result.redlinks) {
-        all.push({ space: t.name, ...rl });
+        all.push({
+          space: t.name,
+          space_url: spaceUrl(t.name, rl.target_path),
+          ...rl,
+        });
       }
       total += result.total;
     }
@@ -618,7 +663,7 @@ const getEntityTool = defineTool("get_entity", {
         space: target.name,
       };
     }
-    return { found: true as const, entity };
+    return { found: true as const, entity: decorateEntity(entity) };
   },
   summarize: (r) => {
     if (!r.found) {
@@ -634,6 +679,26 @@ const getEntityTool = defineTool("get_entity", {
     };
   },
 });
+
+/**
+ * Decorate a fetched entity (plus its inbound/outbound link arrays)
+ * with `space_url` fields. Cheaper to do in one place than scatter
+ * `spaceUrl(...)` calls through every consumer.
+ */
+function decorateEntity(entity: EntityDetail) {
+  return {
+    ...entity,
+    space_url: spaceUrl(entity.space_name, entity.source_path),
+    outbound: entity.outbound.map((o) => ({
+      ...o,
+      space_url: spaceUrl(entity.space_name, o.target_path),
+    })),
+    inbound: entity.inbound.map((i) => ({
+      ...i,
+      space_url: spaceUrl(entity.space_name, i.source_path),
+    })),
+  };
+}
 
 /**
  * Tolerant normalization for `get_entity` paths. Stored entity paths
@@ -695,7 +760,7 @@ const getEntitiesTool = defineTool("get_entities", {
             space: target.name,
           };
         }
-        return { found: true as const, entity };
+        return { found: true as const, entity: decorateEntity(entity) };
       }),
     );
     return { space: target.name, results };
@@ -827,7 +892,9 @@ const CREATE_FILE_TEMPLATE = `<!DOCTYPE html>
 </head>
 <body>
   <h1>Article title as a question</h1>
-  <p>Article content with inline <a href="../sources/foo.txt">citations</a>.</p>
+  <p>Article content with inline <a href="/your-space/sources/foo.txt">citations</a>
+  (replace <code>your-space</code> with the actual space name — see role
+  prompt or the <code>space_url</code> field on any tool result).</p>
 </body>
 </html>`;
 

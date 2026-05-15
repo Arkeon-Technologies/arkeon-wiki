@@ -118,19 +118,17 @@ system: |-
      NONE of (a)/(b)/(c) covers. 0-6 candidates per source is
      typical after gap-filtering.
 
-  8. `create_file` the plan wiki at **exactly** `wiki/_plans/<slug>.html`
-     where `<slug>` is the source path under `sources/` with directory
-     separators replaced by `__` (double underscore) and the file
-     extension stripped:
+  8. `create_file` the plan wiki at `wiki/_plans/<source-path>.html`
+     — mirror the source path under `_plans/` and replace the file
+     extension with `.html`:
 
-       sources/notes.txt              → wiki/_plans/notes.html
-       sources/book-02-ii.txt         → wiki/_plans/book-02-ii.html
-       sources/Augustine/book-04.md   → wiki/_plans/Augustine__book-04.html
+       sources/notes.txt              → wiki/_plans/sources/notes.html
+       sources/book-02-ii.txt         → wiki/_plans/sources/book-02-ii.html
+       sources/Augustine/book-04.md   → wiki/_plans/sources/Augustine/book-04.html
+       meeting_notes/transcript.txt   → wiki/_plans/meeting_notes/transcript.html
 
-     Every plan wiki sits at exactly one level below `_plans/`. NEVER
-     mirror the source directory structure into subfolders under
-     `_plans/` — flat plan paths keep link math deterministic (see
-     below).
+     Subfolders are fine — the rewriter handles depth so plan paths
+     can carry the source's structure without breaking links.
 
      The plan wiki MUST:
        (a) Start with `<!DOCTYPE html>` (required by create_file).
@@ -167,12 +165,12 @@ system: |-
               already integrated, and which OTHER source(s) in the
               corpus speak to the same themes (so the writer knows
               where else to look). Cite the primary source inline:
-              <a href="../../sources/...">…</a>, plus any cross-source
-              parallels:
-              <a href="../../sources/...other...">…</a>.</p>
+              <a href="/{{space_name}}/sources/...">…</a>, plus any
+              cross-source parallels:
+              <a href="/{{space_name}}/sources/...other...">…</a>.</p>
            <h2>Proposed articles</h2>
            <ul>
-             <li><a href="../<slug>.html">question shaped as a sentence?</a>
+             <li><a href="/{{space_name}}/wiki/<slug>.html">question shaped as a sentence?</a>
                  — one-sentence gloss of what this new article would answer.</li>
              ...
            </ul>
@@ -208,23 +206,21 @@ system: |-
     bad:   `why-does-grief-feel-sweet-in-augustine.html` (too long)
     bad:   `grief.html` (topic, not question)
 
-  ── Link paths from a plan wiki ───────────────────────────────────
+  ── Link conventions ──────────────────────────────────────────────
 
-  Because plans always live at `wiki/_plans/<slug>.html` (depth 1
-  below `wiki/`, depth 2 below the workspace root), there is exactly
-  ONE link pattern per target type. No depth-counting. No exceptions.
+  Every `<a href>` uses **space-rooted URL form** — never relative
+  paths, never `../`, never depth math:
 
-      plan → article (slot in wiki/):  ../<article-slug>.html
-      plan → source file:              ../../sources/<source-path>
+      plan → article (your space):  /{{space_name}}/wiki/<slug>.html
+      plan → source  (your space):  /{{space_name}}/<source-path>
+      cross-space (v0.5+):          /<other-space>/wiki/<slug>.html
 
-  Examples (plan at `wiki/_plans/Augustine__book-04.html`):
-
-      <a href="../why-is-grief-sweet.html">…</a>
-      <a href="../../sources/Augustine/book-04.md">…</a>
-
-  If you find yourself writing `../../` or `../../../` to reach
-  another article slot, you have miscounted — articles are siblings
-  of `_plans/`, exactly one `../` away. Recheck before submitting.
+  Your current space is `{{space_name}}`. Every tool result that
+  mentions an entity (`list_redlinks`, `get_entity`, `list_entities`,
+  `search`) carries a `space_url` field — paste it straight into the
+  `<a href>`. The server rewrites these to correct on-disk relative
+  paths at persist time, so plan wikis still open in `file://`
+  without the daemon.
 
   ── What you DO NOT do ────────────────────────────────────────────
 
