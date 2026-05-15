@@ -451,10 +451,21 @@ export function parseEntityTypes(raw: string | null | undefined): EntityType[] |
 /**
  * Fetch a single entity by (space_name, source_path) including outbound
  * relationships. Returns null if the entity does not exist.
+ *
+ * `inbound` is queried across **every** space — relationships rows in
+ * other spaces that point at the canonical `/{this_space}/{path}`
+ * cross-space form surface here as well, so consumers can answer
+ * "who from any space cites this entity?" in one call. Each inbound
+ * row carries `space_name` (the linker's space) so the consumer can
+ * distinguish in-space citers from cross-space ones.
  */
 export interface EntityDetail extends EntityListRow {
   outbound: Array<{ target_path: string; link_text: string | null }>;
-  inbound: Array<{ source_path: string; link_text: string | null }>;
+  inbound: Array<{
+    space_name: string;
+    source_path: string;
+    link_text: string | null;
+  }>;
 }
 
 export async function getEntity(
@@ -478,9 +489,16 @@ export async function getEntity(
     SELECT target_path, link_text FROM relationships
     WHERE space_name = ${space_name} AND source_path = ${source_path}
   `;
+  // Inbound includes two shapes of relationships row:
+  //   - same-space:  (space_name = us, target_path = our path)
+  //   - cross-space: (any space, target_path = "/{us}/{our path}")
+  // Both come from a single SQL query so we don't pay the round-trip cost
+  // of two separate selects.
+  const crossTarget = `/${space_name}/${source_path}`;
   const inbound = await sql`
-    SELECT source_path, link_text FROM relationships
-    WHERE space_name = ${space_name} AND target_path = ${source_path}
+    SELECT space_name, source_path, link_text FROM relationships
+    WHERE (space_name = ${space_name} AND target_path = ${source_path})
+       OR target_path = ${crossTarget}
   `;
 
   return {
@@ -499,6 +517,7 @@ export async function getEntity(
       link_text: r.link_text as string | null,
     })),
     inbound: inbound.map((r) => ({
+      space_name: r.space_name as string,
       source_path: r.source_path as string,
       link_text: r.link_text as string | null,
     })),
