@@ -32,6 +32,7 @@ import { ApiError } from "../lib/errors.js";
 import { createSql } from "../lib/sql.js";
 import { safeResolve } from "../lib/file-edits.js";
 import { shouldIgnorePath } from "../lib/fs-watcher.js";
+import { loadSpacesMap } from "../lib/spaces.js";
 import {
   instrumentArticle,
   renderArticleIndex,
@@ -60,17 +61,6 @@ async function knownPathsFor(spaceName: string): Promise<Set<string>> {
   return out;
 }
 
-async function allSpaceWatchDirs(): Promise<Map<string, string>> {
-  const sql = createSql();
-  const rows = await sql`
-    SELECT name, watch_dir FROM spaces WHERE watch_dir IS NOT NULL
-  `;
-  const map = new Map<string, string>();
-  for (const row of rows) {
-    map.set(row.name as string, row.watch_dir as string);
-  }
-  return map;
-}
 
 // ── GET / — daemon landing ────────────────────────────────────────
 
@@ -166,7 +156,7 @@ readerRouter.get("/:space/wiki/*", async (c) => {
 
   const original = readFileSync(abs, "utf-8");
   const knownPaths = await knownPathsFor(space);
-  const spaces = await allSpaceWatchDirs();
+  const spaces = await loadSpacesMap();
   const instrumented = instrumentArticle(original, articlePath, knownPaths, space, {
     watchDir,
     spaces,

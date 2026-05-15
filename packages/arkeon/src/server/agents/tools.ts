@@ -38,7 +38,7 @@ import {
   type EntityDetail,
   type EntityType,
 } from "../lib/entities.js";
-import { createSql } from "../lib/sql.js";
+import { loadSpacesMap } from "../lib/spaces.js";
 
 import { defineTool, type ToolFactory } from "./define-tool.js";
 import { describeAllowed, resolveSpaceArg } from "./space-scope.js";
@@ -94,21 +94,6 @@ function spaceUrl(spaceName: string, path: string): string {
   return `/${encodeURIComponent(spaceName)}/${segments}`;
 }
 
-/**
- * Pull every registered space into `name → watch_dir`. Used by the
- * href rewriter to resolve cross-space links (`/<other-space>/...`)
- * against the other space's `watch_dir` on disk. Returns an empty
- * map if the spaces table is empty.
- */
-async function loadAllSpaces(): Promise<Map<string, string>> {
-  const sql = createSql();
-  const rows = (await sql`
-    SELECT name, watch_dir FROM spaces WHERE watch_dir IS NOT NULL
-  `) as unknown as Array<{ name: string; watch_dir: string }>;
-  const map = new Map<string, string>();
-  for (const row of rows) map.set(row.name, row.watch_dir);
-  return map;
-}
 
 /**
  * Format a file's content with line-number prefixes for `read_file`.
@@ -862,7 +847,7 @@ const editFileTool = defineTool("edit_file", {
     // relative paths. `old_string` is intentionally NOT rewritten —
     // it must match disk bytes verbatim (i.e. the already-rewritten
     // relative form the agent just read).
-    const spaces = await loadAllSpaces();
+    const spaces = await loadSpacesMap();
     const rewriteOpts = {
       fromPath: input.path,
       spaceName: ctx.space.name,
@@ -973,7 +958,7 @@ const createFileTool = defineTool("create_file", {
     if (failure) {
       throw new Error(formatCreateFileValidationError(failure, html));
     }
-    const spaces = await loadAllSpaces();
+    const spaces = await loadSpacesMap();
     const rewritten = rewriteHrefsForWrite(html, {
       fromPath: path,
       spaceName: ctx.space.name,
