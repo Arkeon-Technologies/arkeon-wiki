@@ -39,7 +39,7 @@
 
 import { parse as parseHtml } from "node-html-parser";
 import { posix } from "node:path";
-import { relative as fsRelative, resolve as fsResolve } from "node:path";
+import { relative as fsRelative, resolve as fsResolve, sep as fsSep } from "node:path";
 
 const SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 
@@ -130,6 +130,7 @@ export function maybeRewriteHref(
 
   if (firstSegment === opts.spaceName) {
     const rel = computeInSpaceRelative(opts.fromPath, inSpacePath);
+    if (rel === null) return null;
     return encodeRelPath(rel) + suffix;
   }
 
@@ -142,6 +143,7 @@ export function maybeRewriteHref(
       otherWatchDir,
       inSpacePath,
     );
+    if (rel === null) return null;
     return encodeRelPath(rel) + suffix;
   }
 
@@ -152,9 +154,25 @@ export function maybeRewriteHref(
   return null;
 }
 
-function computeInSpaceRelative(fromPath: string, targetInSpace: string): string {
+function computeInSpaceRelative(
+  fromPath: string,
+  targetInSpace: string,
+): string | null {
+  // Normalize first so any `..` segments collapse. If the result
+  // still escapes the space root, refuse the rewrite — we don't
+  // emit relative paths that step outside the watch_dir, even when
+  // the agent literally asks for them (`/{thisSpace}/../../etc/passwd`
+  // would otherwise produce a working filesystem-relative link).
+  const normalized = posix.normalize(targetInSpace);
+  if (
+    normalized.startsWith("../") ||
+    normalized === ".." ||
+    normalized.startsWith("/")
+  ) {
+    return null;
+  }
   const fromDir = posix.dirname(fromPath);
-  const rel = posix.relative(fromDir, targetInSpace);
+  const rel = posix.relative(fromDir, normalized);
   return rel === "" ? "." : rel;
 }
 
@@ -163,12 +181,20 @@ function computeCrossSpaceRelative(
   fromPath: string,
   otherWatchDir: string,
   targetInOtherSpace: string,
-): string {
+): string | null {
   // Watch dirs are absolute filesystem paths; use the OS-native
   // `path` module (not posix) so Windows separators behave
   // correctly. Output is normalized back to posix below.
-  const articleAbsDir = fsResolve(thisWatchDir, posix.dirname(fromPath));
+  const normDir = fsResolve(otherWatchDir);
   const targetAbs = fsResolve(otherWatchDir, targetInOtherSpace);
+  // Refuse if the resolved target falls outside the destination
+  // space's watch_dir. Without this guard, `/other/../../etc/passwd`
+  // resolves to `/etc/passwd` and the rewriter happily produces a
+  // valid filesystem-relative href escaping every space root.
+  if (targetAbs !== normDir && !targetAbs.startsWith(normDir + fsSep)) {
+    return null;
+  }
+  const articleAbsDir = fsResolve(thisWatchDir, posix.dirname(fromPath));
   const rel = fsRelative(articleAbsDir, targetAbs);
   const normalized = rel.split(/[\\/]/g).join("/");
   return normalized === "" ? "." : normalized;

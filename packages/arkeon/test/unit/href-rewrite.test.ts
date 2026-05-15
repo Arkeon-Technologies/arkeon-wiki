@@ -150,6 +150,90 @@ describe("maybeRewriteHref — pass-throughs", () => {
   });
 });
 
+describe("maybeRewriteHref — path traversal guards", () => {
+  it("refuses an in-space href that escapes the watch_dir via ..", () => {
+    expect(
+      maybeRewriteHref("/primary/../../etc/passwd", makeOpts()),
+    ).toBeNull();
+  });
+
+  it("refuses an in-space href that resolves to bare parent", () => {
+    expect(maybeRewriteHref("/primary/..", makeOpts())).toBeNull();
+  });
+
+  it("refuses a cross-space href whose target escapes the destination space", () => {
+    // `../../etc/passwd` resolved against /tmp/work/other goes to
+    // /tmp/etc/passwd — outside that watch_dir. Refuse.
+    expect(
+      maybeRewriteHref("/other/../../etc/passwd", makeOpts()),
+    ).toBeNull();
+  });
+
+  it("collapses harmless . / .. segments without rejecting", () => {
+    // `wiki/./bar.html` normalizes to `wiki/bar.html` — still in space.
+    expect(
+      maybeRewriteHref("/primary/wiki/./bar.html", makeOpts()),
+    ).toBe("bar.html");
+    // `wiki/sub/../bar.html` normalizes to `wiki/bar.html` — still in space.
+    expect(
+      maybeRewriteHref("/primary/wiki/sub/../bar.html", makeOpts()),
+    ).toBe("bar.html");
+  });
+});
+
+describe("maybeRewriteHref — nested watch_dirs", () => {
+  // Pathological setup: space B's watch_dir lives INSIDE space A's. A
+  // relative path from A could match A's interior AND B as a sibling.
+  // The for-loop iterates `spaces` in insertion order; the first
+  // matching prefix wins. Document the behavior so consumers don't
+  // accidentally rely on it being something else.
+  const nested = new Map<string, string>([
+    ["outer", "/tmp/outer"],
+    ["inner", "/tmp/outer/sub"],
+  ]);
+
+  it("a /inner/... href from outer resolves through inner's watch_dir", () => {
+    expect(
+      maybeRewriteHref(
+        "/inner/wiki/bar.html",
+        {
+          fromPath: "wiki/foo.html",
+          spaceName: "outer",
+          spaces: nested,
+        },
+      ),
+    ).toBe("../sub/wiki/bar.html");
+  });
+
+  it("a /outer/sub/... href from outer treats it as the outer-space path it literally is", () => {
+    expect(
+      maybeRewriteHref(
+        "/outer/sub/wiki/bar.html",
+        {
+          fromPath: "wiki/foo.html",
+          spaceName: "outer",
+          spaces: nested,
+        },
+      ),
+    ).toBe("../sub/wiki/bar.html");
+  });
+});
+
+describe("maybeRewriteHref — round-trip stability", () => {
+  it("a rewritten href stays put when re-fed through the rewriter", () => {
+    const opts = makeOpts({ fromPath: "wiki/_plans/sources/x.html" });
+    const onceRewritten = maybeRewriteHref(
+      "/primary/wiki/foo.html",
+      opts,
+    );
+    // The output is a plain relative href — no /-prefix — so the
+    // second pass leaves it alone (maybeRewriteHref returns null for
+    // relative inputs).
+    expect(onceRewritten).toBe("../../foo.html");
+    expect(maybeRewriteHref(onceRewritten!, opts)).toBeNull();
+  });
+});
+
 describe("rewriteHrefsForWrite — full document", () => {
   it("rewrites every <a>, <img>, and <link> in a full HTML doc", () => {
     const html = `<!DOCTYPE html>
