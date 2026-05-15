@@ -3,7 +3,11 @@
 
 import { describe, it, expect } from "vitest";
 
-import { safeResolve, validateWikiHtmlDocument } from "../../src/server/lib/file-edits.js";
+import {
+  safeResolve,
+  sanitizeEditedHtmlContent,
+  validateWikiHtmlDocument,
+} from "../../src/server/lib/file-edits.js";
 
 describe("safeResolve", () => {
   it("resolves a relative path under the watch dir", () => {
@@ -93,5 +97,72 @@ describe("validateWikiHtmlDocument", () => {
   it("rejects a document with no <body>", () => {
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>X</title></head></html>`;
     expect(validateWikiHtmlDocument(html)).toEqual({ reason: "missing-body" });
+  });
+});
+
+describe("sanitizeEditedHtmlContent", () => {
+  it("leaves well-formed HTML unchanged", () => {
+    const input = `<p>Hello world</p>`;
+    const result = sanitizeEditedHtmlContent(input);
+    expect(result.clean).toBe(input);
+    expect(result.trimmed).toBeUndefined();
+  });
+
+  it("preserves trailing whitespace and newlines", () => {
+    const input = `<p>Hello</p>\n  \n`;
+    const result = sanitizeEditedHtmlContent(input);
+    expect(result.clean).toBe(input);
+    expect(result.trimmed).toBeUndefined();
+  });
+
+  it("strips the issue #160 leak pattern", () => {
+    // Faithful reproduction of the actual leak observed in
+    // wiki/why-does-lifelong-learning-feel-like-freedom.html.
+    const input = `<p><strong>Lifelong learning is optimization culture.</strong> Body text here.</p>"}]}]၊commentary to=functions.mark_processed  ปมถวายสัตย์  诺果  全民彩票天天ে?}}`;
+    const result = sanitizeEditedHtmlContent(input);
+    expect(result.clean).toBe(`<p><strong>Lifelong learning is optimization culture.</strong> Body text here.</p>\n`);
+    expect(result.trimmed).toContain("commentary to=functions");
+    expect(result.trimmed).toContain("诺果");
+  });
+
+  it("strips garbage after the last of multiple closing tags", () => {
+    const input = `<p>First.</p><p>Second.</p> stray bytes`;
+    const result = sanitizeEditedHtmlContent(input);
+    expect(result.clean).toBe(`<p>First.</p><p>Second.</p>\n`);
+    expect(result.trimmed).toBe(` stray bytes`);
+  });
+
+  it("leaves plain text alone when no closing tag exists", () => {
+    // A legitimate use case: inserting an HTML comment, a self-closing
+    // tag, or plain text. We can't disambiguate from a partial-tag
+    // leak, so we choose not to mangle.
+    const input = `just some text`;
+    const result = sanitizeEditedHtmlContent(input);
+    expect(result.clean).toBe(input);
+    expect(result.trimmed).toBeUndefined();
+  });
+
+  it("leaves self-closing tags alone when no </tag> appears", () => {
+    const input = `<br/><img src="x.png"/>`;
+    const result = sanitizeEditedHtmlContent(input);
+    expect(result.clean).toBe(input);
+    expect(result.trimmed).toBeUndefined();
+  });
+
+  it("permits closing tags with optional internal whitespace", () => {
+    // `</p >` is unusual but valid HTML and shouldn't be misclassified.
+    const input = `<p>Hello</p >`;
+    const result = sanitizeEditedHtmlContent(input);
+    expect(result.clean).toBe(input);
+    expect(result.trimmed).toBeUndefined();
+  });
+
+  it("strips JSON tool-call closure even without channel routing text", () => {
+    // Other leak shapes: just `"}]}` or just `}}` would still be
+    // suspicious after a clean `</p>`.
+    const input = `<p>Hello world</p>"}]}`;
+    const result = sanitizeEditedHtmlContent(input);
+    expect(result.clean).toBe(`<p>Hello world</p>\n`);
+    expect(result.trimmed).toBe(`"}]}`);
   });
 });

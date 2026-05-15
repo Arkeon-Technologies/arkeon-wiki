@@ -138,7 +138,15 @@ export async function applyEdit(
             `(file has ${lines.length} lines)`,
         );
       }
-      const inserted = edit.content.split("\n");
+      const sanitized = sanitizeEditedHtmlContent(edit.content);
+      if (sanitized.trimmed) {
+        console.warn(
+          `[edit_file/insert_at_line] ${edit.path}: stripped ${sanitized.trimmed.length} bytes ` +
+            `of trailing garbage after last HTML closing tag. ` +
+            `Sample: ${JSON.stringify(sanitized.trimmed.slice(0, 120))}`,
+        );
+      }
+      const inserted = sanitized.clean.split("\n");
       if (inserted[inserted.length - 1] === "") inserted.pop();
       lines.splice(edit.line_number - 1, 0, ...inserted);
       writeFileSync(absPath, lines.join("\n"), "utf-8");
@@ -167,7 +175,15 @@ export async function applyEdit(
             `Expand the span until it is.`,
         );
       }
-      const updated = original.replace(edit.old_string, edit.new_string);
+      const sanitized = sanitizeEditedHtmlContent(edit.new_string);
+      if (sanitized.trimmed) {
+        console.warn(
+          `[edit_file/str_replace] ${edit.path}: stripped ${sanitized.trimmed.length} bytes ` +
+            `of trailing garbage after last HTML closing tag. ` +
+            `Sample: ${JSON.stringify(sanitized.trimmed.slice(0, 120))}`,
+        );
+      }
+      const updated = original.replace(edit.old_string, sanitized.clean);
       writeFileSync(absPath, updated, "utf-8");
       const sync = await syncFile(space, edit.path);
       return { path: edit.path, kind: "str_replace", sync };
@@ -193,6 +209,57 @@ function countOccurrences(haystack: string, needle: string): number {
     pos += needle.length;
   }
   return count;
+}
+
+/**
+ * Defensive sanitizer for HTML content produced by an LLM and passed
+ * verbatim into `insert_at_line.content` or `str_replace.new_string`.
+ *
+ * Strips trailing non-whitespace bytes that sit AFTER the last
+ * well-formed HTML closing tag in the content. Surfaced by issue #160
+ * where a connector tick on gpt-5.4-mini emitted structured-output
+ * tool-call channel markers (`"}]}]commentary to=functions.X`) plus
+ * multilingual filler tokens at the end of the `content` parameter,
+ * which then landed verbatim in the article body and persisted to
+ * disk.
+ *
+ * Heuristic: agents authoring wiki edits emit `<p>…</p>` or
+ * `<li>…</li>`-shaped fragments. Anything after the last `</tag>`
+ * other than whitespace is suspicious. If we find no closing tag at
+ * all the content is left alone (could be a self-closing block,
+ * could be plain text — out of our domain).
+ *
+ * Caller is expected to console.warn the trimmed bytes so the issue
+ * is visible to operators tailing the daemon log.
+ */
+export function sanitizeEditedHtmlContent(
+  content: string,
+): { clean: string; trimmed?: string } {
+  // Walk every well-formed closing tag and remember the end position
+  // of the last one. Permissive on whitespace inside the tag (`</p >`
+  // is rare but parses).
+  let lastCloseEnd = -1;
+  const closingTagRe = /<\/[a-zA-Z][a-zA-Z0-9]*\s*>/g;
+  let m;
+  while ((m = closingTagRe.exec(content)) !== null) {
+    lastCloseEnd = m.index + m[0].length;
+  }
+  if (lastCloseEnd === -1) {
+    // No HTML closing tags. Leave the content alone — could be
+    // plain-text editing, could be a self-closing-only block.
+    return { clean: content };
+  }
+  const trailing = content.slice(lastCloseEnd);
+  if (trailing.trim().length === 0) {
+    // Trailing whitespace / newlines are fine.
+    return { clean: content };
+  }
+  // Suspicious trailing payload. Strip it; preserve one trailing
+  // newline so the inserted block ends cleanly.
+  return {
+    clean: content.slice(0, lastCloseEnd) + "\n",
+    trimmed: trailing,
+  };
 }
 
 /**
