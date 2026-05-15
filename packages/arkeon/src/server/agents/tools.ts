@@ -26,6 +26,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { z } from "zod";
 
 import { safeResolve, validateWikiHtmlDocument } from "../lib/file-edits.js";
+import { rewriteHrefsForWrite } from "../lib/href-rewrite.js";
 import { MAX_QUERY_PATTERNS, searchKeyword } from "../lib/search.js";
 import {
   deleteEntityTag,
@@ -37,6 +38,7 @@ import {
   type EntityDetail,
   type EntityType,
 } from "../lib/entities.js";
+import { createSql } from "../lib/sql.js";
 
 import { defineTool, type ToolFactory } from "./define-tool.js";
 import { describeAllowed, resolveSpaceArg } from "./space-scope.js";
@@ -90,6 +92,22 @@ function spaceUrl(spaceName: string, path: string): string {
   if (path.startsWith("/")) return path;
   const segments = path.split("/").map(encodeURIComponent).join("/");
   return `/${encodeURIComponent(spaceName)}/${segments}`;
+}
+
+/**
+ * Pull every registered space into `name → watch_dir`. Used by the
+ * href rewriter to resolve cross-space links (`/<other-space>/...`)
+ * against the other space's `watch_dir` on disk. Returns an empty
+ * map if the spaces table is empty.
+ */
+async function loadAllSpaces(): Promise<Map<string, string>> {
+  const sql = createSql();
+  const rows = (await sql`
+    SELECT name, watch_dir FROM spaces WHERE watch_dir IS NOT NULL
+  `) as unknown as Array<{ name: string; watch_dir: string }>;
+  const map = new Map<string, string>();
+  for (const row of rows) map.set(row.name, row.watch_dir);
+  return map;
 }
 
 /**
@@ -786,7 +804,12 @@ const editFileTool = defineTool("edit_file", {
     "Mandatory protocol: read_file the path FIRST. After a successful edit, " +
     "the read is invalidated — re-read before your next edit on the same path. " +
     "For new files, use create_file (no read needed). To delete a wiki, use " +
-    "delete_wiki (separate tool).",
+    "delete_wiki (separate tool).\n" +
+    "Href handling: hrefs you write in `content` and `new_string` may use " +
+    "space-rooted URL form (`/{space}/{path}`) — the server rewrites them " +
+    "to correct on-disk relative paths. `old_string` is matched verbatim " +
+    "against disk bytes (the already-rewritten relative form), so paste it " +
+    "exactly as `read_file` returned it.",
   inputSchema: z.object({
     mode: z.enum(["insert_at_line", "str_replace"]).describe("Which kind of edit."),
     path: z.string().describe("Relative path inside the space's watch_dir."),
@@ -834,16 +857,29 @@ const editFileTool = defineTool("edit_file", {
       );
     }
 
+    // The rewriter walks `<a>`, `<img>`, `<link>` in the supplied
+    // fragment and translates `/{space}/...` hrefs to on-disk
+    // relative paths. `old_string` is intentionally NOT rewritten —
+    // it must match disk bytes verbatim (i.e. the already-rewritten
+    // relative form the agent just read).
+    const spaces = await loadAllSpaces();
+    const rewriteOpts = {
+      fromPath: input.path,
+      spaceName: ctx.space.name,
+      spaces,
+    };
+
     if (input.mode === "insert_at_line") {
       if (input.line_number == null || input.content == null) {
         throw new Error("edit_file mode='insert_at_line' requires `line_number` and `content`");
       }
+      const content = rewriteHrefsForWrite(input.content, rewriteOpts);
       const result = await ctx.applyEdit(
         {
           kind: "insert_at_line",
           path: input.path,
           line_number: input.line_number,
-          content: input.content,
+          content,
         },
         { edit_kind: "insert_at_line" },
       );
@@ -858,12 +894,13 @@ const editFileTool = defineTool("edit_file", {
       if (input.old_string == null || input.new_string == null) {
         throw new Error("edit_file mode='str_replace' requires `old_string` and `new_string`");
       }
+      const new_string = rewriteHrefsForWrite(input.new_string, rewriteOpts);
       const result = await ctx.applyEdit(
         {
           kind: "str_replace",
           path: input.path,
           old_string: input.old_string,
-          new_string: input.new_string,
+          new_string,
         },
         { edit_kind: "str_replace" },
       );
@@ -936,8 +973,14 @@ const createFileTool = defineTool("create_file", {
     if (failure) {
       throw new Error(formatCreateFileValidationError(failure, html));
     }
+    const spaces = await loadAllSpaces();
+    const rewritten = rewriteHrefsForWrite(html, {
+      fromPath: path,
+      spaceName: ctx.space.name,
+      spaces,
+    });
     const result = await ctx.applyEdit(
-      { kind: "create", path, content: html },
+      { kind: "create", path, content: rewritten },
       { edit_kind: "create" },
     );
     return { path: result.path, mode: "create" as const };
