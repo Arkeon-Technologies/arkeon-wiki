@@ -25,8 +25,9 @@ is no auth.
 
 **Space**: a registered watch directory, identified by name. URLs are
 all rooted at the space: \`/{space}/...\`. Names match
-\`[a-zA-Z0-9][a-zA-Z0-9._-]*\`. Multiple spaces can coexist on one
-daemon.
+\`[a-zA-Z0-9][a-zA-Z0-9._-]*\`, max 100 chars, and cannot collide with
+a daemon-level route name (\`health\`, \`ready\`, \`help\`, \`llms.txt\`,
+\`spaces\` are reserved). Multiple spaces can coexist on one daemon.
 
 **Entity**: a row in the index for one file. Two types:
   - \`wiki\`  — an article under \`wiki/**/*.html\` with a \`<title>\` and
@@ -48,9 +49,21 @@ underlying \`<a>\` tags stay in the file and render normally in the
 reader. The relationship graph is the internal corpus only; external
 citations aren't surfaced through the API.
 
-**Red link**: a relationship whose \`target_path\` does not (yet) match
-an entity row — a link to a future article. Red links are the queue
-the \`writer\` agent draws from. See \`GET /{space}/redlinks\`.
+**Cross-space links**: a wiki can link to an article in another
+registered space via the canonical \`/{otherSpace}/{path}\` href form.
+On disk these write as ordinary relative paths (so wikis still open
+under \`file://\`); over HTTP the reader rewrites them back to
+\`/{otherSpace}/...\` so the link clicks through. In the relationship
+graph the edge's \`target_path\` is stored in the canonical
+\`/{otherSpace}/{path}\` form. \`GET /{space}/entities/{path}\` returns
+inbound citations from any space (each inbound row carries the
+linker's home \`space_name\`); cross-space red links are filtered out
+of \`GET /{space}/redlinks\` so a writer scoped to space A doesn't try
+to fulfill gaps in space B.
+
+**Red link**: a same-space relationship whose \`target_path\` does not
+(yet) match an entity row — a link to a future article. Red links are
+the queue the \`writer\` agent draws from. See \`GET /{space}/redlinks\`.
 
 **Plan wiki**: a wiki under \`wiki/_plans/...\` with
 \`<meta name="kind" content="plan">\`. Authored by the \`proposer\`
@@ -151,8 +164,9 @@ Plans are real wikis — they appear in the index and you can read them.
 \`GET  /spaces\`                  — \`{spaces: [{name, watch_dir, created_at, entity_count}]}\`.
 \`GET  /spaces/{name}\`           — single space.
 \`POST /spaces\`                  — register a directory. Body
-                                  \`{name, watch_dir}\`. 409 on name
-                                  collision.
+                                  \`{name, watch_dir}\`. Returns 201
+                                  with \`{name, watch_dir}\`. 409 on
+                                  name collision.
 
 ### Entities
 
@@ -190,16 +204,16 @@ Plans are real wikis — they appear in the index and you can read them.
   inbound edges).
 
 \`GET  /{space}/recent?since=&role=&limit=&offset=\`
-  \`entity_edits\` feed. Each row: \`{entity_path, by_role, edit_kind,
-  edit_note, content_hash, at}\`. \`by_role\` is one of \`human\`,
-  \`editor\`, \`proposer\`, \`writer\`, \`connector\`.
+  \`entity_edits\` feed. Response: \`{space, edits: [{entity_path,
+  by_role, edit_kind, edit_note, content_hash, at}]}\`. \`by_role\` is
+  one of \`human\`, \`editor\`, \`proposer\`, \`writer\`, \`connector\`.
 
 ### Search
 
 \`GET  /{space}/search?q=&type=&limit=&snippets=&regex=\`
   Keyword search via ripgrep. \`q\` repeatable up to 10 times (OR).
   \`type=wiki\` / \`type=file\` to restrict. \`regex=true\` to opt into
-  regex mode. \`snippets=N\` to cap snippets per file (default reasonable).
+  regex mode. \`snippets=N\` to cap snippets per file (default 3).
   Response shape:
     \`{query, keyword: {hits: [{space_name, source_path, type, label,
       match_count, snippets: [{line_number, text}]}], total,
@@ -245,7 +259,13 @@ Plans are real wikis — they appear in the index and you can read them.
 ## Errors
 
 All errors return JSON:
-  \`{"error": {"code": "...", "message": "...", "request_id": "..."}}\`
+  \`{"error": {"code": "...", "message": "...", "request_id": "...",
+              "details": {...}}}\`
+
+\`details\` is optional and only set for codes that carry structured
+context. Today's only example: \`space_busy\` populates
+\`details.in_flight_role\` so a caller can tell which role is holding
+the per-space mutex.
 
 Common codes: \`validation_error\` (400), \`not_found\` (404),
 \`space_busy\` (409, agent runs), \`not_implemented\` (501, chat
