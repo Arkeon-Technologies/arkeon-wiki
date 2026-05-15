@@ -732,6 +732,36 @@ describe("loadBundledTemplates", () => {
     expect(t.cron, "proposer.cron").toBeTruthy();
   });
 
+  it("auto-loads connector from disk with no config present", () => {
+    // Connector is the cross-space role: spaces: ["*"], reads
+    // across every registered space, writes only to the triggering
+    // space. Its job is to find substantive cross-space connections
+    // and either weave them inline into existing articles or create
+    // synthesis articles.
+    const templates = loadBundledTemplates();
+    expect(Object.keys(templates)).toContain("connector");
+    const t = templates.connector;
+    expect(t.system, "connector.system").toBeTruthy();
+    expect(t.tools?.length, "connector.tools").toBeGreaterThan(0);
+    // Multi-space scope is the defining feature.
+    expect(t.spaces, "connector.spaces").toEqual(["*"]);
+    // Both edit_file (inline citation) and create_file (synthesis
+    // article) live in the whitelist; the runtime enforces "write
+    // only to the triggering space" so multi-space reads remain
+    // safe.
+    expect(t.tools, "connector.tools").toContain("edit_file");
+    expect(t.tools, "connector.tools").toContain("create_file");
+    // Cross-space inbound is the killer feature for this role —
+    // get_entity (with the PR-1 widening) surfaces who already cites
+    // an article from another space.
+    expect(t.tools, "connector.tools").toContain("get_entity");
+    expect(t.tools, "connector.tools").toContain("search");
+    // Queue bookkeeping: tracks which wikis have been surveyed at
+    // their current content hash.
+    expect(t.tools, "connector.tools").toContain("mark_processed");
+    expect(t.cron, "connector.cron").toBeTruthy();
+  });
+
   it("writer is create-only — no edit_file, tag_entity, or mark_processed", () => {
     // The new writer drains the red-link queue and never edits
     // existing articles or marks sources. Processing-marker
