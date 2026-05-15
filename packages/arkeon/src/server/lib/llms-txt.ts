@@ -148,6 +148,34 @@ Plans are real wikis — they appear in the index and you can read them.
                                                 409 if the space is
                                                 busy.
 
+### Adding sources (write-back)
+
+Callers can push new source material into the corpus without writing
+to the watched directory directly. The standard convention is the
+\`/inbox\` endpoint; \`/sources/\` is the path-explicit specialization.
+
+  - \`POST /{space}/inbox\`                    — JSON \`{text, title?,
+                                                kind?, tags?}\`. Server
+                                                writes the file under
+                                                \`sources/inbox/<UTC-
+                                                date>/<slug>.<md|txt>\`
+                                                and returns the synced
+                                                entity. The standard
+                                                way to "drop a note,
+                                                let the agents pick it
+                                                up."
+  - \`PUT /{space}/sources/{path}\`            — raw body, caller-chosen
+                                                path under \`sources/\`.
+                                                409 on existing path
+                                                unless
+                                                \`?overwrite=true\`.
+                                                For programmatic
+                                                imports that own their
+                                                own naming.
+
+New sources have no \`*.processed_hash\` tag, so the editor agent picks
+them up on its next cron tick.
+
 ================================================================
 ## Routes
 
@@ -226,6 +254,35 @@ Plans are real wikis — they appear in the index and you can read them.
   be indexed) vs unsupported (binary, silently skipped). Response:
     \`{space, watch_dir, total, supported: {count, by_ext}, unsupported:
       {count, by_ext, examples: {".pdf": [paths]}}}\`.
+
+### Write-back
+
+\`POST /{space}/inbox\`
+  Add a new source the standard way — server picks the path. Body:
+    \`{
+       "text":  "...",                  // required, non-empty
+       "title": "...",                  // optional, becomes slug
+       "kind":  "md" | "txt",           // optional, default "md"
+       "tags":  {"k":"v", ...}          // optional, stamped on entity
+     }\`
+  Writes to \`sources/inbox/<YYYY-MM-DD>/<slug>.<ext>\` (UTC date). With
+  \`kind: "md"\` and a \`title\`, prepends a \`# <title>\` heading so the
+  file is self-describing on disk. Slug collisions auto-suffix
+  (\`-2\`, \`-3\`, ...). Optional \`X-Caller\` header (allowlist
+  \`[A-Za-z0-9._-]{1,40}\`, fallback \`"api"\`) sets
+  \`entity_edits.by_role\`. 10 MB body cap. 413 on oversized body, 400
+  on validation, 404 on missing space.
+  Response (201): \`{space, path, entity}\` with the synced entity inline.
+
+\`PUT /{space}/sources/{path}\`
+  Path-explicit source write. URL tail is the disk path (always rooted
+  in \`sources/\`); raw body is the content. 409 on existing path unless
+  \`?overwrite=true\` (which destroys + recreates, emitting two
+  \`entity_edits\` rows). Same \`X-Caller\` contract as \`/inbox\`. Wiki
+  paths and binary content (NUL byte in first 8 KB AND extension not on
+  the text allowlist) are rejected 400. 10 MB body cap.
+  Response: \`{space, path, entity, overwrote}\` — 201 if new, 200 if
+  \`overwrote: true\`.
 
 ### Agents
 

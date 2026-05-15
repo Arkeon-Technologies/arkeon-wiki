@@ -43,6 +43,27 @@ const MAX_TAG_KEY_LEN = 100;
 const MAX_TAG_VALUE_LEN = 500;
 const MAX_TAGS = 32;
 
+/**
+ * Reject before buffering when `Content-Length` is over the cap.
+ * Body parsing in Hono (`c.req.json`, `c.req.arrayBuffer`) reads the
+ * full payload into memory before returning, so checking byte length
+ * after the await is too late on a 1 GB upload. CL is advisory — a
+ * client lying about it still gets caught by the post-buffer check —
+ * but in honest cases it lets us 413 cheaply.
+ */
+function assertContentLengthUnderCap(c: { req: { header(name: string): string | undefined } }): void {
+  const raw = c.req.header("content-length");
+  if (!raw) return;
+  const n = Number(raw);
+  if (Number.isFinite(n) && n > MAX_BODY_BYTES) {
+    throw new ApiError(
+      413,
+      "payload_too_large",
+      `Content-Length ${n} exceeds ${MAX_BODY_BYTES} bytes`,
+    );
+  }
+}
+
 async function loadSpace(
   spaceName: string,
 ): Promise<{ name: string; watch_dir: string }> {
@@ -66,6 +87,7 @@ interface InboxBody {
 }
 
 inboxRouter.post("/:space/inbox", async (c) => {
+  assertContentLengthUnderCap(c);
   const spaceName = c.req.param("space");
   const space = await loadSpace(spaceName);
 
@@ -107,6 +129,7 @@ inboxRouter.post("/:space/inbox", async (c) => {
 // ── PUT /:space/sources/* ───────────────────────────────────────────
 
 inboxRouter.put("/:space/sources/*", async (c) => {
+  assertContentLengthUnderCap(c);
   const spaceName = c.req.param("space");
   const space = await loadSpace(spaceName);
 
@@ -114,8 +137,12 @@ inboxRouter.put("/:space/sources/*", async (c) => {
   const prefix = `/${spaceName}/sources/`;
   const idx = url.pathname.indexOf(prefix);
   const tail = idx >= 0 ? url.pathname.slice(idx + prefix.length) : "";
-  if (!tail) {
-    throw new ApiError(400, "validation_error", "path is required");
+  if (!tail || tail.endsWith("/")) {
+    throw new ApiError(
+      400,
+      "validation_error",
+      "path must point at a file (non-empty, no trailing slash)",
+    );
   }
   const relativePath = `sources/${decodeURIComponent(tail)}`;
   assertSourcePath(relativePath);
@@ -150,11 +177,25 @@ inboxRouter.put("/:space/sources/*", async (c) => {
     // Overwrite is destroy + recreate (see tasks/inbox-api.md, open
     // decision #1). Two `entity_edits` rows make the lifecycle honest;
     // the brief gap is harmless given the daemon's single-process model.
+    //
+    // Best-effort under concurrency: two simultaneous overwrites against
+    // the same path can interleave such that the second create observes
+    // the first's file and 500s with "already exists". Acceptable for
+    // v0 — single-writer per logical resource is the expected use case.
+    // A future iteration could thread a "force" option through applyEdit
+    // to make this race-free at the primitive level.
     await applyEdit(
       space,
       { kind: "delete", path: relativePath },
       { role: caller, edit_kind: "delete" },
     );
+    // `entity_edits.at` has millisecond precision and is part of the PK
+    // (see schema/001-foundation.sql). Without a gap, the delete and
+    // the subsequent create can land in the same SQLite millisecond and
+    // the create's `INSERT OR IGNORE` silently drops its audit row,
+    // leaving the lifecycle invisible. A 2ms yield is cheaper than
+    // plumbing an explicit `at` through applyEdit and keeps both rows.
+    await new Promise((resolve) => setTimeout(resolve, 2));
   }
 
   await applyEdit(
@@ -190,6 +231,11 @@ function parseTitle(raw: unknown): string | undefined {
   if (typeof raw !== "string") {
     throw new ApiError(400, "validation_error", "title must be a string");
   }
+  // Empty/whitespace-only title is treated as "no title" — caller gets
+  // the ULID-fallback slug, which is the same path as omitting the field
+  // entirely. Rejecting here would be unfriendly (clients building JSON
+  // dynamically often send "" instead of omitting), so we coerce.
+  if (raw.trim().length === 0) return undefined;
   if (raw.length > MAX_TITLE_LEN) {
     throw new ApiError(
       400,

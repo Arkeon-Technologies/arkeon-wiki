@@ -228,6 +228,32 @@ describe("POST /:space/inbox", () => {
     expect(res.status).toBe(404);
   });
 
+  it("413s on oversized body", async () => {
+    // 11 MB body; the pre-buffer Content-Length gate catches it before
+    // we ever read the JSON. Honest clients are short-circuited cheaply;
+    // a client lying about CL still gets caught by the post-buffer check.
+    const text = "x".repeat(11 * 1024 * 1024);
+    const res = await fetch(`${baseUrl}/${SPACE}/inbox`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it("treats empty/whitespace-only title as no title (ULID fallback)", async () => {
+    const res = await fetch(`${baseUrl}/${SPACE}/inbox`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "x", title: "   " }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as InboxResponse;
+    expect(body.path).toMatch(
+      /^sources\/inbox\/\d{4}-\d{2}-\d{2}\/[0-9a-z]{10}\.md$/,
+    );
+  });
+
   it("does not tag the new source with editor.processed_hash (queues it)", async () => {
     const res = await fetch(`${baseUrl}/${SPACE}/inbox`, {
       method: "POST",
@@ -276,7 +302,7 @@ describe("PUT /:space/sources/*", () => {
     );
   });
 
-  it("?overwrite=true replaces the file and returns overwrote=true", async () => {
+  it("?overwrite=true replaces the file and emits both delete + create audit rows", async () => {
     await fetch(`${baseUrl}/${SPACE}/sources/replace.md`, {
       method: "PUT",
       body: "v1",
@@ -291,6 +317,34 @@ describe("PUT /:space/sources/*", () => {
     expect(readFileSync(join(workdir, "sources/replace.md"), "utf-8")).toBe(
       "v2",
     );
+
+    // The destroy + recreate lifecycle must be observable in the audit
+    // log: one create from the initial PUT, then a delete + a create
+    // from the overwrite. The two-row overwrite is documented in the PR.
+    const sql = createSql();
+    const kinds = (await sql`
+      SELECT edit_kind FROM entity_edits
+      WHERE space_name = ${SPACE} AND entity_path = 'sources/replace.md'
+      ORDER BY at ASC
+    `) as Array<{ edit_kind: string }>;
+    expect(kinds.map((r) => r.edit_kind)).toEqual(["create", "delete", "create"]);
+  });
+
+  it("413s on oversized body", async () => {
+    const body = "x".repeat(11 * 1024 * 1024);
+    const res = await fetch(`${baseUrl}/${SPACE}/sources/big.md`, {
+      method: "PUT",
+      body,
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it("400s on empty path or trailing slash", async () => {
+    const trailing = await fetch(`${baseUrl}/${SPACE}/sources/foo/`, {
+      method: "PUT",
+      body: "x",
+    });
+    expect(trailing.status).toBe(400);
   });
 
   // Note: `..` rejection is unit-tested directly on `assertSourcePath` in
