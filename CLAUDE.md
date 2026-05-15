@@ -177,6 +177,7 @@ JSON API:
 - `GET /{space}/search?q=&type=&limit=&snippets=&regex=` — keyword search via ripgrep. `q` repeatable up to 10 times to OR patterns.
 - `POST /{space}/chat`, `GET /{space}/chat/:conversation_id`, `DELETE ...` — **501 Phase 1 stubs**, wired up in Phase 3.
 - `GET /health` / `GET /ready` — liveness/readiness.
+- `GET /llms.txt` / `GET /help` — hand-written orientation guide for human and LLM callers (data model, flows, every route). Source: `src/server/lib/llms-txt.ts`. **When you add or change an endpoint that's useful for accessing the wiki, update `llms-txt.ts` so callers see the new surface.** A drift-guard unit test (`test/unit/llms-txt.test.ts`) asserts every known route string is present; adding a route without touching the guide will fail CI once you add it to the test, but the test can't detect endpoints you forgot to register at all — treat the guide as a required deliverable for any new route, not an optional polish step.
 
 Human-facing reader (Phase 2):
 

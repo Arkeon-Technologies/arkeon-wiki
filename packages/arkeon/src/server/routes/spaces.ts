@@ -23,6 +23,20 @@ const SPACE_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 const MAX_SPACE_NAME_LEN = 100;
 
 /**
+ * Daemon-level route names that would shadow a space called the same
+ * thing. Hono's exact-match routes win over `/:space`, so a user who
+ * registers a space called `help` would find `GET /help` returns the
+ * orientation guide instead of their article index. Reject up front.
+ */
+const RESERVED_SPACE_NAMES = new Set([
+  "health",
+  "ready",
+  "help",
+  "llms.txt",
+  "spaces",
+]);
+
+/**
  * POST /spaces — register a new space and start watching.
  * Body: { name: string, watch_dir: string }
  *
@@ -55,6 +69,14 @@ spacesRouter.post("/", async (c) => {
       400,
       "validation_error",
       `space name cannot contain '..' (path-traversal guard).`,
+    );
+  }
+  if (RESERVED_SPACE_NAMES.has(body.name.toLowerCase())) {
+    throw new ApiError(
+      400,
+      "validation_error",
+      `space name '${body.name}' is reserved (collides with a daemon-level route). ` +
+        `Reserved: ${[...RESERVED_SPACE_NAMES].join(", ")}.`,
     );
   }
 
