@@ -1,0 +1,282 @@
+// Copyright (c) 2026 Arkeon Technologies, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * Static API guide served at `GET /llms.txt` and `GET /help`. Hand-
+ * maintained — when you add or change a route, update this file. The
+ * smoke test in `llms-txt.test.ts` fails if a known route string is
+ * missing, which catches the most common drift.
+ */
+
+export const LLMS_TXT = `# arkeon-wiki
+
+A filesystem-first knowledge graph. Point the daemon at a directory; it
+watches files, indexes them into SQLite, and treats <a href> links
+between HTML wikis as relationship edges. The filesystem is the source
+of truth — SQLite is the index, the API is a read/write surface over
+that index, and changes to disk are reflected automatically.
+
+This page is the orientation guide for callers (humans and LLMs). It
+describes the data model, the canonical flows, and every route. There
+is no auth.
+
+================================================================
+## Concepts
+
+**Space**: a registered watch directory, identified by name. URLs are
+all rooted at the space: \`/{space}/...\`. Names match
+\`[a-zA-Z0-9][a-zA-Z0-9._-]*\`. Multiple spaces can coexist on one
+daemon.
+
+**Entity**: a row in the index for one file. Two types:
+  - \`wiki\`  — an article under \`wiki/**/*.html\` with a \`<title>\` and
+            optional \`<meta name="X" content="Y">\` tags. Wiki bodies
+            should follow the four-section shape: \`Question\`,
+            \`Current answer\`, \`Evidence\`, \`Open threads\`.
+  - \`file\`  — any other text file in the watch dir (markdown, source,
+            CSV, JSON, plain text, extensionless README, etc.). Binary
+            files (PDF, DOCX, images, archives) are intentionally not
+            indexed; use the \`sources/scan\` endpoint to see what was
+            skipped.
+
+**Relationship**: every internal \`<a href>\` in a wiki becomes an
+edge with \`source_path\` → \`target_path\`. Paths are resolved relative
+to the article's directory. External URLs (\`https://\`, \`mailto:\`,
+\`tel:\`, ...), pure fragments (\`#section\`), and paths that escape
+every registered space are NOT recorded as relationships — but the
+underlying \`<a>\` tags stay in the file and render normally in the
+reader. The relationship graph is the internal corpus only; external
+citations aren't surfaced through the API.
+
+**Red link**: a relationship whose \`target_path\` does not (yet) match
+an entity row — a link to a future article. Red links are the queue
+the \`writer\` agent draws from. See \`GET /{space}/redlinks\`.
+
+**Plan wiki**: a wiki under \`wiki/_plans/...\` with
+\`<meta name="kind" content="plan">\`. Authored by the \`proposer\`
+agent; lists the gap-articles a given source suggests, with red links.
+Plans are real wikis — they appear in the index and you can read them.
+
+**Properties vs tags** (both JSON bags on the entity):
+  - \`properties\` is file-derived: rebuilt from \`<meta>\` tags every
+    time the file changes. Don't expect tags written here to persist.
+  - \`tags\` is agent-applied bookkeeping (e.g.
+    \`editor.processed_hash\`, \`proposer.processed_hash\`). Survives
+    content edits; cleared only when the file is deleted.
+
+================================================================
+## Canonical flows
+
+### Discovery — "what's in this daemon?"
+  1. \`GET /spaces\`                           — list spaces + entity counts.
+  2. \`GET /{space}/entities?type=wiki&sort=label&limit=200\`
+                                              — browse the article index.
+  3. \`GET /{space}/entities?type=wiki&sort=updated_at&limit=20\`
+                                              — what's been written or
+                                                edited most recently.
+
+### Search → read
+  1. \`GET /{space}/search?q=KEYWORD\`         — ripgrep across the corpus.
+                                                Returns matched paths
+                                                with snippets, ranked by
+                                                match count. Repeat \`q\`
+                                                up to 10 times to OR
+                                                patterns. \`?regex=true\`
+                                                opts into regex mode.
+  2. \`GET /{space}/entities/{path}\`          — metadata + inbound +
+                                                outbound for a hit.
+  3. \`GET /{space}/entities/{path}?include=content\`
+                                              — same plus the file body
+                                                from disk. (\`include=
+                                                content\` does NOT work
+                                                on the list endpoint —
+                                                only on the single-entity
+                                                endpoint, to avoid
+                                                payload bloat.)
+
+### Browsing the graph
+  - From any entity, \`outbound[]\` lists what it links to;
+    \`inbound[]\` lists who links to it. Walk from there.
+  - \`GET /{space}/redlinks\` exposes the unresolved targets — useful
+    to find aspirational topics the corpus has gestured at but not yet
+    written.
+
+### Reading articles (human-facing HTML)
+  - \`GET /\`                                  — daemon landing: spaces
+                                                list.
+  - \`GET /{space}/\`                          — alphabetical article
+                                                index for the space.
+  - \`GET /{space}/wiki/{path}\`               — wiki article with
+                                                chrome injection and
+                                                link classes
+                                                (\`arkeon-wiki\`,
+                                                \`arkeon-file\`,
+                                                \`arkeon-redlink\`).
+  - \`GET /{space}/{path}\`                    — fallback: any non-wiki
+                                                file in the watch dir
+                                                served with the right
+                                                Content-Type (markdown,
+                                                PDF, images, etc.).
+
+### Operator tasks
+  - \`GET /{space}/sources/scan\`              — every file in the watch
+                                                dir partitioned into
+                                                supported (indexed) vs
+                                                unsupported (binary,
+                                                skipped). Convert
+                                                unsupported files to
+                                                text to let the agents
+                                                read them.
+  - \`GET /{space}/recent\`                    — \`entity_edits\` feed
+                                                across humans and
+                                                agents.
+  - \`POST /{space}/agents/{role}/run\`        — fire one agent role on
+                                                demand. Synchronous;
+                                                409 if the space is
+                                                busy.
+
+================================================================
+## Routes
+
+### Daemon-level
+
+\`GET  /health\`                  — liveness. \`{"status":"ok"}\`.
+\`GET  /ready\`                   — readiness (DB reachable).
+\`GET  /llms.txt\`                — this document.
+\`GET  /help\`                    — alias for \`/llms.txt\`.
+\`GET  /\`                        — HTML spaces list (human-facing).
+
+### Spaces
+
+\`GET  /spaces\`                  — \`{spaces: [{name, watch_dir, created_at, entity_count}]}\`.
+\`GET  /spaces/{name}\`           — single space.
+\`POST /spaces\`                  — register a directory. Body
+                                  \`{name, watch_dir}\`. 409 on name
+                                  collision.
+
+### Entities
+
+\`GET  /{space}/entities\`
+  Filterable listing. Query params:
+    \`type\`                       — \`wiki\` | \`file\` | \`wiki,file\`
+    \`label_contains\`             — substring on \`label\`
+    \`path_contains\`              — substring on \`source_path\`
+    \`inbound_min\` / \`inbound_max\`  — edge-count bounds
+    \`outbound_min\` / \`outbound_max\`
+    \`updated_since\`              — ISO timestamp
+    \`edited_by_role\`             — last edit was by this role
+    \`has_tag\` / \`not_has_tag\`    — tag-key presence
+    \`tag_equals\`                 — \`key:value\`
+    \`tag_current\` / \`tag_outdated\`
+                                   — tag value matches/diverges from
+                                     current \`source_hash\`
+    \`sort\`                       — \`updated_at\` (default) | \`label\`
+                                   | \`inbound\` | \`outbound\`
+    \`limit\`                      — default 100, max 10000
+    \`offset\`
+    \`include=counts\`             — adds \`{inbound, outbound}\` per row
+  Response: \`{entities: [...], total, limit, offset}\`.
+
+\`GET  /{space}/entities/{path}\`
+  Single entity. Returns metadata + \`outbound[]\` + \`inbound[]\`.
+    \`?include=content\`           — adds \`content\` (file body from
+                                     disk). Use this for reading.
+
+### Relationships and history
+
+\`GET  /{space}/redlinks?limit=&offset=\`
+  Red-link queue. \`{redlinks: [{target_path, demand, linked_from:
+  string[]}], total, limit, offset}\`. Ranked by \`demand\` (number of
+  inbound edges).
+
+\`GET  /{space}/recent?since=&role=&limit=&offset=\`
+  \`entity_edits\` feed. Each row: \`{entity_path, by_role, edit_kind,
+  edit_note, content_hash, at}\`. \`by_role\` is one of \`human\`,
+  \`editor\`, \`proposer\`, \`writer\`, \`connector\`.
+
+### Search
+
+\`GET  /{space}/search?q=&type=&limit=&snippets=&regex=\`
+  Keyword search via ripgrep. \`q\` repeatable up to 10 times (OR).
+  \`type=wiki\` / \`type=file\` to restrict. \`regex=true\` to opt into
+  regex mode. \`snippets=N\` to cap snippets per file (default reasonable).
+  Response shape:
+    \`{query, keyword: {hits: [{space_name, source_path, type, label,
+      match_count, snippets: [{line_number, text}]}], total,
+      unmatched_files}}\`.
+
+### Operator
+
+\`GET  /{space}/sources/scan\`
+  Walks the watch dir and partitions every file into supported (will
+  be indexed) vs unsupported (binary, silently skipped). Response:
+    \`{space, watch_dir, total, supported: {count, by_ext}, unsupported:
+      {count, by_ext, examples: {".pdf": [paths]}}}\`.
+
+### Agents
+
+\`POST /{space}/agents/{role}/run\`
+  Fire one agent role on demand. Synchronous — blocks until done.
+  Roles: \`editor\`, \`proposer\`, \`writer\`, \`connector\`.
+    - \`editor\` — picks one unprocessed source, integrates its claims
+      into existing articles via str_replace / insert_at_line, or
+      appends red links to Open Threads. Never creates articles.
+    - \`proposer\` — runs after \`editor\` has tagged a source. Reads
+      the source plus everything that already cites it, writes a plan
+      wiki at \`wiki/_plans/{source-path}.html\` listing gap articles
+      as red links.
+    - \`writer\` — pulls the top-demand red link from the queue, reads
+      the plan(s) and sources that pointed at it, creates the new
+      article at the target path.
+    - \`connector\` — cross-space synthesis finder (newer role; see
+      space config for details).
+  Response on success: \`{space, role, duration_ms, steps, edits:
+  [{path, kind}], skipped, reason, usage, text}\`.
+  Errors: \`404\` (unknown role), \`409\` (space is already running a
+  role).
+
+### Chat (Phase 3, not yet implemented)
+
+\`POST   /{space}/chat\`                       → 501
+\`GET    /{space}/chat/{conversation_id}\`     → 501
+\`DELETE /{space}/chat/{conversation_id}\`     → 501
+
+================================================================
+## Errors
+
+All errors return JSON:
+  \`{"error": {"code": "...", "message": "...", "request_id": "..."}}\`
+
+Common codes: \`validation_error\` (400), \`not_found\` (404),
+\`space_busy\` (409, agent runs), \`not_implemented\` (501, chat
+stubs), \`internal_error\` (500).
+
+================================================================
+## Worked example
+
+Suppose a caller wants to answer "What does this corpus say about
+question leakage?" against the \`iarpa\` space:
+
+  1. Search:
+       GET /iarpa/search?q=leakage&type=wiki&limit=5
+  2. Pick the top hit (say \`wiki/how-do-we-prevent-question-leakage.html\`)
+     and read it with its outbound graph:
+       GET /iarpa/entities/wiki/how-do-we-prevent-question-leakage.html?include=content
+  3. Walk inbound to see which articles already cite this answer:
+       (use the \`inbound[]\` array on the response)
+  4. For unresolved questions in the area, check the red-link queue:
+       GET /iarpa/redlinks
+  5. For raw-source material the corpus has indexed:
+       GET /iarpa/entities?type=file&path_contains=leakage
+
+================================================================
+## Notes
+
+  - The filesystem is the source of truth. Editing a file in your
+    editor flows back to the index automatically via the file watcher
+    (~500ms debounce).
+  - \`<a href>\` links to nonexistent targets are red links, not errors.
+    Resolution is a LEFT JOIN at query time.
+  - Articles render identically under \`file://\` and \`http://\` — the
+    reader decorates anchors but never rewrites hrefs.
+`;
