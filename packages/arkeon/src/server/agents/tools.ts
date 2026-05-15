@@ -694,11 +694,18 @@ function decorateEntity(entity: EntityDetail) {
     space_url: spaceUrl(entity.space_name, entity.source_path),
     outbound: entity.outbound.map((o) => ({
       ...o,
+      // target_path is already canonical for cross-space (starts with
+      // `/{otherSpace}/...`) — spaceUrl passes those through verbatim;
+      // in-space targets get prefixed with the entity's own space.
       space_url: spaceUrl(entity.space_name, o.target_path),
     })),
     inbound: entity.inbound.map((i) => ({
       ...i,
-      space_url: spaceUrl(entity.space_name, i.source_path),
+      // Build space_url from the linker's space, NOT the target's —
+      // cross-space inbound rows live in the linker's space, and the
+      // URL we hand back must point at the source article in its
+      // real home (e.g. `/spaceA/wiki/bar.html` when A links into B).
+      space_url: spaceUrl(i.space_name, i.source_path),
     })),
   };
 }

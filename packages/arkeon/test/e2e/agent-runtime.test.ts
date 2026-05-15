@@ -610,6 +610,106 @@ describe("get_entity tool", () => {
     await execTool<GetEntityResult>(tool, { path: "wiki/a.html" });
     expect(ctx.readPaths.size).toBe(0);
   });
+
+  describe("cross-space inbound aggregation", () => {
+    interface CrossInboundRow {
+      space_name: string;
+      source_path: string;
+      link_text: string | null;
+      space_url: string;
+    }
+    interface CrossEntityFound {
+      found: true;
+      entity: {
+        space_name: string;
+        source_path: string;
+        inbound: CrossInboundRow[];
+      };
+    }
+
+    it("surfaces inbound rows from other spaces (linker's space_name and space_url)", async () => {
+      // Set up a second space as a sibling watch_dir so the rewriter
+      // produces a real cross-space target_path (canonical `/other/...`)
+      // in the relationships table.
+      const otherDir = mkdtempSync(join(tmpdir(), "arkeon-rt-xinbound-"));
+      mkdirSync(join(otherDir, "wiki"), { recursive: true });
+      const sql = createSql();
+      await sql`INSERT INTO spaces(name, watch_dir) VALUES('other', ${otherDir})`;
+
+      try {
+        // Plant a target entity in the OTHER space — that's the one
+        // we'll then query for its cross-space inbound.
+        writeFileSync(
+          join(otherDir, "wiki/target.html"),
+          `<!DOCTYPE html><html><head><meta charset="utf-8"><title>T</title></head>
+<body><h1>T</h1></body></html>`,
+        );
+        await syncFile(
+          { name: "other", watch_dir: otherDir },
+          "wiki/target.html",
+        );
+
+        // From the triggering space (rt-test), have an agent create an
+        // article that cites the target via cross-space form.
+        const ctx = makeContext(SPACE, "writer");
+        const create = getTool("create_file", ctx);
+        await execTool(create, {
+          path: "wiki/citer.html",
+          html: `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Citer</title></head>
+<body><p>cites <a href="/other/wiki/target.html">the target</a></p></body>
+</html>`,
+        });
+
+        // Now have a (cross-space-aware) agent query the target from a
+        // role with allowedSpaces = both spaces, and confirm it sees
+        // the rt-test linker.
+        const multiCtx = makeContext(
+          { name: "other", watch_dir: otherDir },
+          "writer",
+          {
+            allowedSpaces: [
+              { name: "other", watch_dir: otherDir },
+              SPACE,
+            ],
+          },
+        );
+        const getEntityTool = getTool("get_entity", multiCtx);
+        const result = await execTool<CrossEntityFound>(getEntityTool, {
+          path: "wiki/target.html",
+          space: "other",
+        });
+
+        expect(result.found).toBe(true);
+        // The inbound array carries the linker's home space and a
+        // space_url that points back into THAT space.
+        const xInbound = result.entity.inbound.find(
+          (r) => r.space_name === SPACE.name,
+        );
+        expect(xInbound).toBeDefined();
+        expect(xInbound!.source_path).toBe("wiki/citer.html");
+        expect(xInbound!.space_url).toBe(`/${SPACE.name}/wiki/citer.html`);
+      } finally {
+        rmSync(otherDir, { recursive: true, force: true });
+      }
+    });
+
+    it("in-space inbound rows still carry the entity's own space_name", async () => {
+      await setupGraph();
+      const ctx = makeContext(SPACE, "writer");
+      const tool = getTool("get_entity", ctx);
+      const result = await execTool<CrossEntityFound>(tool, {
+        path: "wiki/b.html",
+      });
+      expect(result.found).toBe(true);
+      const inSpace = result.entity.inbound.find(
+        (r) => r.source_path === "wiki/a.html",
+      );
+      expect(inSpace).toBeDefined();
+      expect(inSpace!.space_name).toBe(SPACE.name);
+      expect(inSpace!.space_url).toBe(`/${SPACE.name}/wiki/a.html`);
+    });
+  });
 });
 
 describe("deletion semantics", () => {
