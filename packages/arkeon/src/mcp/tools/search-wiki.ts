@@ -49,9 +49,17 @@ export function registerSearchWiki(server: McpServer, client: ArkeonWikiClient):
         limit,
       });
       const hits = data.keyword?.hits ?? [];
+      // Emit fully-qualified reader URLs so the model can cite hits
+      // directly without first calling daemon_status to learn the port.
       const text = hits.length
         ? hits
-            .map((h) => `- ${h.label ?? h.source_path} — ${h.source_path} (matches: ${h.match_count})`)
+            .map(
+              (h) =>
+                `- ${h.label ?? h.source_path} — ${h.source_path} · ${client.entityUrl(
+                  targetSpace,
+                  h.source_path,
+                )} (matches: ${h.match_count})`,
+            )
             .join("\n")
         : "No hits. Try list_articles with `label_contains` if the corpus uses different vocabulary than the query.";
       return {

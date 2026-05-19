@@ -4,6 +4,10 @@
 // Thin HTTP wrapper around the arkeon-wiki daemon's API. Used only by the
 // MCP server — each tool composes one or two requests through here.
 //
+// Errors are surfaced as `HttpError` with the response status code, so
+// callers can branch on `err.status === 409` (collision retry) etc.
+// without parsing a string template.
+//
 // Config precedence (highest first):
 //   1. explicit argument passed to a method (e.g. `space` override)
 //   2. ARKEON_WIKI_URL / ARKEON_WIKI_SPACE / ARKEON_WIKI_CALLER env vars
@@ -16,6 +20,18 @@
 
 const DEFAULT_API_URL = "http://localhost:8000";
 const DEFAULT_CALLER = "mcp";
+
+export class HttpError extends Error {
+  constructor(
+    public readonly method: string,
+    public readonly path: string,
+    public readonly status: number,
+    public readonly body: string,
+  ) {
+    super(`${method} ${path} → ${status}: ${body}`);
+    this.name = "HttpError";
+  }
+}
 
 export interface ClientConfig {
   apiUrl: string;
@@ -70,7 +86,7 @@ export class ArkeonWikiClient {
     }
     const res = await fetch(url);
     if (!res.ok) {
-      throw new Error(`GET ${url.pathname} → ${res.status}: ${await safeText(res)}`);
+      throw new HttpError("GET", url.pathname, res.status, await safeText(res));
     }
     return (await res.json()) as T;
   }
@@ -85,7 +101,7 @@ export class ArkeonWikiClient {
       body: JSON.stringify(body),
     });
     if (!res.ok) {
-      throw new Error(`POST ${path} → ${res.status}: ${await safeText(res)}`);
+      throw new HttpError("POST", path, res.status, await safeText(res));
     }
     return (await res.json()) as T;
   }
@@ -106,9 +122,22 @@ export class ArkeonWikiClient {
       body,
     });
     if (!res.ok) {
-      throw new Error(`PUT ${path} → ${res.status}: ${await safeText(res)}`);
+      throw new HttpError("PUT", path, res.status, await safeText(res));
     }
     return (await res.json()) as T;
+  }
+
+  /**
+   * Build the human-facing reader URL for an entity. Used in tool text
+   * output so the model can emit clickable citations without having to
+   * separately call daemon_status to learn the port. e.g.
+   *   entityUrl("iarpa", "wiki/foo.html") → http://localhost:8186/iarpa/wiki/foo.html
+   */
+  entityUrl(space: string, sourcePath: string): string {
+    return `${this.config.apiUrl}/${encodeURIComponent(space)}/${sourcePath
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/")}`;
   }
 
   async health(): Promise<{ ok: boolean; status: number }> {

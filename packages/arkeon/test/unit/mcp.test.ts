@@ -125,6 +125,85 @@ describe("MCP server", () => {
     expect(parsed.text).toBe(verbatim);
   });
 
+  it("search_wiki emits fully-qualified reader URLs in text output", async () => {
+    stub = await startStub({
+      "GET /test-space/search": {
+        status: 200,
+        body: {
+          keyword: {
+            hits: [
+              { source_path: "wiki/foo.html", label: "Foo", match_count: 3 },
+              { source_path: "wiki/bar.html", label: "Bar", match_count: 1 },
+            ],
+          },
+        },
+      },
+    });
+    const client = new ArkeonWikiClient({
+      apiUrl: `http://127.0.0.1:${stub.port}`,
+      space: "test-space",
+      caller: "test",
+    });
+    const server = buildServer(client);
+    const handler = (server as unknown as {
+      _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<unknown> }>;
+    })._registeredTools.search_wiki;
+    const result = (await handler.handler({ q: "anything", limit: 10, type: null, space: null }, {})) as {
+      content: Array<{ text: string }>;
+    };
+    const text = result.content[0].text;
+    expect(text).toContain(`http://127.0.0.1:${stub.port}/test-space/wiki/foo.html`);
+    expect(text).toContain(`http://127.0.0.1:${stub.port}/test-space/wiki/bar.html`);
+  });
+
+  it("save_conversation auto-suffixes on 409 (typed HttpError detection)", async () => {
+    let putCount = 0;
+    stub = await startStub({});
+    // Replace stub handler with a counter — first PUT 409s, second 201s.
+    // We need a custom-shape stub for this test rather than the keyed
+    // table.
+    await new Promise<void>((r) => stub!.server.close(() => r()));
+    const recorded: RecordedRequest[] = [];
+    stub.recorded = recorded;
+    stub.server = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const c of req) chunks.push(c as Buffer);
+      recorded.push({ method: req.method ?? "", url: req.url ?? "", headers: req.headers, body: Buffer.concat(chunks).toString("utf-8") });
+      putCount += 1;
+      if (putCount === 1) {
+        res.statusCode = 409;
+        res.end(JSON.stringify({ error: { code: "conflict" } }));
+      } else {
+        res.statusCode = 201;
+        res.setHeader("content-type", "application/json");
+        res.end(
+          JSON.stringify({
+            space: "test-space",
+            path: recorded[recorded.length - 1].url.slice(1),
+            overwrote: false,
+            entity: { source_hash: "abc" },
+          }),
+        );
+      }
+    });
+    await new Promise<void>((r) => stub!.server.listen(stub!.port, "127.0.0.1", () => r()));
+
+    const client = new ArkeonWikiClient({
+      apiUrl: `http://127.0.0.1:${stub.port}`,
+      space: "test-space",
+      caller: "test",
+    });
+    const server = buildServer(client);
+    const handler = (server as unknown as {
+      _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<unknown> }>;
+    })._registeredTools.save_conversation;
+    await handler.handler({ slug: "collides", transcript: "body", space: null }, {});
+    // The retry loop must have made exactly two attempts: first 409,
+    // second success with -2 suffix.
+    expect(putCount).toBe(2);
+    expect(recorded[1].url).toMatch(/-collides-2\.md$/);
+  });
+
   it("save_conversation PUTs the verbatim transcript", async () => {
     stub = await startStub({
       "PUT /test-space/sources/conversations/2026-05-18-1200-foo.md": {

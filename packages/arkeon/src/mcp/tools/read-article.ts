@@ -44,8 +44,12 @@ export function registerReadArticle(server: McpServer, client: ArkeonWikiClient)
       const targetSpace = client.resolveSpace(space ?? undefined);
       const results = await Promise.all(
         paths.map(async (p): Promise<ReadResult> => {
+          // Percent-encode each path segment so slugs containing `#`/`?`/
+          // spaces don't misparse against the URL ctor. Slashes preserved
+          // — the API expects path hierarchy intact.
+          const encoded = p.split("/").map(encodeURIComponent).join("/");
           try {
-            const data = await client.getJson<EntityResponse>(`/${targetSpace}/entities/${p}`, {
+            const data = await client.getJson<EntityResponse>(`/${targetSpace}/entities/${encoded}`, {
               include: "content",
             });
             return {
@@ -61,13 +65,14 @@ export function registerReadArticle(server: McpServer, client: ArkeonWikiClient)
       );
 
       // One text block per article — easier for the model to parse than a
-      // single concatenated dump. Each block is prefixed with the path
-      // header so the model can attribute content correctly.
+      // single concatenated dump. Each block carries the fully-qualified
+      // reader URL so the model can emit clickable citations without
+      // round-tripping to daemon_status to learn the port.
       const content = results.map((r) => ({
         type: "text" as const,
         text: r.error
           ? `# ${r.path}\n\n(error reading: ${r.error})`
-          : `# ${r.label ?? r.path}\n_${r.path}_\n\n${r.content}`,
+          : `# ${r.label ?? r.path}\n_${r.path}_ · ${client.entityUrl(targetSpace, r.path)}\n\n${r.content}`,
       }));
 
       return {

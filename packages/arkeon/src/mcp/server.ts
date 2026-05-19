@@ -1,11 +1,33 @@
 // Copyright (c) 2026 Arkeon Technologies, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { ArkeonWikiClient, loadConfig } from "./client.js";
 import { registerAllPrompts } from "./prompts/index.js";
 import { registerAllTools } from "./tools/index.js";
+
+function packageVersion(): string {
+  // Resolve package.json relative to the compiled bundle. The CLI's
+  // src/index.ts does the same lookup with "../package.json" — works in
+  // both dev (src/mcp/server.ts → ../../package.json) and dist
+  // (dist/server-*.js → ../package.json) because tsup bundles to a flat
+  // dist/ next to the original package.json.
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (const candidate of [join(here, "..", "package.json"), join(here, "..", "..", "package.json")]) {
+    try {
+      const pkg = JSON.parse(readFileSync(candidate, "utf-8")) as { version: string };
+      return pkg.version;
+    } catch {
+      // try next candidate
+    }
+  }
+  return "0.0.0";
+}
 
 // Shipped to the client during the MCP initialize handshake. Current
 // clients (early 2026) don't surface this to the model, but it costs ~80
@@ -31,7 +53,7 @@ export function buildServer(client: ArkeonWikiClient = new ArkeonWikiClient(load
   const server = new McpServer(
     {
       name: "arkeon-wiki",
-      version: "0.1.0",
+      version: packageVersion(),
     },
     {
       instructions: INSTRUCTIONS,

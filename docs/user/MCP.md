@@ -105,6 +105,15 @@ echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":
 
 You should see a JSON response containing `"serverInfo":{"name":"arkeon-wiki",...}` followed by the connection acknowledgment on stderr.
 
+## Security framing
+
+The MCP server is designed for **single-user, local-only use**. Two things to be aware of:
+
+- **`create_space` registers an arbitrary local directory.** The tool description and the `new-space` prompt both instruct Claude to require an explicit user confirmation before calling it, but that's an instruction-level safeguard, not a hard gate. Prompt injection in fetched/captured content could in principle try to induce a directory registration you didn't intend (e.g. `create_space({ watch_dir: "~/.ssh" })`, which would make those files searchable). If you're using the `fetch` prompt against untrusted web sources, watch for unexpected `create_space` calls.
+- **`capture_thought` and `save_conversation` write to the daemon's source directory.** No auth on the daemon — anything that can reach `localhost:<port>` can write. Keep the daemon bound to localhost only.
+
+If either matters to you, treat `create_space` confirmations as a hard rule in your own usage habits and don't expose the daemon's port beyond loopback.
+
 ## Comparison: MCP vs. the `/iarpa` and `/philosoph` slash commands
 
 The Claude Code CLI ships two skills (`/iarpa`, `/philosoph`) covering the same ASK / CAPTURE / SAVE / FETCH flows. The MCP server is the Claude Desktop equivalent — different surface, same flow doc backing it (`packages/arkeon/src/mcp/flows.ts`). Use whichever client you're in.

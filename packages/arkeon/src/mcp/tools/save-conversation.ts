@@ -4,7 +4,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import type { ArkeonWikiClient } from "../client.js";
+import { type ArkeonWikiClient, HttpError } from "../client.js";
 import { TOOL_DESCRIPTIONS } from "../flows.js";
 
 interface PutResponse {
@@ -62,9 +62,15 @@ export function registerSaveConversation(server: McpServer, client: ArkeonWikiCl
       let lastError: unknown;
       // Auto-suffix on 409 (path collision). Max 10 attempts — beyond that
       // something is wrong with the slug, surface the error.
+      //
+      // TOCTOU note: two near-simultaneous saves on the same slug could
+      // both probe a free path and one loses the race. Acceptable for the
+      // single-user-Desktop case; would matter if this server ever served
+      // multiple concurrent clients.
       while (suffix < 10) {
         const slugWithSuffix = suffix === 0 ? baseSlug : `${baseSlug}-${suffix + 1}`;
-        const path = `/${targetSpace}/sources/conversations/${stamp}-${slugWithSuffix}.md`;
+        const sourcePath = `sources/conversations/${stamp}-${slugWithSuffix}.md`;
+        const path = `/${targetSpace}/${sourcePath}`;
         try {
           const data = await client.putRaw<PutResponse>(path, transcript, {
             contentType: "text/markdown",
@@ -73,14 +79,14 @@ export function registerSaveConversation(server: McpServer, client: ArkeonWikiCl
             content: [
               {
                 type: "text",
-                text: `Saved → \`${data.path}\` · view at ${client.apiUrl}/${targetSpace}/sources/conversations/${stamp}-${slugWithSuffix}.md`,
+                text: `Saved → \`${data.path}\` · view at ${client.entityUrl(targetSpace, sourcePath)}`,
               },
             ],
             structuredContent: data as unknown as Record<string, unknown>,
           };
         } catch (err) {
           lastError = err;
-          if (!String(err).includes("→ 409")) throw err;
+          if (!(err instanceof HttpError && err.status === 409)) throw err;
           suffix += 1;
         }
       }

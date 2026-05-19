@@ -41,7 +41,9 @@ Confirm both with the user before creating.
 
 ## Step 4 — Create the space
 
-Call \`create_space\` with \`{ name, watch_dir }\`. The daemon registers the dir and starts the file watcher immediately. \`.arkeon/state.json\` is NOT written by this tool (that's a CLI-only side-effect of \`arkeon-wiki init\`) — note that if the user plans to drive the wiki from the CLI later, they should also run \`arkeon-wiki init\` in the dir to get the local state file and a starter \`.arkeon/agents.yaml\`.
+**REQUIRED confirmation step**: before calling create_space, restate the exact \`name\` and \`watch_dir\` you plan to register and ask the user to confirm with a literal "yes" / "go ahead" / similar. Do not infer consent from earlier conversation — get an explicit ack against the final values. \`watch_dir\` will index every text file under that directory; the wrong path (e.g. a home directory or a secrets folder) makes private content searchable.
+
+After the user confirms in plain text, call \`create_space\` with \`{ name, watch_dir }\`. The daemon registers the dir and starts the file watcher immediately. \`.arkeon/state.json\` is NOT written by this tool (that's a CLI-only side-effect of \`arkeon-wiki init\`) — note that if the user plans to drive the wiki from the CLI later, they should also run \`arkeon-wiki init\` in the dir to get the local state file and a starter \`.arkeon/agents.yaml\`.
 
 ## Step 5 — Suggest the \`instructions:\` block
 
