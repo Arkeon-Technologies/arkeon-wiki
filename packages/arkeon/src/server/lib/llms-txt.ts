@@ -306,6 +306,41 @@ them up on its next cron tick.
   Errors: \`404\` (unknown role), \`409\` (space is already running a
   role).
 
+### MCP server (stdio, for Claude Desktop and other MCP clients)
+
+The CLI subcommand \`arkeon-wiki mcp\` runs a Model Context Protocol
+server over stdio that exposes the routes above as MCP tools, plus
+ships the canonical ASK / CAPTURE / SAVE / FETCH flows as MCP prompts.
+Designed for per-space binding in \`claude_desktop_config.json\`:
+
+\`\`\`json
+{
+  "mcpServers": {
+    "iarpa": {
+      "command": "arkeon-wiki",
+      "args": ["mcp"],
+      "env": {
+        "ARKEON_WIKI_URL": "http://localhost:8186",
+        "ARKEON_WIKI_SPACE": "iarpa",
+        "ARKEON_WIKI_CALLER": "nick"
+      }
+    }
+  }
+}
+\`\`\`
+
+Tools (9): \`daemon_status\`, \`list_spaces\`, \`create_space\`,
+\`search_wiki\`, \`list_articles\`, \`read_article\`, \`list_redlinks\`,
+\`capture_thought\`, \`save_conversation\`.
+
+Prompts (6): \`mode-router\` (auto-detect), \`new-space\`, \`ask\`,
+\`capture\`, \`save\`, \`fetch\`. Each prompt expands to the full flow
+for that mode. The capture + save prompts emphasize preserving user
+content and source material verbatim — the editor agent works on raw
+input, not digests.
+
+See \`docs/user/MCP.md\` for the full setup walkthrough.
+
 ### Chat (Phase 3, not yet implemented)
 
 \`POST   /{space}/chat\`                       → 501
