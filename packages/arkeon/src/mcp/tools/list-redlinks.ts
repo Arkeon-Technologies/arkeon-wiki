@@ -22,7 +22,7 @@ export function registerListRedlinks(server: McpServer, client: ArkeonWikiClient
       description:
         "Show the corpus's red-link queue — articles the wiki wants written next, ranked by demand (inbound link count). Useful when the user asks `what does the wiki want me to think about` or before writing a thought that might already be queued.",
       inputSchema: {
-        limit: z.number().int().min(1).max(100).default(20),
+        limit: z.number().int().min(1).max(100).default(15),
         space: z.string().nullable().optional().describe("Override the env-bound default space"),
       },
     },

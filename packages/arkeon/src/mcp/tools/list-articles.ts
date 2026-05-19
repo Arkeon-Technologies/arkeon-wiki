@@ -28,7 +28,7 @@ export function registerListArticles(server: McpServer, client: ArkeonWikiClient
           .nullable()
           .optional()
           .describe("Case-insensitive substring match on the article label"),
-        limit: z.number().int().min(1).max(100).default(25),
+        limit: z.number().int().min(1).max(100).default(15),
         space: z.string().nullable().optional().describe("Override the env-bound default space"),
       },
     },
@@ -48,9 +48,19 @@ export function registerListArticles(server: McpServer, client: ArkeonWikiClient
             })
             .join("\n")
         : "No matching articles. Try search_wiki with a different query, or check list_redlinks for what the corpus wants written next.";
+      // structuredContent trimmed to the three fields a programmatic
+      // consumer actually needs. Keeping the full entity row here
+      // doubled the over-the-wire payload (timestamps, theme metadata,
+      // tags, etc.) and caused Claude Desktop's UI to stall on chunky
+      // responses before forwarding the next tool call.
+      const summaries = data.entities.map((e) => ({
+        path: e.source_path,
+        label: e.label,
+        short_description: (e.properties?.short_description as string | undefined) ?? null,
+      }));
       return {
         content: [{ type: "text", text }],
-        structuredContent: { space: targetSpace, entities: data.entities },
+        structuredContent: { space: targetSpace, entities: summaries },
       };
     },
   );

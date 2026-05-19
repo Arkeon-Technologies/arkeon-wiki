@@ -33,7 +33,7 @@ export function registerSearchWiki(server: McpServer, client: ArkeonWikiClient):
           .nullable()
           .optional()
           .describe("Filter to wikis only or source files only. Default: both."),
-        limit: z.number().int().min(1).max(50).default(15).describe("Max hits"),
+        limit: z.number().int().min(1).max(50).default(10).describe("Max hits"),
         space: z
           .string()
           .nullable()
@@ -62,9 +62,18 @@ export function registerSearchWiki(server: McpServer, client: ArkeonWikiClient):
             )
             .join("\n")
         : "No hits. Try list_articles with `label_contains` if the corpus uses different vocabulary than the query.";
+      // structuredContent trimmed: full hit rows carry per-snippet text
+      // that the model already consumes through the text block. Keeping
+      // both doubled the response size and stressed Claude Desktop's UI
+      // on wider corpora.
+      const summaries = hits.map((h) => ({
+        path: h.source_path,
+        label: h.label,
+        match_count: h.match_count,
+      }));
       return {
         content: [{ type: "text", text }],
-        structuredContent: { space: targetSpace, hits },
+        structuredContent: { space: targetSpace, hits: summaries },
       };
     },
   );
