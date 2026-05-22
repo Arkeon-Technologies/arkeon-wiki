@@ -73,13 +73,18 @@ If the corpus uses different vocabulary than the user's question, fall back to \
 
 Call \`read_article\` ONCE with a \`paths\` array containing all the candidates (e.g. \`paths: ["wiki/foo.html", "wiki/bar.html", "wiki/baz.html"]\`). The tool fetches them in parallel — batching is dramatically faster than calling read_article multiple times. Prefer fewer deeper reads to many shallow ones — the user wants an answer grounded in the wiki, not a headline summary.
 
-## Step 3 — Answer
+## Step 3 — Answer with REQUIRED clickable citations
 
-Lead with the claim. Cite each source inline using **clickable markdown links** to the frontend so the user can drill in:
+Lead with the claim. **Every reference to a wiki article must be a clickable markdown link.** Plain prose names, bare paths, or bare URLs are not acceptable — the user wants to drill into sources.
+
+The search_wiki, list_articles, list_redlinks, and read_article tools all ship ready-made \`[Label](url)\` markdown links in their output. **Copy those links into your answer verbatim** — do not rewrite them, do not strip the bracket syntax, do not paraphrase them into prose. If you mention an article, it must arrive as a clickable link.
 
 \`\`\`markdown
-- The current empirical state is **rough parity** ([current-state-kg-vs-rag](http://localhost:<port>/<space>/wiki/current-state-kg-vs-rag.html)).
-- That picture started shifting after the 49/53 finding ([kg-vs-rag-belief-arc](http://localhost:<port>/<space>/wiki/kg-vs-rag-belief-arc.html)).
+✓ The current empirical state is **rough parity** ([current-state-kg-vs-rag](http://localhost:8186/iarpa/wiki/current-state-kg-vs-rag.html)).
+✓ That picture shifted after the 49/53 finding ([KG vs RAG belief arc](http://localhost:8186/iarpa/wiki/kg-vs-rag-belief-arc.html)).
+
+✗ The current empirical state is rough parity — see the kg-vs-rag article.
+✗ That shifted after the 49/53 finding (wiki/kg-vs-rag-belief-arc.html).
 \`\`\`
 
 If the wiki doesn't have the answer, **say so honestly**. Don't hallucinate from general knowledge. Offer to capture the user's framing as a thought (transitions to capture) or fetch a source on the topic (transitions to fetch).
