@@ -43,8 +43,8 @@ export function registerListArticles(server: McpServer, client: ArkeonWikiClient
         ? data.entities
             .map((e) => {
               const desc = (e.properties?.short_description as string | undefined) ?? "";
-              const url = client.entityUrl(targetSpace, e.source_path);
-              return `- ${e.label ?? e.source_path} — ${e.source_path} · ${url}${desc ? `\n    ${desc}` : ""}`;
+              const link = client.markdownLink(targetSpace, e.source_path, e.label);
+              return `- ${link} — \`${e.source_path}\`${desc ? `\n    ${desc}` : ""}`;
             })
             .join("\n")
         : "No matching articles. Try search_wiki with a different query, or check list_redlinks for what the corpus wants written next.";

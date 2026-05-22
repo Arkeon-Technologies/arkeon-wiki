@@ -65,14 +65,15 @@ export function registerReadArticle(server: McpServer, client: ArkeonWikiClient)
       );
 
       // One text block per article — easier for the model to parse than a
-      // single concatenated dump. Each block carries the fully-qualified
-      // reader URL so the model can emit clickable citations without
-      // round-tripping to daemon_status to learn the port.
+      // single concatenated dump. Each block opens with a ready-made
+      // markdown link the model can copy verbatim into its citation, so
+      // it doesn't have to assemble `[Label](url)` from the path + URL
+      // itself (which it often skips, defaulting to prose).
       const content = results.map((r) => ({
         type: "text" as const,
         text: r.error
           ? `# ${r.path}\n\n(error reading: ${r.error})`
-          : `# ${r.label ?? r.path}\n_${r.path}_ · ${client.entityUrl(targetSpace, r.path)}\n\n${r.content}`,
+          : `# ${r.label ?? r.path}\n**Cite as:** ${client.markdownLink(targetSpace, r.path, r.label)} · path: \`${r.path}\`\n\n${r.content}`,
       }));
 
       return {

@@ -125,7 +125,7 @@ describe("MCP server", () => {
     expect(parsed.text).toBe(verbatim);
   });
 
-  it("search_wiki emits fully-qualified reader URLs in text output", async () => {
+  it("search_wiki emits ready-made [Label](url) markdown links in text output", async () => {
     stub = await startStub({
       "GET /test-space/search": {
         status: 200,
@@ -152,8 +152,18 @@ describe("MCP server", () => {
       content: Array<{ text: string }>;
     };
     const text = result.content[0].text;
-    expect(text).toContain(`http://127.0.0.1:${stub.port}/test-space/wiki/foo.html`);
-    expect(text).toContain(`http://127.0.0.1:${stub.port}/test-space/wiki/bar.html`);
+    expect(text).toContain(`[Foo](http://127.0.0.1:${stub.port}/test-space/wiki/foo.html)`);
+    expect(text).toContain(`[Bar](http://127.0.0.1:${stub.port}/test-space/wiki/bar.html)`);
+  });
+
+  it("markdownLink helper escapes brackets in label and percent-encodes path segments", () => {
+    const client = new ArkeonWikiClient({ apiUrl: "http://localhost:8000", caller: "test" });
+    const link = client.markdownLink("space", "wiki/foo bar.html", "Label] with ] brackets");
+    expect(link).toBe("[Label\\] with \\] brackets](http://localhost:8000/space/wiki/foo%20bar.html)");
+    // Without label, derives display text from path.
+    expect(client.markdownLink("space", "wiki/photosynthesis.html")).toBe(
+      "[photosynthesis](http://localhost:8000/space/wiki/photosynthesis.html)",
+    );
   });
 
   it("save_conversation auto-suffixes on 409 (typed HttpError detection)", async () => {

@@ -47,7 +47,9 @@ Nine tools wrap the daemon's HTTP API (search_wiki, read_article, capture_though
 
 The space + API URL are bound via env (ARKEON_WIKI_SPACE, ARKEON_WIKI_URL) so the user doesn't have to thread them through every call.
 
-CRITICAL: when capturing thoughts or saving conversations, preserve content verbatim. Do not summarize, paraphrase, or tighten what the user (or their attachments / pasted sources) says. The wiki's value comes from raw source material reaching the editor agent intact.`;
+CRITICAL: when capturing thoughts or saving conversations, preserve content verbatim. Do not summarize, paraphrase, or tighten what the user (or their attachments / pasted sources) says. The wiki's value comes from raw source material reaching the editor agent intact.
+
+REQUIRED OUTPUT SHAPE: every reference to a wiki article in your answer must be a clickable markdown link of the form [Label](url). The read tools ship ready-made [Label](url) links — copy them verbatim. Never write a bare path, a bare URL, or just the article's name in prose. The user clicks these links to drill into the source.`;
 
 export function buildServer(client: ArkeonWikiClient = new ArkeonWikiClient(loadConfig())): McpServer {
   const server = new McpServer(

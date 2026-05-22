@@ -29,9 +29,23 @@ export function registerListRedlinks(server: McpServer, client: ArkeonWikiClient
     async ({ limit, space }) => {
       const targetSpace = client.resolveSpace(space ?? undefined);
       const data = await client.getJson<RedlinksResponse>(`/${targetSpace}/redlinks`, { limit });
+      // Red links are by definition articles that don't exist yet, so
+      // the `[label](url)` link will be a 404 — but the URL is still
+      // useful: it's where the article WOULD live, and clicking it in
+      // a browser is the user's signal-of-interest the writer agent
+      // already keys off (inbound_max=0 + demand). The `linked_from`
+      // articles do exist and should be clickable citations to where
+      // the demand came from.
       const text = data.redlinks.length
         ? data.redlinks
-            .map((r) => `- ${r.target_path} (demand: ${r.demand}; linked from: ${r.linked_from.slice(0, 3).join(", ")})`)
+            .map((r) => {
+              const target = client.markdownLink(targetSpace, r.target_path);
+              const sources = r.linked_from
+                .slice(0, 3)
+                .map((p) => client.markdownLink(targetSpace, p))
+                .join(", ");
+              return `- ${target} (demand: ${r.demand}; linked from: ${sources})`;
+            })
             .join("\n")
         : "No red links queued — the corpus has nothing in the writer's pipeline right now.";
       return {

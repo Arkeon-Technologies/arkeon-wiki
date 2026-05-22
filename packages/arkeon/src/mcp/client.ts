@@ -140,6 +140,21 @@ export class ArkeonWikiClient {
       .join("/")}`;
   }
 
+  /**
+   * Pre-formatted markdown link the model can copy verbatim into its
+   * answer. Shipping `[Label](url)` directly in tool output is more
+   * reliable than handing the model `Label — path · url` and asking it
+   * to assemble the markdown itself — models routinely emit prose
+   * without the brackets unless the link arrives ready-made.
+   */
+  markdownLink(space: string, sourcePath: string, label?: string): string {
+    const displayLabel = label ?? sourcePath.replace(/^wiki\//, "").replace(/\.html$/, "");
+    // Escape `]` in the label so it can't break out of the markdown
+    // bracket syntax. Other special chars are fine inside link text.
+    const safe = displayLabel.replace(/\]/g, "\\]");
+    return `[${safe}](${this.entityUrl(space, sourcePath)})`;
+  }
+
   async health(): Promise<{ ok: boolean; status: number }> {
     try {
       const res = await fetch(this.config.apiUrl + "/health");
