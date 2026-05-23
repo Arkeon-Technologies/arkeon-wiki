@@ -19,12 +19,13 @@
  * extract outbound edges.
  */
 
-import { readFileSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { join, basename, extname } from "node:path";
 import { createHash } from "node:crypto";
 
 import { createSql, withTransaction, type SqlClient } from "./sql.js";
 import { getEditContext, type EditKind } from "./edit-context.js";
+import { classifyFile } from "./fs-watcher.js";
 import { parseHtmlMeta } from "./html-meta.js";
 import { extractHtmlLinks } from "./html-links.js";
 import { loadSpacesMap } from "./spaces.js";
@@ -34,9 +35,12 @@ export interface Space {
   watch_dir: string;
 }
 
+export type EntityKind = "text" | "asset";
+
 export interface SyncResult {
   action: "created" | "updated" | "unchanged" | "noop";
   type: "wiki" | "file";
+  kind: EntityKind;
   label: string;
   linksExtracted: number;
 }
@@ -45,8 +49,45 @@ function contentHash(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
+/**
+ * SHA-256 of a file's bytes, computed by streaming so a multi-GB video
+ * doesn't try to fit in RAM. Used for asset entities — text files
+ * already load the full content (we need to parse it), so they keep the
+ * cheaper in-memory hash.
+ */
+async function fileContentHash(absPath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(absPath);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("end", () => resolve(hash.digest("hex")));
+    stream.on("error", reject);
+  });
+}
+
 export function isWikiPath(relativePath: string): boolean {
   return relativePath.startsWith("wiki/") && relativePath.endsWith(".html");
+}
+
+/**
+ * Cheap change-detection fingerprint stored alongside `source_hash`.
+ *
+ * `source_hash` is canonical SHA-256 of content. `stat_fingerprint` is
+ * `${mtimeMs}-${size}` — the same heuristic rsync / make / git status
+ * use. When the fingerprint matches the stored value the file's bytes
+ * are guaranteed identical to last sync, so we skip the content read
+ * AND the hash recomputation. On a fingerprint miss we still compute
+ * the real content hash; if it matches `source_hash`, the change was
+ * a touch (refresh fingerprint, keep everything else); only a
+ * genuine content change goes through the parse / relationship rebuild.
+ *
+ * This keeps `source_hash` semantically uniform across text and asset
+ * rows while making syncs on unchanged files O(1) — particularly load-
+ * bearing for large assets (GB-sized videos) where re-hashing on every
+ * watcher debounce would be wasteful.
+ */
+function statFingerprint(stats: { mtimeMs: number; size: number }): string {
+  return `${stats.mtimeMs}-${stats.size}`;
 }
 
 /**
@@ -58,28 +99,66 @@ export function isWikiPath(relativePath: string): boolean {
  */
 export async function syncFile(space: Space, relativePath: string): Promise<SyncResult> {
   const absPath = join(space.watch_dir, relativePath);
-  const content = readFileSync(absPath, "utf-8");
-  const hash = contentHash(content);
+
+  // (1) Stat-fingerprint fast path. Skips content I/O entirely on
+  // unchanged files — the common case during a reconcile walk.
+  const stats = statSync(absPath);
+  const fingerprint = statFingerprint(stats);
 
   const sql = createSql();
   const existing = await sql`
-    SELECT source_hash, type, label
+    SELECT source_hash, stat_fingerprint, type, kind, label
     FROM entities
     WHERE space_name = ${space.name} AND source_path = ${relativePath}
   `;
 
-  if (existing.length > 0 && existing[0].source_hash === hash) {
+  if (
+    existing.length > 0 &&
+    existing[0].stat_fingerprint != null &&
+    existing[0].stat_fingerprint === fingerprint
+  ) {
     return {
       action: "unchanged",
       type: existing[0].type as "wiki" | "file",
+      kind: (existing[0].kind as EntityKind) ?? "text",
       label: existing[0].label as string,
       linksExtracted: 0,
     };
   }
 
+  // (2) Stat shifted — bytes might have changed, or it might just be
+  // a touch. Classify and compute the real content hash to decide.
+  const kind = classifyFile(relativePath, absPath);
+
+  if (kind === "asset") {
+    return syncAsset(space, relativePath, absPath, stats, fingerprint, existing[0] ?? null);
+  }
+
+  const content = readFileSync(absPath, "utf-8");
+  const hash = contentHash(content);
+
+  // (3) Touch-without-change: refresh the cache, but the row's
+  // content-derived columns (label, properties, relationships) are
+  // already correct. No parse, no updated_at bump.
+  if (existing.length > 0 && existing[0].source_hash === hash) {
+    await sql`
+      UPDATE entities
+      SET stat_fingerprint = ${fingerprint}
+      WHERE space_name = ${space.name} AND source_path = ${relativePath}
+    `;
+    return {
+      action: "unchanged",
+      type: existing[0].type as "wiki" | "file",
+      kind: (existing[0].kind as EntityKind) ?? "text",
+      label: existing[0].label as string,
+      linksExtracted: 0,
+    };
+  }
+
+  // (4) Real content change.
   const result = isWikiPath(relativePath)
-    ? await syncWiki(space, relativePath, content, hash, existing[0] ?? null)
-    : await syncSource(space, relativePath, content, hash, existing[0] ?? null);
+    ? await syncWiki(space, relativePath, content, hash, fingerprint, existing[0] ?? null)
+    : await syncSource(space, relativePath, content, hash, fingerprint, existing[0] ?? null);
 
   await recordEntityEdit(space.name, relativePath, hash);
 
@@ -91,6 +170,7 @@ async function syncWiki(
   relativePath: string,
   content: string,
   hash: string,
+  fingerprint: string,
   existing: Record<string, unknown> | null,
 ): Promise<SyncResult> {
   const meta = parseHtmlMeta(content);
@@ -114,7 +194,9 @@ async function syncWiki(
         UPDATE entities
         SET label = ${label},
             source_hash = ${hash},
+            stat_fingerprint = ${fingerprint},
             properties = ${propsJson},
+            kind = 'text',
             updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
         WHERE space_name = ${space.name} AND source_path = ${relativePath}
       `;
@@ -123,8 +205,8 @@ async function syncWiki(
       // branch) so the "latest first" sort in the article index can break
       // ties on entities created in the same second.
       await tx`
-        INSERT INTO entities (space_name, source_path, type, label, source_hash, properties, updated_at)
-        VALUES (${space.name}, ${relativePath}, 'wiki', ${label}, ${hash}, ${propsJson}, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+        INSERT INTO entities (space_name, source_path, type, kind, label, source_hash, stat_fingerprint, properties, updated_at)
+        VALUES (${space.name}, ${relativePath}, 'wiki', 'text', ${label}, ${hash}, ${fingerprint}, ${propsJson}, strftime('%Y-%m-%d %H:%M:%f', 'now'))
       `;
     }
 
@@ -149,6 +231,7 @@ async function syncWiki(
   return {
     action: existing ? "updated" : "created",
     type: "wiki",
+    kind: "text",
     label,
     linksExtracted: resolvedLinks.length,
   };
@@ -159,6 +242,7 @@ async function syncSource(
   relativePath: string,
   content: string,
   hash: string,
+  fingerprint: string,
   existing: Record<string, unknown> | null,
 ): Promise<SyncResult> {
   const label = basename(relativePath, extname(relativePath));
@@ -175,18 +259,107 @@ async function syncSource(
       UPDATE entities
       SET label = ${label},
           source_hash = ${hash},
+          stat_fingerprint = ${fingerprint},
           properties = ${propsJson},
+          kind = 'text',
           updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
       WHERE space_name = ${space.name} AND source_path = ${relativePath}
     `;
-    return { action: "updated", type: "file", label, linksExtracted: 0 };
+    return { action: "updated", type: "file", kind: "text", label, linksExtracted: 0 };
   }
 
   await sql`
-    INSERT INTO entities (space_name, source_path, type, label, source_hash, properties, updated_at)
-    VALUES (${space.name}, ${relativePath}, 'file', ${label}, ${hash}, ${propsJson}, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+    INSERT INTO entities (space_name, source_path, type, kind, label, source_hash, stat_fingerprint, properties, updated_at)
+    VALUES (${space.name}, ${relativePath}, 'file', 'text', ${label}, ${hash}, ${fingerprint}, ${propsJson}, strftime('%Y-%m-%d %H:%M:%f', 'now'))
   `;
-  return { action: "created", type: "file", label, linksExtracted: 0 };
+  return { action: "created", type: "file", kind: "text", label, linksExtracted: 0 };
+}
+
+/**
+ * Sync a binary asset (image, PDF, audio, video, archive, font...).
+ *
+ * Asset rows exist so `<a href="report.pdf">` and `<img src="chart.png">`
+ * inside wikis resolve as real links instead of red links — they're
+ * addressable but never enter the agent queues. The kind='text' filter
+ * in editor/proposer/connector queue queries excludes them.
+ *
+ * Called after `syncFile`'s stat-cache miss, so `existing.stat_fingerprint`
+ * (if any) does NOT match the current fingerprint — either it's a new
+ * row or the file's mtime/size shifted. We compute the real content hash
+ * (streaming, so multi-GB videos don't try to fit in RAM); if it matches
+ * the stored `source_hash`, the change was a touch — refresh the stat
+ * fingerprint and keep everything else.
+ *
+ * `properties` carries `file_type` and `size_bytes` only — no parsed
+ * metadata, no HTML structure, no <a href> link extraction.
+ *
+ * Asset rows:
+ *   - never emit relationships rows (assets don't link to anything);
+ *   - never get an entity_edits row (these are typically content the
+ *     user dropped on disk, not edits the system performed, and an
+ *     edit feed full of "image was added" noise would crowd out the
+ *     wiki edits operators actually care about).
+ *
+ * Asymmetry with `syncWiki`: no `withTransaction` wrapper because the
+ * write is a single UPDATE or INSERT (no companion DELETE-and-rebuild
+ * of relationships rows). Wrapping would just add a transactional
+ * round-trip without affecting consistency.
+ */
+async function syncAsset(
+  space: Space,
+  relativePath: string,
+  absPath: string,
+  stats: { mtimeMs: number; size: number },
+  fingerprint: string,
+  existing: Record<string, unknown> | null,
+): Promise<SyncResult> {
+  const label = basename(relativePath, extname(relativePath));
+  const sql = createSql();
+
+  const hash = await fileContentHash(absPath);
+
+  // Touch-without-change: stat shifted but bytes didn't. Refresh the
+  // cache so the next sync takes the fast path again.
+  if (existing && existing.source_hash === hash) {
+    await sql`
+      UPDATE entities
+      SET stat_fingerprint = ${fingerprint}
+      WHERE space_name = ${space.name} AND source_path = ${relativePath}
+    `;
+    return {
+      action: "unchanged",
+      type: "file",
+      kind: "asset",
+      label,
+      linksExtracted: 0,
+    };
+  }
+
+  const properties = {
+    file_type: extname(relativePath).slice(1).toLowerCase() || "unknown",
+    size_bytes: stats.size,
+  };
+  const propsJson = JSON.stringify(properties);
+
+  if (existing) {
+    await sql`
+      UPDATE entities
+      SET label = ${label},
+          source_hash = ${hash},
+          stat_fingerprint = ${fingerprint},
+          properties = ${propsJson},
+          kind = 'asset',
+          updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
+      WHERE space_name = ${space.name} AND source_path = ${relativePath}
+    `;
+    return { action: "updated", type: "file", kind: "asset", label, linksExtracted: 0 };
+  }
+
+  await sql`
+    INSERT INTO entities (space_name, source_path, type, kind, label, source_hash, stat_fingerprint, properties, updated_at)
+    VALUES (${space.name}, ${relativePath}, 'file', 'asset', ${label}, ${hash}, ${fingerprint}, ${propsJson}, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+  `;
+  return { action: "created", type: "file", kind: "asset", label, linksExtracted: 0 };
 }
 
 async function recordEntityEdit(
@@ -254,8 +427,12 @@ export async function removeByPath(space: Space, relativePath: string): Promise<
  * that resolves implicitly once the target file syncs.
  *
  * After sync'ing every supplied file, removes any entities whose
- * source_path is no longer in the file list (i.e. files deleted while
- * the watcher was offline).
+ * source_path no longer exists on disk (i.e. files deleted while the
+ * watcher was offline). The "exists on disk" check happens at the
+ * moment of deletion, NOT against the (stale) `files` snapshot —
+ * otherwise any file written between the walk and this cleanup loop
+ * (a concurrent applyEdit, a fresh drop by the user, ...) would be
+ * mistakenly removed because it isn't in the snapshot.
  */
 export async function syncDirectory(
   space: Space,
@@ -278,10 +455,10 @@ export async function syncDirectory(
   const dbEntities = await sql`
     SELECT source_path FROM entities WHERE space_name = ${space.name}
   `;
-  const fileSet = new Set(files);
   for (const row of dbEntities) {
     const p = row.source_path as string;
-    if (!fileSet.has(p)) {
+    const absPath = join(space.watch_dir, p);
+    if (!existsSync(absPath)) {
       const removed = await removeByPath(space, p);
       if (removed) summary.removed++;
     }

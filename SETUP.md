@@ -172,13 +172,15 @@ The `instructions:` text will appear under `defaults:` in the `config show` outp
 
 Drop text files anywhere in the directory (any subfolder is fine — `sources/`, `notes/`, top-level, doesn't matter). The watcher picks them up automatically.
 
-**What gets indexed**: any text file the watcher can read. The decision is three-tier:
+**What gets indexed**: nearly everything. Files split into two kinds:
 
-1. **Known-binary extensions are rejected outright** — `.pdf`, `.docx`, `.pptx`, `.xlsx`, `.png`, `.jpg`, `.mp3`, `.mp4`, `.zip`, fonts, native binaries, etc. (Full list: `BINARY_EXTENSIONS` in `src/server/lib/fs-watcher.ts`.)
-2. **Known-text extensions are accepted outright** — `.txt`, `.html`, `.md`, `.json`, `.csv`, `.tsv`, `.xml`, `.yaml`, `.toml`, `.log`, `.rst`, `.tex`, and most common source-code extensions. (Full list: `TEXT_EXTENSIONS`.)
-3. **Everything else** — extensionless files (`README`, `LICENSE`), unfamiliar extensions, etc. — is decided by a **content sniff**: the watcher reads the first 8 KB and checks for NUL bytes. No NUL → text → indexed. NUL → binary → ignored. Same rule `git`, `grep -I`, and `file(1)` use.
+- **`kind='text'`** — corpus material the agents read and process. Wikis (always text), plus source files classified as text: `.txt`, `.html`, `.md`, `.json`, `.csv`, `.yaml`, `.log`, `.rst`, `.tex`, and most source-code extensions. (Full list: `TEXT_EXTENSIONS`.) Unknown extensions get a content sniff — first 8 KB without a NUL byte → text. This is the queue-eligible kind.
 
-Net effect: drop any text file into the watch dir and it gets indexed, regardless of extension. Binaries (PDFs, DOCX, images) need conversion to text first — see below. Wikis themselves are still authored in HTML only; everything described here is for *source* material the agents read.
+- **`kind='asset'`** — binary attachments (PDFs, DOCX, images, audio, video, archives, fonts). Indexed so `<img src="chart.png">` and `<a href="report.pdf">` resolve to real entities instead of red links, but never enter the agent queues. Agents can still fetch and read them via the `fetch` tool (images and PDFs).
+
+The only files refused outright are **secrets and OS junk** — `.env`, `.envrc`, `.pem`/`.p12`/PGP keys, `.swp`/`.tmp`/`.bak`, `.DS_Store`, `Thumbs.db`. (Full lists: `SKIP_EXTENSIONS` and `SKIP_BASENAMES` in `src/server/lib/fs-watcher.ts`.)
+
+Wikis themselves are still authored in HTML only; everything described here is for *source* material the agents read or link to.
 
 > **Heads-up — source code is indexed too.** `.ts`, `.py`, `.go`, `.rs`, `.java`, `.sh`, `.sql`, CSS, and most other source-code extensions live in `TEXT_EXTENSIONS`. If you point arkeon-wiki at a project root (e.g. `~/projects/my-app`), expect every file outside `node_modules`/`.git`/etc. to land in the index — including the codebase itself. That's intentional (agents can reason over code-as-source), but it means a "personal knowledge base" watch dir and a "checked-out repo" watch dir behave very differently. Use `arkeon-wiki sources scan` to preview before letting the daemon loose.
 

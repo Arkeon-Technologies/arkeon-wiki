@@ -2,10 +2,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Walk every `<a href="...">` in an HTML wiki and resolve hrefs to
- * canonical `target_path` strings for the relationships table.
+ * Walk every `<a href="...">` and `<img src="...">` in an HTML wiki
+ * and resolve URLs to canonical `target_path` strings for the
+ * relationships table.
  *
- * Resolution rules:
+ * Two element shapes:
+ *   - `<a href>` — corpus links (article → article, article → source).
+ *     `text` carries the anchor body so the relationship row has
+ *     human-readable link text.
+ *   - `<img src>` — media references (article → indexed asset). These
+ *     produce relationship rows so an article that embeds a chart shows
+ *     up in the asset's `inbound`, and `<img>` to an indexed PNG/PDF
+ *     resolves as a real edge instead of a red link. `text` is the
+ *     `alt` attribute when present (or "" — there's no element body to
+ *     fall back to).
+ *
+ * Resolution rules (same for both attribute kinds):
  *   - External URLs (any scheme: `https://`, `mailto:`, `tel:`, …) → dropped.
  *   - Pure fragments (`#section`) → dropped (no edge to record).
  *   - Server-absolute paths (`/{space}/...`) → passed through as the
@@ -20,9 +32,12 @@
  *     (requires `opts.spaces`).
  *   - Resolved paths that escape into NO registered space → dropped.
  *
- * Returned links carry `href` (original attribute), `text` (anchor body),
- * and `resolved` (the canonical `target_path`, or `null` if the link is
- * external/unresolvable and should not produce a row).
+ * Returned links carry `href` (original attribute), `text` (anchor body
+ * or `alt`), and `resolved` (the canonical `target_path`, or `null` if
+ * the URL is external/unresolvable and should not produce a row).
+ *
+ * Not yet extracted: `<video src>`, `<audio src>`, `<source src>`,
+ * `<link href>`. Add when a real use case appears.
  */
 
 import { parse } from "node-html-parser";
@@ -55,6 +70,15 @@ export function extractHtmlLinks(
     if (!href) continue;
     const text = a.text.trim();
     out.push({ href, text, resolved: resolveHref(href, fromPath, opts) });
+  }
+  for (const img of root.querySelectorAll("img")) {
+    const src = img.getAttribute("src");
+    if (!src) continue;
+    // `alt` is the human-readable text for an image — closest analogue
+    // to an anchor's body. May be missing; empty string is fine for the
+    // relationships row (link_text is nullable downstream anyway).
+    const text = (img.getAttribute("alt") ?? "").trim();
+    out.push({ href: src, text, resolved: resolveHref(src, fromPath, opts) });
   }
   return out;
 }

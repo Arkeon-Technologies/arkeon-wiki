@@ -5,11 +5,18 @@
  * Source inventory for a space's watch directory.
  *
  * Walks the directory once, partitions every regular file via
- * `isEligibleFile()` (the same three-tier check the watcher applies:
- * binary-ext denylist → text-ext allowlist → content sniff), and
+ * `isEligibleFile()` (the same eligibility check the watcher applies:
+ * not hidden, not a junk basename, not a SKIP_EXTENSIONS match), and
  * reports counts plus a handful of example paths per unsupported
- * extension so the operator (or an LLM agent) can decide what to
- * convert.
+ * extension so the operator (or an LLM agent) can see what's getting
+ * skipped (typically OS junk or secret-bearing files).
+ *
+ * Note: under the asset-indexing model, "supported" now includes
+ * binary attachments — images, PDFs, audio, video — because they
+ * receive entity rows as `kind='asset'`. "Unsupported" is just the
+ * SKIP set (secrets, scratch files). To distinguish text from asset
+ * within "supported," consume the entity index directly via
+ * `GET /{space}/entities?kind=text` or `?kind=asset`.
  *
  * The walk reuses the ignore rules from fs-watcher (shouldIgnorePath)
  * so what the scan reports lines up exactly with what the watcher

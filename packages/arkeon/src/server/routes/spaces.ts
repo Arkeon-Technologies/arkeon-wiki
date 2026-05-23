@@ -87,9 +87,14 @@ spacesRouter.post("/", async (c) => {
   `;
   const space = { name: body.name, watch_dir: body.watch_dir };
 
-  startWatching(space).catch((err) => {
-    console.error(`[spaces] Failed to start watcher for "${body.name}":`, err.message);
-  });
+  // Await the full reconcile + watcher startup before returning.
+  // Fire-and-forget here used to race with concurrent writes: callers
+  // would POST /spaces and then immediately POST /inbox, and the
+  // background reconcile's "delete rows whose files aren't in the
+  // walk snapshot" pass would nuke the inbox row created between the
+  // walk and the cleanup query. Awaiting closes that window — by the
+  // time we 201, the watcher is live and the snapshot is consistent.
+  await startWatching(space);
 
   return c.json(space, 201);
 });

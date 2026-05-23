@@ -14,7 +14,7 @@
  */
 
 import { watch, type FSWatcher, existsSync, readdirSync, openSync, readSync, closeSync } from "node:fs";
-import { join, extname } from "node:path";
+import { join, extname, basename } from "node:path";
 
 import { startScheduler } from "../agents/scheduler.js";
 import { syncFile, syncDirectory, removeByPath, type Space } from "./sync.js";
@@ -24,33 +24,78 @@ type SchedulerHandle = Awaited<ReturnType<typeof startScheduler>>;
 // Directories to skip during walk + watch.
 const IGNORE_DIRS = new Set([".arkeon", ".git", "node_modules", ".claude", "__pycache__", ".venv"]);
 
-// Eligibility decision is three-tier:
+// Eligibility model (PR: asset indexing):
 //
-//   1. BINARY_EXTENSIONS — known-binary, never indexed (fast reject, no I/O).
-//   2. TEXT_EXTENSIONS — known-text, indexed without inspection (fast accept).
-//   3. Everything else — open the file, read the first SNIFF_BYTES, treat as
-//      text iff there's no NUL byte. Same rule `git`, `grep -I`, and `file(1)`
-//      use to decide "text vs binary."
+//   Most files get indexed. The rule is:
+//     - Hidden / ignore-dir paths → skip (never indexed).
+//     - SKIP_EXTENSIONS (secrets, junk, well-known scratch formats) → skip.
+//     - Everything else → indexed. Classified as kind='text' or
+//       kind='asset' by `classifyFile()`:
+//         · TEXT_EXTENSIONS allowlist → fast-path text.
+//         · ASSET_EXTENSIONS allowlist → fast-path asset.
+//         · Unknown extension → sniff first SNIFF_BYTES; text iff no NUL.
 //
-// This lets the agents reach files with unfamiliar extensions (custom configs,
-// random source code, README/LICENSE with no extension) without us having to
-// chase an ever-growing allowlist.
+// `kind='text'` files enter the agent queues (editor / proposer /
+// connector) and have their content parsed (wikis extract <a href> edges,
+// sources record file_type). `kind='asset'` files get an entity row with
+// metadata only — no parsing, no link extraction. They exist in the index
+// so links to them resolve (no red link on an `<img src>` or
+// `<a href="report.pdf">`), but they never become work for the agents.
 
-// "BINARY" here is a slight misnomer — the set is "extensions we refuse
-// to index, regardless of content." Most entries are literal binary
-// formats; a few (".svg", ".env", credentials) are text but excluded for
-// reasons noted inline.
-export const BINARY_EXTENSIONS = new Set([
+// Things we refuse to index at all, regardless of content. Two reasons
+// for an extension to be here:
+//   (1) it carries secrets (credentials, key material) and indexing
+//       would leak it through search / list / read tools;
+//   (2) it's local scratch noise that never represents corpus material
+//       (OS junk files, editor swap files).
+//
+// Compare against the prior (deprecated) "binary" denylist: that one
+// blocked everything binary-shaped — images, audio, video, PDFs,
+// archives — because the agents couldn't read them. Now they can (via
+// the fetch tool's image-injection path, plus the planned PDF
+// processor), so blocking them at the index level was the wrong layer.
+// The list below is only the truly-must-not-index entries.
+export const SKIP_EXTENSIONS = new Set([
+  // Secret-bearing extensions. These are often text (key=value, PEM,
+  // etc.) but the content sniff alone would auto-index them, defeating
+  // the purpose of having a "don't watch dotfiles" rule. Literal
+  // dotfiles (`.env`, `.envrc`) are also caught by shouldIgnorePath;
+  // this set covers the `*.env` suffix case (`production.env`,
+  // `staging.env`, etc.) the path-prefix rule misses.
+  ".env", ".envrc", ".secret",
+  ".pem", ".cer", ".crt", ".der", ".p7b", ".p7c", ".p8",
+  ".p12", ".pfx", ".jks", ".keystore", ".truststore",
+  ".asc", ".gpg", ".pgp", ".kdbx",
+  // Editor / OS scratch noise. Not corpus material, never worth indexing.
+  ".swp", ".swo", ".swn",      // vim swap
+  ".tmp", ".temp",
+  ".bak",                       // generic backup
+  ".lock",                      // bundler/yarn/pip lockfile (the *.lock
+                                // suffix; package-lock.json etc. are JSON
+                                // and stay indexable)
+]);
+
+// Junk basenames — never indexed regardless of extension. OS-level
+// noise that shows up next to real corpus files.
+const SKIP_BASENAMES = new Set([
+  ".DS_Store",
+  "Thumbs.db",
+  "desktop.ini",
+]);
+
+// Common image / document / media extensions get fast-path classification
+// as kind='asset'. Everything not on the text or asset allowlists falls
+// through to the content sniff in classifyFile().
+export const ASSET_EXTENSIONS = new Set([
   // Documents
   ".pdf", ".epub", ".mobi",
   // Office formats (zip-wrapped XML, not directly text). ".key" here is
-  // Apple Keynote; the cryptographic-key sense is covered in the
-  // credentials block below.
+  // Apple Keynote — the cryptographic-key sense is covered above in
+  // SKIP_EXTENSIONS.
   ".docx", ".doc", ".dotx", ".pptx", ".ppt", ".xlsx", ".xls",
   ".odt", ".ods", ".odp", ".pages", ".numbers", ".key",
-  // Images. ".svg" is technically text (XML) but treated as binary: its
-  // bytes are presentation data, not corpus material the agents would
-  // benefit from indexing.
+  // Images. ".svg" is XML but treated as an asset — it's presentation
+  // data, and rendering needs a rasterizer the agent can't drive.
   ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".bmp",
   ".tiff", ".tif", ".heic", ".heif", ".avif", ".raw",
   // Audio / video
@@ -67,17 +112,6 @@ export const BINARY_EXTENSIONS = new Set([
   ".db", ".sqlite", ".sqlite3", ".mdb", ".pyc", ".pyo",
   // Disk images / installers
   ".dmg", ".iso", ".pkg", ".deb", ".rpm", ".msi", ".apk", ".ipa",
-  // Secret-bearing extensions. These are usually text (key=value, PEM,
-  // etc.) but the sniff alone would auto-index them, defeating the
-  // purpose of having a "don't watch dotfiles" rule. Listing them here
-  // makes rejection explicit and content-independent. Literal dotfiles
-  // (`.env`, `.envrc`) are also caught by shouldIgnorePath; this set
-  // covers the `*.env` suffix case (`production.env`, `staging.env`,
-  // etc.) the path-prefix rule misses.
-  ".env", ".envrc", ".secret",
-  ".pem", ".cer", ".crt", ".der", ".p7b", ".p7c", ".p8",
-  ".p12", ".pfx", ".jks", ".keystore", ".truststore",
-  ".asc", ".gpg", ".pgp", ".kdbx",
 ]);
 
 export const TEXT_EXTENSIONS = new Set([
@@ -87,7 +121,7 @@ export const TEXT_EXTENSIONS = new Set([
   ".json", ".jsonl", ".ndjson", ".csv", ".tsv", ".xml",
   // Config
   ".yaml", ".yml", ".toml", ".ini", ".conf", ".cfg", ".properties",
-  // ".env" / ".envrc" are in BINARY_EXTENSIONS (above) — text content but
+  // ".env" / ".envrc" are in SKIP_EXTENSIONS (above) — text content but
   // refused indexing because they're almost always secret-bearing.
   ".editorconfig",
   // Logs / output
@@ -101,6 +135,33 @@ export const TEXT_EXTENSIONS = new Set([
   ".css", ".scss", ".sass", ".less",
   ".lua", ".php", ".pl", ".r", ".jl", ".scala", ".clj", ".cljs", ".ex", ".exs", ".erl",
 ]);
+
+/**
+ * Ripgrep `--type-add` glob built from TEXT_EXTENSIONS so search and
+ * indexing always see the same set of files. Adding a new text extension
+ * above automatically widens search to match — no second list to sync.
+ *
+ * Form: `*.{ext1,ext2,...}` (no leading dots, alphabetized for stable
+ * diffs). Asset extensions are excluded by construction (they're not in
+ * TEXT_EXTENSIONS), and ripgrep's built-in binary detection is the
+ * second line of defense for anything that slips through (text-shaped
+ * binaries like SVG would otherwise be searchable).
+ *
+ * Lives in this module — not search.ts — to avoid a circular import:
+ * fs-watcher → scheduler → tools → search → fs-watcher would otherwise
+ * read TEXT_EXTENSIONS before the const initializer finished.
+ *
+ * Known gap: extensionless text files (README, LICENSE) are indexed
+ * as kind='text' but not searchable — ripgrep `--type` selects by
+ * extension only. Tracked separately.
+ */
+export const TEXT_EXTENSION_GLOB = (() => {
+  const exts = [...TEXT_EXTENSIONS]
+    .map((e) => e.slice(1)) // strip leading dot
+    .filter((e) => /^[a-z0-9_]+$/.test(e)) // drop anything brace-unsafe
+    .sort();
+  return `*.{${exts.join(",")}}`;
+})();
 
 const SNIFF_BYTES = 8192;
 
@@ -178,27 +239,64 @@ export function shouldIgnorePath(relativePath: string): boolean {
 }
 
 /**
- * Path-only eligibility (no I/O). Use to gate watcher events cheaply:
- * rejects hidden dirs and known-binary extensions, lets anything else
- * through. Pair with `isEligibleFile()` (which adds the content sniff)
- * before actually indexing.
+ * Path-only eligibility (no I/O). Drops paths that should never enter
+ * the index — hidden / ignore dirs, junk basenames, and known
+ * skip-extensions (secrets, editor scratch). Pair with `classifyFile()`
+ * to decide kind='text' vs kind='asset' for paths that pass.
+ *
+ * The old "is it text or binary by extension" decision is no longer
+ * here — both texts and assets are indexable now.
  */
 export function isPathPotentiallyEligible(relativePath: string): boolean {
   if (shouldIgnorePath(relativePath)) return false;
+  const name = basename(relativePath);
+  if (SKIP_BASENAMES.has(name)) return false;
   const ext = extname(relativePath).toLowerCase();
-  if (ext && BINARY_EXTENSIONS.has(ext)) return false;
+  if (ext && SKIP_EXTENSIONS.has(ext)) return false;
   return true;
 }
 
 /**
- * Full eligibility — applies the three-tier check. May open the file
- * for sniffing if the extension is unknown.
+ * Should this file get an entity row at all?
+ *
+ * Today this is just `isPathPotentiallyEligible` — every file the watcher
+ * sees and the path filter accepts becomes an entity (either kind='text'
+ * with parsed content or kind='asset' with metadata only). The function
+ * is kept as the public eligibility predicate so the routes / scan code
+ * has one canonical entry point and we can evolve the rules without
+ * threading them through every caller. Operators reading this: yes, this
+ * intentionally no longer opens the file — that work moves to
+ * `classifyFile`, which the sync path calls once the eligibility gate
+ * has passed.
  */
-export function isEligibleFile(relativePath: string, absPath: string): boolean {
-  if (!isPathPotentiallyEligible(relativePath)) return false;
+export function isEligibleFile(relativePath: string, _absPath: string): boolean {
+  return isPathPotentiallyEligible(relativePath);
+}
+
+/**
+ * Classify an eligible file as text or asset.
+ *
+ *   - TEXT_EXTENSIONS allowlist → text (no I/O).
+ *   - ASSET_EXTENSIONS allowlist → asset (no I/O).
+ *   - Otherwise → sniff the first SNIFF_BYTES; text iff no NUL byte.
+ *
+ * Callers should gate on `isPathPotentiallyEligible(relativePath)` first;
+ * `classifyFile` assumes the path has already passed eligibility.
+ *
+ * Returns `'asset'` on I/O errors so a momentarily-unreadable file
+ * doesn't get mis-parsed as text by `syncFile` (which would then call
+ * readFileSync(..., 'utf-8') and corrupt binary data into a UTF-8
+ * replacement-character soup). Asset-mode reads only metadata, which is
+ * the safe fallback.
+ */
+export function classifyFile(
+  relativePath: string,
+  absPath: string,
+): "text" | "asset" {
   const ext = extname(relativePath).toLowerCase();
-  if (ext && TEXT_EXTENSIONS.has(ext)) return true;
-  return sniffIsText(absPath);
+  if (ext && TEXT_EXTENSIONS.has(ext)) return "text";
+  if (ext && ASSET_EXTENSIONS.has(ext)) return "asset";
+  return sniffIsText(absPath) ? "text" : "asset";
 }
 
 /**

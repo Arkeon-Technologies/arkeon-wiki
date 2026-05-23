@@ -29,16 +29,33 @@ all rooted at the space: \`/{space}/...\`. Names match
 a daemon-level route name (\`health\`, \`ready\`, \`help\`, \`llms.txt\`,
 \`spaces\` are reserved). Multiple spaces can coexist on one daemon.
 
-**Entity**: a row in the index for one file. Two types:
-  - \`wiki\`  — an article under \`wiki/**/*.html\` with a \`<title>\` and
-            optional \`<meta name="X" content="Y">\` tags. Wiki bodies
-            should follow the four-section shape: \`Question\`,
-            \`Current answer\`, \`Evidence\`, \`Open threads\`.
-  - \`file\`  — any other text file in the watch dir (markdown, source,
-            CSV, JSON, plain text, extensionless README, etc.). Binary
-            files (PDF, DOCX, images, archives) are intentionally not
-            indexed; use the \`sources/scan\` endpoint to see what was
-            skipped.
+**Entity**: a row in the index for one file. Indexed files have a
+\`type\` and a \`kind\`:
+  - \`type\`: \`wiki\` (article under \`wiki/**/*.html\`) or \`file\`
+    (everything else).
+  - \`kind\`: \`text\` (parsed corpus material — what the agents read
+    and process) or \`asset\` (binary attachment — image, PDF, audio,
+    video, archive — indexed so links to it resolve but never
+    entering the agent queues).
+
+Wikis are always \`type='wiki', kind='text'\`, with a \`<title>\` and
+optional \`<meta name="X" content="Y">\` tags. Wiki bodies should follow
+the four-section shape: \`Question\`, \`Current answer\`, \`Evidence\`,
+\`Open threads\`.
+
+Source files are \`type='file', kind='text'\` (markdown, JSON, CSV,
+source code, extensionless README, anything passing the text sniff).
+Asset files are \`type='file', kind='asset'\` (images, PDFs, audio,
+video, archives, fonts, office documents). Asset rows carry
+\`{file_type, size_bytes}\` in \`properties\` and have no parsed content.
+
+Queue queries (editor / proposer / connector) pass \`kind='text'\` so
+attachments stay out of the work feed. Reverse queries — "what
+attachments does this article reference?" — pass \`kind='asset'\`.
+
+Only secrets (\`.env\`, \`.pem\`, …) and OS junk (\`.DS_Store\`, vim swap,
+\`.tmp\`) are refused indexing. Use the \`sources/scan\` endpoint to see
+what was skipped.
 
 **Relationship**: every internal \`<a href>\` in a wiki becomes an
 edge with \`source_path\` → \`target_path\`. Paths are resolved relative
@@ -134,12 +151,17 @@ Plans are real wikis — they appear in the index and you can read them.
 ### Operator tasks
   - \`GET /{space}/sources/scan\`              — every file in the watch
                                                 dir partitioned into
-                                                supported (indexed) vs
-                                                unsupported (binary,
-                                                skipped). Convert
-                                                unsupported files to
-                                                text to let the agents
-                                                read them.
+                                                supported (indexed —
+                                                includes both text and
+                                                asset kinds) vs
+                                                unsupported (junk and
+                                                secret-bearing extensions
+                                                that are refused). To
+                                                see text vs asset within
+                                                supported, hit
+                                                \`/{space}/entities\` with
+                                                \`?kind=text\` or
+                                                \`?kind=asset\`.
   - \`GET /{space}/recent\`                    — \`entity_edits\` feed
                                                 across humans and
                                                 agents.
@@ -201,6 +223,9 @@ them up on its next cron tick.
 \`GET  /{space}/entities\`
   Filterable listing. Query params:
     \`type\`                       — \`wiki\` | \`file\` | \`wiki,file\`
+    \`kind\`                       — \`text\` | \`asset\` | \`text,asset\`
+                                   Pass \`kind=text\` on queue queries
+                                   so attachments don't surface as work.
     \`label_contains\`             — substring on \`label\`
     \`path_contains\`              — substring on \`source_path\`
     \`inbound_min\` / \`inbound_max\`  — edge-count bounds
@@ -251,9 +276,13 @@ them up on its next cron tick.
 
 \`GET  /{space}/sources/scan\`
   Walks the watch dir and partitions every file into supported (will
-  be indexed) vs unsupported (binary, silently skipped). Response:
+  be indexed — text and asset kinds both count here) vs unsupported
+  (silently skipped — junk basenames and secret-bearing extensions).
+  Response:
     \`{space, watch_dir, total, supported: {count, by_ext}, unsupported:
-      {count, by_ext, examples: {".pdf": [paths]}}}\`.
+      {count, by_ext, examples: {".env": [paths]}}}\`.
+  To break "supported" down by kind, use
+  \`GET /{space}/entities?kind=text\` and \`?kind=asset\`.
 
 ### Write-back
 

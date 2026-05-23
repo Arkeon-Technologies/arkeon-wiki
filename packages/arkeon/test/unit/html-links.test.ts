@@ -156,4 +156,48 @@ describe("extractHtmlLinks", () => {
     expect(links).toHaveLength(1);
     expect(links[0].text).toBe("x");
   });
+
+  it("walks <img src> and emits resolved relationships using `alt` as link text", () => {
+    const html = `<!doctype html><title>X</title>
+<body>
+  <p>See the chart:</p>
+  <img src="../images/chart.png" alt="Trade openness chart">
+  <img src="../images/no-alt.jpg">
+  <img src="https://cdn.example.com/external.png" alt="ext">
+</body>`;
+    const links = extractHtmlLinks(html, "wiki/foo.html");
+    expect(links).toHaveLength(3);
+
+    const resolved = links.filter((l) => l.resolved !== null);
+    expect(resolved.map((l) => ({ resolved: l.resolved, text: l.text }))).toEqual([
+      { resolved: "images/chart.png", text: "Trade openness chart" },
+      { resolved: "images/no-alt.jpg", text: "" },
+    ]);
+
+    const external = links.find((l) => l.href.startsWith("https://"));
+    expect(external?.resolved).toBeNull();
+  });
+
+  it("skips <img> elements without a src attribute", () => {
+    const html = `<img alt="nothing"><img src="x.png">`;
+    const links = extractHtmlLinks(html, "wiki/foo.html");
+    expect(links).toHaveLength(1);
+    expect(links[0].href).toBe("x.png");
+  });
+
+  it("emits both <a> and <img> relationships in a mixed document", () => {
+    const html = `<a href="other.html">other</a>
+                  <img src="../images/x.png" alt="x">
+                  <a href="../sources/notes.md">notes</a>`;
+    const links = extractHtmlLinks(html, "wiki/foo.html");
+    const resolved = links
+      .filter((l) => l.resolved !== null)
+      .map((l) => l.resolved)
+      .sort();
+    expect(resolved).toEqual([
+      "images/x.png",
+      "sources/notes.md",
+      "wiki/other.html",
+    ]);
+  });
 });

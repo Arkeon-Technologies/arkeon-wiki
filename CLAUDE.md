@@ -60,14 +60,22 @@ Parsing uses a real HTML parser (`node-html-parser`), not regex — apostrophe-i
 
 There is no YAML frontmatter on wikis, no `[[wikilink]]` syntax, no placeholder rows. A link to a target that doesn't exist on disk is a **red link** — a `relationships` row with no matching `entities` row. Resolution is a LEFT JOIN at query time; surfaced via `GET /{space}/redlinks` and the `list_redlinks` agent tool.
 
-Source files (anywhere outside `wiki/`) are indexed as `type='file'` with `{file_type: <ext>}`. Eligibility is a three-tier check in `src/server/lib/fs-watcher.ts`: (1) `BINARY_EXTENSIONS` denylist short-circuits known-binary formats (`.pdf`, `.docx`, `.png`, fonts, archives, etc.), (2) `TEXT_EXTENSIONS` allowlist short-circuits common text formats (`.txt`, `.html`, `.md`, `.json`, `.csv`, `.yaml`, source code, etc.), (3) anything else is decided by `sniffIsText()` — read the first 8 KB, look for NUL bytes. No NUL → text → indexed. This is the same heuristic `git`/`grep -I`/`file(1)` use; it lets us cover any text file (extensionless `README`/`LICENSE`, unfamiliar `.cfg` variants, etc.) without an ever-growing allowlist. Wikis themselves are still authored in HTML only — the eligibility rules above are for *source* material the agents read. Structured metadata lives in `<meta name="X" content="Y">` tags on the wiki itself.
+Files (anywhere outside `wiki/`) are indexed as `type='file'`. Eligibility is a small denylist (`SKIP_EXTENSIONS` for secrets and editor scratch — `.env`, `.pem`, `.swp`, `.tmp`, …; `SKIP_BASENAMES` for OS junk — `.DS_Store`, `Thumbs.db`). Everything else gets an entity row. Classification into kind happens in `classifyFile()` (`src/server/lib/fs-watcher.ts`): `TEXT_EXTENSIONS` allowlist → `kind='text'`; `ASSET_EXTENSIONS` allowlist → `kind='asset'`; unknown extension → sniff first 8 KB, no NUL → text, otherwise asset.
+
+`kind='text'` is what enters the agent queues. Wikis are always text. Source files classified as text get parsed (HTML wikis emit `<a href>` edges; other text files just record `file_type`). Queue queries in editor / proposer / connector pass `kind='text'` so attachments stay out of the work feed.
+
+`kind='asset'` covers everything binary — images, PDFs, audio, video, archives, fonts, office documents. Asset rows exist so `<a href="report.pdf">` and `<img src="chart.png">` inside wikis resolve as real links instead of red links — they're addressable but never feed the agents. Asset rows carry `{file_type, size_bytes}` in `properties`, no parsed metadata, no link extraction, no `entity_edits` audit rows. `properties.size_bytes` is the only column on an asset that isn't on a text row.
+
+**Change detection.** `source_hash` is canonical SHA-256 of content for both kinds — uniform meaning across the codebase. Alongside it, `stat_fingerprint` (`mtime_ms-size_bytes`) is a cheap cache: if the fingerprint matches the stored value, the bytes are guaranteed unchanged and `syncFile` skips the content read entirely. On a fingerprint miss it computes the real content hash (streaming for assets so multi-GB files don't try to fit in RAM); if the hash matches `source_hash`, the change was a touch (refresh fingerprint, no parse, no `updated_at` bump). This keeps `source_hash` semantically uniform while making syncs O(1) on unchanged files — particularly load-bearing for large assets during a reconcile walk.
+
+Wikis themselves are still authored in HTML only — the eligibility rules above are for *source* material the agents read. Structured metadata lives in `<meta name="X" content="Y">` tags on the wiki itself.
 
 ## Writing (three roles: `editor`, `proposer`, `writer`)
 
 Three bundled agent roles cooperate on a single-job-each pipeline. Each runs on its own cron, all three serialized per-space by the in-process mutex.
 
 **`editor`** (source-driven, runs first per source). Each tick:
-1. Picks one source the editor hasn't tagged at its current `source_hash` (`list_entities?type=file&not_has_tag=editor.processed_hash`).
+1. Picks one source the editor hasn't tagged at its current `source_hash` (`list_entities?type=file&kind=text&not_has_tag=editor.processed_hash`).
 2. Reads the source; surveys existing articles via `list_entities` (using `properties.short_description` for semantic matching).
 3. For each existing article the source bears on, applies one or both:
    - **Content edit** — `edit_file insert_at_line` adds a citation-bearing paragraph in Evidence, or `edit_file str_replace` revises Current Answer when the source reshapes the thesis. Always cites the source inline via `<a href="../sources/...">`.
@@ -77,7 +85,7 @@ Three bundled agent roles cooperate on a single-job-each pipeline. Each runs on 
 Editor never creates articles. Zero edits per tick is fine — many sources are tangential to existing articles and should be tagged-and-skipped.
 
 **`proposer`** (source-driven, runs SECOND per source by data dependency). Each tick:
-1. Picks one source the editor has tagged but the proposer hasn't (`list_entities?type=file&has_tag=editor.processed_hash&not_has_tag=proposer.processed_hash`).
+1. Picks one source the editor has tagged but the proposer hasn't (`list_entities?type=file&kind=text&has_tag=editor.processed_hash&not_has_tag=proposer.processed_hash`).
 2. Reads the source.
 3. **Calls `get_entity` on the source path** — `entity.inbound` lists every article that already cites this source (the editor's integration points). These tell the proposer which concepts the editor already integrated.
 4. **Searches the broader corpus** for thematically-adjacent material on the source's main themes — so the plan can seed cross-source citations the writer will follow later. Without this step plans tend to cite only their originating source, which biases the writer toward single-source articles.
@@ -128,7 +136,7 @@ The read-gate is orthogonal to `edit-context.ts`, which exists for **attribution
 Six tables in SQLite, fresh `001-foundation.sql`:
 
 - `spaces (name PK, watch_dir UNIQUE, created_at)`
-- `entities (space_name, source_path)` composite PK, `type` CHECK (`'wiki'|'file'`), `label`, `source_hash`, `properties` JSON (file-derived), `tags` JSON (agent-applied), timestamps
+- `entities (space_name, source_path)` composite PK, `type` CHECK (`'wiki'|'file'`), `kind` CHECK (`'text'|'asset'`) — text drives the agent queues, asset is link-resolution-only — `label`, `source_hash` (SHA-256 of content for both kinds), `stat_fingerprint` (mtime+size cache for skipping unchanged reads), `properties` JSON (file-derived), `tags` JSON (agent-applied), timestamps
 - `relationships (space_name, source_path, target_path)` composite PK, `link_text` — no FK on `target_path` (red links!)
 - `entity_edits (space_name, entity_path, at)` composite PK — `at` carries millisecond precision via `strftime('%f')` so same-second writes don't collide. Not FK'd; history survives entity deletion.
 - `conversations (id PK ULID, space_name, article_path NULLABLE, title)` — the **one** v0 table with an explicit ID, because conversations have no on-disk file to derive identity from. Phase 1 lays the schema; Phase 3 wires the routes.
@@ -156,7 +164,7 @@ Tags exist so multi-agent pipelines can track "has role X processed entity Y" wi
 - `src/server/lib/search.ts` — ripgrep adapter (`@vscode/ripgrep`), spawns per-space, parses `--json` events, joins back to entities by path.
 - `src/server/lib/reader.ts` — Phase 2 rendering primitives: `classifyAnchor`, `instrumentArticle`, `renderSpaceIndex`, `renderArticleIndex`. Pure functions; the route handlers in `routes/reader.ts` are thin glue.
 - `src/server/lib/inbox.ts` — `slugify`, `utcDateStamp`, `resolveInboxPath` (with collision auto-suffix), `buildInboxContent`. Pure helpers for the `POST /:space/inbox` route.
-- `src/server/lib/source-write-guards.ts` — `assertSourcePath` / `assertTextContent` / `sanitizeCaller`. Shared validation for both write-back endpoints. Reuses `BINARY_EXTENSIONS`/`TEXT_EXTENSIONS`/`sniffBufferIsText` from fs-watcher so HTTP-uploaded content is held to the same eligibility bar as watcher-detected files.
+- `src/server/lib/source-write-guards.ts` — `assertSourcePath` / `assertTextContent` / `sanitizeCaller`. Shared validation for both write-back endpoints. The HTTP write APIs are text-only — `assertTextContent` rejects SKIP_EXTENSIONS (secrets), ASSET_EXTENSIONS (binaries: drop them on disk instead, the watcher indexes them as kind='asset'), and content that sniffs binary. Reuses `sniffBufferIsText` from fs-watcher so the eligibility bar is the same one the watcher applies.
 - `src/server/routes/inbox.ts` — `POST /:space/inbox` + `PUT /:space/sources/*`. Both go through `applyEdit` so the sync is synchronous and the response carries the synced entity. New sources have no `*.processed_hash` tag, so the editor cron picks them up on the next tick.
 - `src/server/routes/reader.ts` — the four human-facing routes (`/`, `/:space`, `/:space/`, `/:space/wiki/*`, `/:space/*`). Mounted last so `/:space/*` is a true fallback.
 - `src/server/agents/` — declarative `.arkeon/agents.yaml` config (Zod-validated), bundled role templates (`templates/*.yaml`), role-builder, tool registry, `runAgent` loop (Vercel AI SDK), per-space cron scheduler.

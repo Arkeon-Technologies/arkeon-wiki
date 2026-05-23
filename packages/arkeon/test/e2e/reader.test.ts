@@ -91,11 +91,11 @@ beforeAll(async () => {
     `A mathematical theory of communication.\n`,
   );
 
-  // Deliberately NOT indexed (PDF is in BINARY_EXTENSIONS — fast-rejected).
-  // Still exists on disk and gets served raw by the static-file fallback
-  // with the MIME table's `application/pdf` content type — exercises the
-  // passthrough path for any non-indexed file type. From the wiki's
-  // perspective it's a red link because no entity row exists.
+  // Indexed as kind='asset' (PDFs are in ASSET_EXTENSIONS). Has an
+  // entity row so links to it resolve (no red-link class), and the
+  // static-file fallback still serves the bytes with application/pdf
+  // — exercises the passthrough path for any file the reader doesn't
+  // own (everything that isn't wiki/**/*.html).
   writeFileSync(
     join(workdir, "sources/notes.pdf"),
     `%PDF-1.4\nPretend bytes, served raw.\n`,
@@ -207,12 +207,10 @@ describe("Phase 2 reader", () => {
     expect(body).toContain(
       `<a href="../sources/missing.txt" class="arkeon-file arkeon-redlink">`,
     );
-    // Non-indexed file type (PDF is in BINARY_EXTENSIONS) — the file
-    // exists on disk but there's no entity row, so the reader classifies it
-    // as a red link. The static-file route below verifies the bytes still
-    // come through.
+    // Indexed asset (PDF) — has an entity row with kind='asset', so the
+    // link resolves (no redlink class). Style is plain `arkeon-file`.
     expect(body).toContain(
-      `<a href="../sources/notes.pdf" class="arkeon-file arkeon-redlink">`,
+      `<a href="../sources/notes.pdf" class="arkeon-file">`,
     );
     // External link untouched
     expect(body).toContain(`<a href="https://wikipedia.org">wikipedia</a>`);
@@ -228,11 +226,12 @@ describe("Phase 2 reader", () => {
     expect(body).not.toContain("arkeon-chrome");
   });
 
-  it("GET /:space/sources/*.pdf serves non-indexed binaries raw via MIME table passthrough", async () => {
-    // PDFs aren't indexed but the static-file fallback still serves them
-    // with application/pdf so browsers display them natively. Same
-    // principle covers images, video, archives — the MIME table is the
-    // contract for any non-indexed extension.
+  it("GET /:space/sources/*.pdf serves asset bytes raw via MIME table passthrough", async () => {
+    // PDFs are now indexed as kind='asset' (link resolution works), but
+    // the actual bytes still flow through the static-file fallback —
+    // the reader only owns wiki/**/*.html. Same principle covers
+    // images, video, archives — MIME table is the contract for any
+    // non-wiki path.
     const res = await fetch(`${baseUrl}/${SPACE}/sources/notes.pdf`);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toMatch(/application\/pdf/);
