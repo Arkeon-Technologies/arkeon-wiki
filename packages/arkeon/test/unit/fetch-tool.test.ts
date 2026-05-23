@@ -148,6 +148,42 @@ describe("fetch — local paths", () => {
     expect(result.results[0].kind).toBe("error");
   });
 
+  it("resolves href-relative paths against `from` (browser-style)", async () => {
+    // HTML at sources/post.html references ../images/chart.png — relative
+    // to its directory, that's images/chart.png from the watch_dir.
+    mkdirSync(join(workdir, "sources"), { recursive: true });
+    writeFileSync(join(workdir, "sources/post.html"), "<html/>");
+    writeFileSync(join(workdir, "images/chart.png"), PNG_BYTES);
+
+    const result = (await exec(getFetchTool(ctx), {
+      targets: ["../images/chart.png"],
+      from: "sources/post.html",
+    })) as { results: ResultItem[] };
+
+    expect(result.results[0].kind).toBe("image");
+    expect(result.results[0].media_type).toBe("image/png");
+  });
+
+  it("`from` is ignored for absolute / canonical-prefix paths", async () => {
+    writeFileSync(join(workdir, "sources/notes.md"), "ok");
+    mkdirSync(join(workdir, "sources"), { recursive: true });
+    const result = (await exec(getFetchTool(ctx), {
+      targets: [`/${SPACE.name}/sources/notes.md`],
+      from: "deep/nested/article.html",
+    })) as { results: ResultItem[] };
+    expect(result.results[0].kind).toBe("text");
+    expect(result.results[0].text).toBe("ok");
+  });
+
+  it("`from` still triggers safeResolve guard against escape", async () => {
+    mkdirSync(join(workdir, "sources"), { recursive: true });
+    const result = (await exec(getFetchTool(ctx), {
+      targets: ["../../../../etc/passwd"],
+      from: "sources/post.html",
+    })) as { results: ResultItem[] };
+    expect(result.results[0].kind).toBe("error");
+  });
+
   it("caps text body at 32 KB and reports truncated=true", async () => {
     const big = "x".repeat(40 * 1024);
     writeFileSync(join(workdir, "sources/big.txt"), big);
