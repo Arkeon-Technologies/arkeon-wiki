@@ -19,7 +19,7 @@
  * extract outbound edges.
  */
 
-import { createReadStream, readFileSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { join, basename, extname } from "node:path";
 import { createHash } from "node:crypto";
 
@@ -427,8 +427,12 @@ export async function removeByPath(space: Space, relativePath: string): Promise<
  * that resolves implicitly once the target file syncs.
  *
  * After sync'ing every supplied file, removes any entities whose
- * source_path is no longer in the file list (i.e. files deleted while
- * the watcher was offline).
+ * source_path no longer exists on disk (i.e. files deleted while the
+ * watcher was offline). The "exists on disk" check happens at the
+ * moment of deletion, NOT against the (stale) `files` snapshot —
+ * otherwise any file written between the walk and this cleanup loop
+ * (a concurrent applyEdit, a fresh drop by the user, ...) would be
+ * mistakenly removed because it isn't in the snapshot.
  */
 export async function syncDirectory(
   space: Space,
@@ -451,10 +455,10 @@ export async function syncDirectory(
   const dbEntities = await sql`
     SELECT source_path FROM entities WHERE space_name = ${space.name}
   `;
-  const fileSet = new Set(files);
   for (const row of dbEntities) {
     const p = row.source_path as string;
-    if (!fileSet.has(p)) {
+    const absPath = join(space.watch_dir, p);
+    if (!existsSync(absPath)) {
       const removed = await removeByPath(space, p);
       if (removed) summary.removed++;
     }
