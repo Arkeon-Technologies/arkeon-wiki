@@ -53,6 +53,29 @@ import type { Space } from "../lib/sync.js";
 
 import { ALL_TOOLS } from "./tools.js";
 
+/**
+ * Node's setTimeout silently clamps any delay greater than a signed
+ * 32-bit int (~24.8 days) to 1 ms and emits a `TimeoutOverflowWarning`.
+ * A cron expression that resolves further out than this — typically a
+ * misconfigured agents.yaml that picks a single instant per year —
+ * would otherwise turn into a 1 ms tight loop, hammering the daemon
+ * log with `buildAgentRole` failures and filling disks at thousands of
+ * lines per second. (Real incident: ~141 GB of `epw` daemon log in
+ * 10 days.) Cap the timeout at the limit and re-evaluate on wake.
+ */
+export const MAX_SET_TIMEOUT_MS = 2_147_483_647;
+
+export function computeScheduleDelay(
+  nextAt: Date,
+  now: Date,
+): { delayMs: number; capped: boolean } {
+  const rawDelayMs = Math.max(0, nextAt.getTime() - now.getTime());
+  if (rawDelayMs > MAX_SET_TIMEOUT_MS) {
+    return { delayMs: MAX_SET_TIMEOUT_MS, capped: true };
+  }
+  return { delayMs: rawDelayMs, capped: false };
+}
+
 interface SchedulerHandle {
   /** Stop scheduling new ticks and wait for any in-flight run to finish
    *  (bounded by `gracePeriodMs`, default 5s). After resolution no
@@ -175,10 +198,24 @@ export async function startScheduler(
       );
       return;
     }
-    const delayMs = Math.max(0, nextAt.getTime() - Date.now());
+    const { delayMs, capped } = computeScheduleDelay(nextAt, new Date());
+    if (capped) {
+      const daysOut = Math.round(
+        (nextAt.getTime() - Date.now()) / 86_400_000,
+      );
+      console.warn(
+        `[agent/scheduler] role=${role} space="${opts.space.name}" cron='${cron}' next firing ${nextAt.toISOString()} is ~${daysOut} days out, exceeding setTimeout's 32-bit limit; sleeping ${MAX_SET_TIMEOUT_MS} ms then re-evaluating. Check the cron expression in agents.yaml.`,
+      );
+    }
     const timer = setTimeout(() => {
       timers.delete(role);
       if (stopped) return;
+      // If we capped, the cron hasn't actually elapsed — just re-run
+      // the scheduling step rather than firing the agent.
+      if (capped) {
+        scheduleNext(role, cron);
+        return;
+      }
       void fireTick(role, cron);
     }, delayMs);
     timers.set(role, timer);
