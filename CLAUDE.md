@@ -259,7 +259,7 @@ E2e tests start a real stack in-process — no running daemon needed.
 - `~/.arkeon-wiki/<name>/` — named instance home (one per `--name`)
 - `~/.arkeon-wiki/<home>/data/arke.db` — the SQLite database file
 - `~/.arkeon-wiki/<home>/arkeon.pid` — pidfile for the daemon
-- `~/.arkeon-wiki/<home>/arkeon.log` — daemon stdout/stderr
+- `~/.arkeon-wiki/<home>/arkeon.log` — daemon stdout/stderr. Size-capped: when the daemon runs headless (under `up`, launchd, or systemd) it installs in-process rotation that keeps each file under 50 MB and retains 3 backups (`arkeon.log.1` ... `.3`), bounding total disk usage to ~200 MB per instance. Override via `ARKEON_WIKI_LOG_MAX_BYTES` / `ARKEON_WIKI_LOG_MAX_FILES`. Foreground `arkeon-wiki start` in a terminal prints to the terminal as before.
 - `~/.arkeon-wiki/instances/<name>.json` — registry of running instances
 - `~/.arkeon-wiki/.env` — user-global env file. `install` writes API keys here; the agent runtime reads them at startup. Never overwritten — values rotate by editing the file.
 - `~/Library/LaunchAgents/tech.arkeon.wiki[.<name>].plist` — service plist when `install` has been run on macOS. Owned by the user; survives reboot.

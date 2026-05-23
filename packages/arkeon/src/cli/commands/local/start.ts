@@ -24,6 +24,7 @@ import {
   DEFAULT_API_PORT,
   ensureArkeonDir,
   isProcessAlive,
+  logfile,
   readPidfile,
   removePidfile,
   writePidfile,
@@ -33,6 +34,7 @@ import {
   registerInstance,
   unregisterInstance,
 } from "../../lib/instances.js";
+import { installRotatingStdLog } from "../../lib/rotating-log.js";
 import { runMigrations } from "../../../schema/index.js";
 
 interface StartOptions {
@@ -69,6 +71,16 @@ async function runStart(options: StartOptions): Promise<void> {
   }
 
   ensureArkeonDir();
+
+  // Install size-capped log rotation when running headless (under
+  // `up`, launchd, or systemd — i.e. when stdout isn't a TTY). Bounds
+  // total log disk usage to ~200 MB regardless of how chatty (or
+  // bug-tight-looped) the daemon gets. Foreground users running
+  // `arkeon-wiki start` in a terminal see logs as before.
+  if (!process.stdout.isTTY) {
+    installRotatingStdLog(logfile());
+  }
+
   const db = dbPath();
 
   console.log("[arkeon-wiki] Starting local stack");
