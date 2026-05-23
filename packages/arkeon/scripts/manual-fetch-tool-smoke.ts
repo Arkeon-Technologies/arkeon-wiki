@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Arkeon Technologies, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 // Live smoke test: spin up a tiny agent role with the `fetch` tool and
 // see whether a real provider can use it to look at the chartbook
 // "Globalisation through recent history" image.

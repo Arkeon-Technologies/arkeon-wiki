@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Arkeon Technologies, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
 // Live full-workflow smoke: an agent reads an HTML source containing
 // BOTH remote and local <img src> references, fetches them all in one
 // batched call, and describes what it sees. Verifies:
