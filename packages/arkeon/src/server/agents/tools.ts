@@ -1309,19 +1309,22 @@ const fetchTool = defineTool("fetch", {
     "Per-target failures (404, timeout, unsupported MIME) don't abort " +
     "the batch — they come back as `kind='error'` items in `results[]` " +
     "so the other targets still come through.\n\n" +
-    "Path resolution for local targets: when you grab an `<img src>` or " +
-    "`<a href>` value out of an HTML file, that path is RELATIVE TO THE " +
-    "HTML FILE, not the watch_dir. Pass the HTML file's path as `from` " +
-    "and the tool resolves the same way a browser does. Without `from`, " +
-    "local paths are interpreted relative to the watch_dir root.\n\n" +
-    "Example — HTML at `sources/post.html` contains " +
-    "`<img src=\"../images/chart.png\">`. To view it, pass the href " +
-    "VERBATIM as the target and set `from` to the HTML's path:\n" +
-    "  fetch({ targets: [\"../images/chart.png\"], " +
-    "from: \"sources/post.html\" })\n" +
-    "The tool resolves to `images/chart.png` (relative to watch_dir). " +
-    "If you'd rather pre-resolve and pass `images/chart.png` directly, " +
-    "leave `from` unset — both forms work.",
+    "Local-target path forms (in order of preference):\n" +
+    "  1. Space-rooted URL — `/{spaceName}/{path}`. The canonical form " +
+    "every tool's `space_url` field returns. Picks the watch_dir from " +
+    "the named space, so a multi-space role can fetch images across " +
+    "spaces it's scoped to (e.g. an article in space A can reference a " +
+    "chart asset in space B). Pasting a `space_url` verbatim Just Works.\n" +
+    "  2. Watch-dir-relative — `images/chart.png` (no leading slash). " +
+    "Resolved against the current space's watch_dir.\n" +
+    "  3. href-relative + `from` — pass the raw `<img src>` / `<a href>` " +
+    "value verbatim and set `from` to the HTML file's path. Tool " +
+    "resolves the way a browser does. Example: HTML at " +
+    "`sources/post.html` containing `<img src=\"../images/chart.png\">` " +
+    "→ `fetch({ targets: [\"../images/chart.png\"], " +
+    "from: \"sources/post.html\" })` resolves to `images/chart.png`.\n" +
+    "Prefer (1) when you have a space_url from a prior tool result; (3) " +
+    "is the no-math option when you've just pulled hrefs out of HTML.",
   inputSchema: z.object({
     targets: z
       .array(z.string())
@@ -1348,18 +1351,16 @@ const fetchTool = defineTool("fetch", {
     space: z.string().nullable().optional().describe(SPACE_PARAM_DESC),
   }),
   call: async ({ targets, from, space }, ctx, { toolCallId }) => {
-    // Local-file targets land in a specific space. Mirror read_file's
-    // multi-space contract: explicit `space` arg or the triggering one.
-    let target: Space;
+    // `defaultSpace` is the fallback for bare (non-space-rooted, non-URL)
+    // targets. Single-space role → always the triggering space. Multi-
+    // space role → must be explicit (the call's `space` arg) OR every
+    // target must be space-rooted/URL so the per-target resolver can
+    // pick the space without ambiguity.
+    let defaultSpace: Space | null = null;
     if (ctx.allowedSpaces.length <= 1) {
-      target = ctx.space;
+      defaultSpace = ctx.space;
     } else if (space != null && space !== "") {
-      target = resolveSpaceArg(space, ctx.allowedSpaces);
-    } else {
-      throw new Error(
-        `fetch: this role spans multiple spaces, so the \`space\` ` +
-          `argument is required for local paths. Allowed: ${describeAllowed(ctx.allowedSpaces)}.`,
-      );
+      defaultSpace = resolveSpaceArg(space, ctx.allowedSpaces);
     }
 
     // All images surfaced from this single call get bundled into one
@@ -1373,7 +1374,7 @@ const fetchTool = defineTool("fetch", {
 
     const results = await Promise.all(
       targets.map((rawTarget) =>
-        fetchOne(rawTarget, ctx, target, queuedImages, from ?? null),
+        fetchOne(rawTarget, ctx, defaultSpace, queuedImages, from ?? null),
       ),
     );
 
@@ -1381,7 +1382,7 @@ const fetchTool = defineTool("fetch", {
       ctx.imageQueue.set(toolCallId, queuedImages);
     }
 
-    return { results, space: target.name };
+    return { results, space: defaultSpace?.name ?? ctx.space.name };
   },
   summarize: (r) => ({
     space: r.space,
@@ -1401,7 +1402,7 @@ const fetchTool = defineTool("fetch", {
 async function fetchOne(
   rawTarget: string,
   ctx: AgentContext,
-  space: Space,
+  defaultSpace: Space | null,
   imagesOut: Array<{ source: string; mediaType: string; data: Buffer }>,
   from: string | null,
 ): Promise<FetchResultItem> {
@@ -1409,7 +1410,7 @@ async function fetchOne(
     if (/^https?:\/\//i.test(rawTarget)) {
       return await fetchRemote(rawTarget, imagesOut);
     }
-    return await fetchLocal(rawTarget, ctx, space, imagesOut, from);
+    return await fetchLocal(rawTarget, ctx, defaultSpace, imagesOut, from);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { target: rawTarget, kind: "error", error: msg };
@@ -1493,18 +1494,55 @@ async function fetchRemote(
 async function fetchLocal(
   path: string,
   ctx: AgentContext,
-  space: Space,
+  defaultSpace: Space | null,
   imagesOut: Array<{ source: string; mediaType: string; data: Buffer }>,
   from: string | null,
 ): Promise<FetchResultItem> {
-  // Normalize the canonical /{space}/... form too — the agent may paste
-  // a space_url from a tool result directly into fetch.
   let normalized = path;
-  const spacePrefix = `/${space.name}/`;
-  if (normalized.startsWith(spacePrefix)) {
-    normalized = normalized.slice(spacePrefix.length);
-  } else if (normalized.startsWith("/")) {
-    normalized = normalized.replace(/^\/+/, "");
+  let space: Space | null = defaultSpace;
+  // Space-rooted URL form: `/{spaceName}/{rest}` — the canonical shape
+  // returned by every tool's `space_url` field and the form wikis use
+  // for `<a href>` cross-references. Pasting it here is the intended
+  // use; the parsed space name picks which watch_dir to resolve
+  // against and may differ from `defaultSpace` (cross-space fetch).
+  // Spaces NOT in this role's allowedSpaces are rejected — a multi-
+  // space role can only read what it's scoped to.
+  if (normalized.startsWith("/")) {
+    const slash = normalized.indexOf("/", 1);
+    const maybeSpaceName = slash > 0 ? normalized.slice(1, slash) : normalized.slice(1);
+    const matched = ctx.allowedSpaces.find((s) => s.name === maybeSpaceName);
+    if (!matched) {
+      return {
+        target: path,
+        kind: "error",
+        error:
+          `'/${maybeSpaceName}/...' references space '${maybeSpaceName}' which is not in ` +
+          `this role's allowed set [${ctx.allowedSpaces.map((s) => s.name).join(", ")}]. ` +
+          `Paste a space_url from a tool result, or use a watch_dir-relative path.`,
+      };
+    }
+    space = matched;
+    normalized = slash > 0 ? normalized.slice(slash + 1) : "";
+    if (!normalized) {
+      return {
+        target: path,
+        kind: "error",
+        error: `missing path after /${maybeSpaceName}/`,
+      };
+    }
+  } else if (!space) {
+    // Bare path on a multi-space role without an explicit `space` arg
+    // — we can't tell which watch_dir to resolve against. Multi-space
+    // roles can either supply `space` for the whole call or use the
+    // space-rooted URL form per target.
+    return {
+      target: path,
+      kind: "error",
+      error:
+        `multi-space role: bare path '${path}' is ambiguous. Either pass ` +
+        `\`space\` on the call, or use the space-rooted URL form ` +
+        `/{spaceName}/${path}.`,
+    };
   } else if (from) {
     // Browser-style href resolution: resolve `path` against the directory
     // of `from`, then normalize. Lets agents paste raw <img src> /
@@ -1514,6 +1552,13 @@ async function fetchLocal(
     normalized = posix.normalize(posix.join(fromDir, normalized));
   }
 
+  // Invariant after the if/else chain above: `space` is non-null —
+  // either the path was space-rooted (set above), bare-with-default
+  // (already non-null), bare-without-default (early-returned), or
+  // had `from` (defaultSpace was non-null to reach the else-if).
+  if (!space) {
+    return { target: path, kind: "error", error: "internal: space unresolved" };
+  }
   let absPath = safeResolve(space.watch_dir, normalized);
   if (!existsSync(absPath)) {
     // Belt and suspenders: if `from`-relative resolution missed, the

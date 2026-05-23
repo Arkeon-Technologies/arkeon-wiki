@@ -45,6 +45,10 @@ const REMOTE_IMAGE =
 const LOCAL_IMAGE_SOURCE_URL =
   "https://substack-post-media.s3.amazonaws.com/public/images/586688a9-cf96-43ab-a652-177d683fac7d_1326x1076.png";
 
+// Local image href uses the canonical space-rooted URL form — what
+// every tool's `space_url` field returns and what the editor / writer
+// already use for <a href> cross-references in wikis. Lets the agent
+// paste it verbatim into fetch without doing path math.
 const HTML_SOURCE = `<!DOCTYPE html>
 <html>
 <head>
@@ -56,7 +60,7 @@ const HTML_SOURCE = `<!DOCTYPE html>
 <p>Trade openness over time:</p>
 <img src="${REMOTE_IMAGE}" alt="Globalisation through recent history">
 <p>System composition shift 1995 vs 2019:</p>
-<img src="../images/global-system.png" alt="Global Economic System 1995 vs 2019">
+<img src="/smoke/images/global-system.png" alt="Global Economic System 1995 vs 2019">
 </body>
 </html>`;
 
