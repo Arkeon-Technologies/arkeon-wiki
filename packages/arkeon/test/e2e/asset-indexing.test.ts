@@ -131,11 +131,34 @@ describe("syncFile asset-mode", () => {
 });
 
 describe("link resolution: asset → no red link", () => {
-  it("a wiki <a href> to an indexed asset resolves (no red-link row)", async () => {
-    // The link extractor today only walks <a href>, not <img src> — so
-    // the asset-resolution invariant gets tested via an anchor link to
-    // the PDF. Same invariant: if the target has an entity row (of
-    // either kind), it isn't a red link.
+  it("a wiki <img src> to an indexed asset resolves (no red-link row)", async () => {
+    writeFileSync(join(workdir, "images/chart.png"), PNG_BYTES);
+    writeFileSync(
+      join(workdir, "wiki/article.html"),
+      `<!doctype html>
+<html><head><meta charset="utf-8"><title>A</title></head>
+<body><img src="../images/chart.png" alt="Chart"></body></html>`,
+    );
+
+    await syncFile(SPACE, "images/chart.png");
+    await syncFile(SPACE, "wiki/article.html");
+
+    const red = await listRedLinks({ space_name: SPACE.name });
+    expect(red.redlinks).toHaveLength(0);
+
+    // The relationship row exists (extractHtmlLinks walks <img src>),
+    // but it isn't a red link because the asset has an entity row.
+    const sql = createSql();
+    const rels = await sql`
+      SELECT source_path, target_path, link_text FROM relationships
+      WHERE space_name = ${SPACE.name}
+    `;
+    expect(rels).toHaveLength(1);
+    expect(rels[0].target_path).toBe("images/chart.png");
+    expect(rels[0].link_text).toBe("Chart");
+  });
+
+  it("a wiki <a href> to an indexed asset also resolves (regression — non-image asset)", async () => {
     writeFileSync(join(workdir, "sources/doc.pdf"), Buffer.from("%PDF-1.4 fake"));
     writeFileSync(
       join(workdir, "wiki/article.html"),
@@ -149,16 +172,6 @@ describe("link resolution: asset → no red link", () => {
 
     const red = await listRedLinks({ space_name: SPACE.name });
     expect(red.redlinks).toHaveLength(0);
-
-    // The relationship row exists (the wiki linked to the PDF), but
-    // it isn't a red link because the asset now has an entity row.
-    const sql = createSql();
-    const rels = await sql`
-      SELECT source_path, target_path FROM relationships
-      WHERE space_name = ${SPACE.name}
-    `;
-    expect(rels).toHaveLength(1);
-    expect(rels[0].target_path).toBe("sources/doc.pdf");
   });
 
   it("a wiki link to a never-synced asset IS a red link", async () => {

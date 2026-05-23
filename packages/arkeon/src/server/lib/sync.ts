@@ -299,6 +299,11 @@ async function syncSource(
  *     user dropped on disk, not edits the system performed, and an
  *     edit feed full of "image was added" noise would crowd out the
  *     wiki edits operators actually care about).
+ *
+ * Asymmetry with `syncWiki`: no `withTransaction` wrapper because the
+ * write is a single UPDATE or INSERT (no companion DELETE-and-rebuild
+ * of relationships rows). Wrapping would just add a transactional
+ * round-trip without affecting consistency.
  */
 async function syncAsset(
   space: Space,
