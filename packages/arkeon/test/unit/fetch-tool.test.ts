@@ -131,7 +131,7 @@ describe("fetch — local paths", () => {
     expect(result.results[0].error).toMatch(/not found/);
   });
 
-  it("strips a leading /{space}/ canonical prefix from local paths", async () => {
+  it("resolves /{currentSpace}/path canonical URL form", async () => {
     // Agents often paste space_url strings from list_entities results.
     writeFileSync(join(workdir, "sources/notes.md"), "ok");
     const result = (await exec(getFetchTool(ctx), {
@@ -139,6 +139,48 @@ describe("fetch — local paths", () => {
     })) as { results: ResultItem[] };
     expect(result.results[0].kind).toBe("text");
     expect(result.results[0].text).toBe("ok");
+  });
+
+  it("resolves /{otherSpace}/path for cross-space fetch (multi-space role)", async () => {
+    // Set up a second space with its own watch_dir + image.
+    const otherDir = mkdtempSync(join(tmpdir(), "arkeon-fetch-other-"));
+    mkdirSync(join(otherDir, "images"), { recursive: true });
+    writeFileSync(join(otherDir, "images/chart.png"), PNG_BYTES);
+    const otherSpace = { name: "other", watch_dir: otherDir };
+    // Multi-space ctx: the triggering space + a second allowed space.
+    const multiCtx = makeContext(SPACE, "test-role", {
+      allowedSpaces: [SPACE, otherSpace],
+    });
+
+    try {
+      const result = (await exec(getFetchTool(multiCtx), {
+        targets: ["/other/images/chart.png"],
+      })) as { results: ResultItem[] };
+      expect(result.results[0].kind).toBe("image");
+      expect(result.results[0].media_type).toBe("image/png");
+    } finally {
+      rmSync(otherDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects /{unknownSpace}/path with a clear error", async () => {
+    const result = (await exec(getFetchTool(ctx), {
+      targets: ["/nonexistent-space/foo.png"],
+    })) as { results: ResultItem[] };
+    expect(result.results[0].kind).toBe("error");
+    expect(result.results[0].error).toMatch(/nonexistent-space/);
+    expect(result.results[0].error).toMatch(/not in this role's allowed set/);
+  });
+
+  it("rejects cross-space references the role isn't scoped to (single-space role)", async () => {
+    // ctx (from beforeEach) has only the triggering space in allowedSpaces.
+    // A reference to /other/... should fail even if that space exists
+    // elsewhere — the role can't read what it isn't scoped to.
+    const result = (await exec(getFetchTool(ctx), {
+      targets: ["/other/images/chart.png"],
+    })) as { results: ResultItem[] };
+    expect(result.results[0].kind).toBe("error");
+    expect(result.results[0].error).toMatch(/allowed set/);
   });
 
   it("refuses path traversal (safeResolve rejects)", async () => {
