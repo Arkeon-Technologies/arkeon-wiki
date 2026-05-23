@@ -72,12 +72,13 @@ async function runStart(options: StartOptions): Promise<void> {
 
   ensureArkeonDir();
 
-  // Install size-capped log rotation when running headless (under
-  // `up`, launchd, or systemd — i.e. when stdout isn't a TTY). Bounds
-  // total log disk usage to ~200 MB regardless of how chatty (or
-  // bug-tight-looped) the daemon gets. Foreground users running
-  // `arkeon-wiki start` in a terminal see logs as before.
-  if (!process.stdout.isTTY) {
+  // Install size-capped log rotation when our parent (the `up`
+  // spawner, launchd, or systemd) explicitly opts in via
+  // ARKEON_WIKI_LOG_ROTATE. We can't gate on `process.stdout.isTTY`
+  // because that fires for `arkeon-wiki start > my.log`, which would
+  // surprisingly redirect output to ~/.arkeon-wiki/arkeon.log instead
+  // of the user's chosen file. Explicit signal is safer.
+  if (process.env.ARKEON_WIKI_LOG_ROTATE) {
     installRotatingStdLog(logfile());
   }
 

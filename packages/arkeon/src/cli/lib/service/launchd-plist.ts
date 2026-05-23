@@ -110,6 +110,8 @@ ${argsXml}
     <string>/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin</string>
     <key>ARKEON_WIKI_HOME</key>
     <string>${xmlEscape(home)}</string>
+    <key>ARKEON_WIKI_LOG_ROTATE</key>
+    <string>1</string>
   </dict>
   <key>ThrottleInterval</key>
   <integer>10</integer>

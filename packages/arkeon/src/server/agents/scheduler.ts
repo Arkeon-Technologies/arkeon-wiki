@@ -69,7 +69,15 @@ export function computeScheduleDelay(
   nextAt: Date,
   now: Date,
 ): { delayMs: number; capped: boolean } {
-  const rawDelayMs = Math.max(0, nextAt.getTime() - now.getTime());
+  const rawDelayMs = nextAt.getTime() - now.getTime();
+  // Defensive: an invalid Date (e.g. cron-parser returning a bogus
+  // value) yields NaN, which would slip past a `> MAX_SET_TIMEOUT_MS`
+  // check and reach `setTimeout(NaN)` → immediate fire. Treat it the
+  // same as the overflow case so a tight loop is impossible.
+  if (!Number.isFinite(rawDelayMs)) {
+    return { delayMs: MAX_SET_TIMEOUT_MS, capped: true };
+  }
+  if (rawDelayMs <= 0) return { delayMs: 0, capped: false };
   if (rawDelayMs > MAX_SET_TIMEOUT_MS) {
     return { delayMs: MAX_SET_TIMEOUT_MS, capped: true };
   }
@@ -186,9 +194,10 @@ export async function startScheduler(
 
   function scheduleNext(role: string, cron: string): void {
     if (stopped) return;
+    const now = new Date();
     let nextAt: Date;
     try {
-      nextAt = nextTick(cron, new Date());
+      nextAt = nextTick(cron, now);
     } catch (err) {
       // Validation runs at config load, but a defensive belt-and-braces
       // catch here means a future programmatic config edit can't crash
@@ -198,10 +207,10 @@ export async function startScheduler(
       );
       return;
     }
-    const { delayMs, capped } = computeScheduleDelay(nextAt, new Date());
+    const { delayMs, capped } = computeScheduleDelay(nextAt, now);
     if (capped) {
       const daysOut = Math.round(
-        (nextAt.getTime() - Date.now()) / 86_400_000,
+        (nextAt.getTime() - now.getTime()) / 86_400_000,
       );
       console.warn(
         `[agent/scheduler] role=${role} space="${opts.space.name}" cron='${cron}' next firing ${nextAt.toISOString()} is ~${daysOut} days out, exceeding setTimeout's 32-bit limit; sleeping ${MAX_SET_TIMEOUT_MS} ms then re-evaluating. Check the cron expression in agents.yaml.`,

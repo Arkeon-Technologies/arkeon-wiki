@@ -42,4 +42,15 @@ describe("computeScheduleDelay", () => {
     expect(capped).toBe(false);
     expect(delayMs).toBe(MAX_SET_TIMEOUT_MS);
   });
+
+  it("caps defensively when arithmetic yields NaN (invalid Date)", () => {
+    // A malformed Date from cron-parser would produce NaN here; without
+    // a Number.isFinite guard it would slip past the overflow check and
+    // hit setTimeout(NaN) → immediate fire (tight loop).
+    const now = new Date("2026-05-23T15:00:00Z");
+    const invalid = new Date(NaN);
+    const { delayMs, capped } = computeScheduleDelay(invalid, now);
+    expect(capped).toBe(true);
+    expect(delayMs).toBe(MAX_SET_TIMEOUT_MS);
+  });
 });
