@@ -1204,6 +1204,330 @@ const markProcessedTool = defineTool("mark_processed", {
   }),
 });
 
+// ── fetch ────────────────────────────────────────────────────────
+//
+// Batched URL + local-path fetch tool that surfaces images to the model
+// via the runtime's prepareStep image-injection wrapper. Universal-image
+// MIMEs (PNG/JPEG/WebP/GIF) are side-buffered into ctx.imageQueue under
+// the toolCallId; the runtime drains the queue between steps and splices
+// the bytes into a synthetic user message. Text content (HTML / JSON /
+// XML / plain text) is returned inline in the tool result, capped so a
+// large page doesn't blow the model's input budget.
+//
+// One tool, two sources: the dispatch is purely on the prefix
+// (`^https?://`) so the agent doesn't need to remember which call to
+// make. URLs go through the network; everything else is resolved
+// relative to the space's watch_dir.
+//
+// Why this exists at all: only Anthropic's native provider accepts
+// images in tool-role messages — every other vision-capable provider
+// (OpenAI, Gemini, open-source via Ollama/vLLM/DeepInfra/OpenRouter)
+// requires images in user messages. The runtime wrapper translates;
+// this tool just queues. See ../runtime.ts:makeImageInjectionPrepareStep.
+
+const MAX_FETCH_TARGETS = 10;
+const FETCH_TIMEOUT_MS = 10_000;
+const TEXT_BODY_CAP = 32 * 1024; // 32 KB — enough for typical pages
+
+const SUPPORTED_IMAGE_MEDIA_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+]);
+
+const EXT_TO_MEDIA_TYPE: Record<string, string> = {
+  // Universal-safe image set
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  // Text — only what the watcher considers text-shaped. (Falls through
+  // to a "this is text, inline it" branch in the tool.)
+  ".txt": "text/plain",
+  ".md": "text/markdown",
+  ".markdown": "text/markdown",
+  ".html": "text/html",
+  ".htm": "text/html",
+  ".json": "application/json",
+  ".xml": "text/xml",
+  ".csv": "text/csv",
+  ".tsv": "text/tab-separated-values",
+  ".yaml": "text/yaml",
+  ".yml": "text/yaml",
+  ".log": "text/plain",
+  ".rst": "text/x-rst",
+};
+
+function mediaTypeFromExt(path: string): string {
+  const idx = path.lastIndexOf(".");
+  if (idx < 0) return "application/octet-stream";
+  const ext = path.slice(idx).toLowerCase();
+  return EXT_TO_MEDIA_TYPE[ext] ?? "application/octet-stream";
+}
+
+function normalizeMediaType(raw: string | null | undefined): string {
+  if (!raw) return "application/octet-stream";
+  return raw.split(";")[0]!.trim().toLowerCase();
+}
+
+function isTextMediaType(mt: string): boolean {
+  if (mt.startsWith("text/")) return true;
+  if (mt === "application/json") return true;
+  if (mt === "application/xml" || mt === "application/xhtml+xml") return true;
+  if (mt === "application/javascript" || mt === "application/typescript") return true;
+  return false;
+}
+
+const fetchTool = defineTool("fetch", {
+  description:
+    "Fetch one or more URLs or local files in a single batched call. " +
+    "Use this when a source you're reading contains images whose " +
+    "content matters to your work — charts, diagrams, screenshots, " +
+    "tweets — and you need to see what they actually depict before " +
+    "reasoning about the source. Skip decorative images (avatars, " +
+    "logos, page chrome, share buttons) — they cost context and add " +
+    "nothing.\n\n" +
+    "Each target is either a remote URL (http:// or https://) or a " +
+    "space-relative path inside the space's watch_dir. Batching is " +
+    "the point: pass every image you want to look at in one call " +
+    "instead of N separate calls. Results come back in the same " +
+    "order as the input.\n\n" +
+    "Per-target outcomes:\n" +
+    "  - PNG / JPEG / WebP / GIF: the image bytes are attached as a " +
+    "user message right after this tool result, so you can see the " +
+    "image directly on your next turn. The tool returns a stub with " +
+    "media_type + size_bytes for your reference.\n" +
+    "  - Text content (HTML / JSON / XML / markdown / plain text): " +
+    "the body is returned inline (capped at 32 KB; `truncated: true` " +
+    "if cut off).\n" +
+    "  - Anything else (PDF, archives, video, unsupported image " +
+    "formats like SVG / HEIC / AVIF): a structured error stub. Only " +
+    "the four universal image formats above can be viewed today.\n\n" +
+    "Per-target failures (404, timeout, unsupported MIME) don't abort " +
+    "the batch — they come back as `kind='error'` items in `results[]` " +
+    "so the other targets still come through.",
+  inputSchema: z.object({
+    targets: z
+      .array(z.string())
+      .min(1)
+      .max(MAX_FETCH_TARGETS)
+      .describe(
+        "URLs or space-relative paths. 1.." +
+          String(MAX_FETCH_TARGETS) +
+          " entries.",
+      ),
+    space: z.string().nullable().optional().describe(SPACE_PARAM_DESC),
+  }),
+  call: async ({ targets, space }, ctx, { toolCallId }) => {
+    // Local-file targets land in a specific space. Mirror read_file's
+    // multi-space contract: explicit `space` arg or the triggering one.
+    let target: Space;
+    if (ctx.allowedSpaces.length <= 1) {
+      target = ctx.space;
+    } else if (space != null && space !== "") {
+      target = resolveSpaceArg(space, ctx.allowedSpaces);
+    } else {
+      throw new Error(
+        `fetch: this role spans multiple spaces, so the \`space\` ` +
+          `argument is required for local paths. Allowed: ${describeAllowed(ctx.allowedSpaces)}.`,
+      );
+    }
+
+    // All images surfaced from this single call get bundled into one
+    // synthetic user message by the runtime wrapper, keyed by the
+    // toolCallId the AI SDK assigned this invocation.
+    const queuedImages: Array<{
+      source: string;
+      mediaType: string;
+      data: Buffer;
+    }> = [];
+
+    const results = await Promise.all(
+      targets.map((rawTarget) => fetchOne(rawTarget, ctx, target, queuedImages)),
+    );
+
+    if (queuedImages.length > 0) {
+      ctx.imageQueue.set(toolCallId, queuedImages);
+    }
+
+    return { results, space: target.name };
+  },
+  summarize: (r) => ({
+    space: r.space,
+    count: r.results.length,
+    images: r.results.filter((x) => x.kind === "image").length,
+    text: r.results.filter((x) => x.kind === "text").length,
+    errors: r.results.filter((x) => x.kind === "error").length,
+  }),
+});
+
+/**
+ * Fetch a single target (URL or local path) and decide what to do with
+ * the bytes. Mutates `imagesOut` for image hits; the caller will commit
+ * them to `ctx.imageQueue` keyed by toolCallId once the batched call
+ * completes.
+ */
+async function fetchOne(
+  rawTarget: string,
+  ctx: AgentContext,
+  space: Space,
+  imagesOut: Array<{ source: string; mediaType: string; data: Buffer }>,
+): Promise<FetchResultItem> {
+  try {
+    if (/^https?:\/\//i.test(rawTarget)) {
+      return await fetchRemote(rawTarget, imagesOut);
+    }
+    return await fetchLocal(rawTarget, ctx, space, imagesOut);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { target: rawTarget, kind: "error", error: msg };
+  }
+}
+
+interface FetchTextItem {
+  target: string;
+  kind: "text";
+  media_type: string;
+  size_bytes: number;
+  truncated: boolean;
+  text: string;
+}
+interface FetchImageItem {
+  target: string;
+  kind: "image";
+  media_type: string;
+  size_bytes: number;
+  note: string;
+}
+interface FetchErrorItem {
+  target: string;
+  kind: "error";
+  error: string;
+}
+type FetchResultItem = FetchTextItem | FetchImageItem | FetchErrorItem;
+
+async function fetchRemote(
+  url: string,
+  imagesOut: Array<{ source: string; mediaType: string; data: Buffer }>,
+): Promise<FetchResultItem> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) {
+    return {
+      target: url,
+      kind: "error",
+      error: `HTTP ${res.status} ${res.statusText}`,
+    };
+  }
+  const mediaType = normalizeMediaType(res.headers.get("content-type"));
+
+  if (SUPPORTED_IMAGE_MEDIA_TYPES.has(mediaType)) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    imagesOut.push({ source: url, mediaType, data: buf });
+    return {
+      target: url,
+      kind: "image",
+      media_type: mediaType,
+      size_bytes: buf.byteLength,
+      note: "Image attached as a user message after this tool result.",
+    };
+  }
+  if (isTextMediaType(mediaType)) {
+    const full = await res.text();
+    const truncated = full.length > TEXT_BODY_CAP;
+    return {
+      target: url,
+      kind: "text",
+      media_type: mediaType,
+      size_bytes: full.length,
+      truncated,
+      text: truncated ? full.slice(0, TEXT_BODY_CAP) : full,
+    };
+  }
+  return {
+    target: url,
+    kind: "error",
+    error:
+      `unsupported media type '${mediaType}' — this tool can view PNG, JPEG, WebP, GIF, or text content`,
+  };
+}
+
+async function fetchLocal(
+  path: string,
+  ctx: AgentContext,
+  space: Space,
+  imagesOut: Array<{ source: string; mediaType: string; data: Buffer }>,
+): Promise<FetchResultItem> {
+  // Normalize the canonical /{space}/... form too — the agent may paste
+  // a space_url from a tool result directly into fetch.
+  let normalized = path;
+  const spacePrefix = `/${space.name}/`;
+  if (normalized.startsWith(spacePrefix)) {
+    normalized = normalized.slice(spacePrefix.length);
+  } else if (normalized.startsWith("/")) {
+    normalized = normalized.replace(/^\/+/, "");
+  }
+
+  const absPath = safeResolve(space.watch_dir, normalized);
+  if (!existsSync(absPath)) {
+    return {
+      target: path,
+      kind: "error",
+      error: `not found: ${normalized}`,
+    };
+  }
+  if (statSync(absPath).isDirectory()) {
+    return {
+      target: path,
+      kind: "error",
+      error: `is a directory: ${normalized}`,
+    };
+  }
+
+  const mediaType = mediaTypeFromExt(normalized);
+
+  if (SUPPORTED_IMAGE_MEDIA_TYPES.has(mediaType)) {
+    const buf = readFileSync(absPath);
+    imagesOut.push({ source: normalized, mediaType, data: buf });
+    return {
+      target: path,
+      kind: "image",
+      media_type: mediaType,
+      size_bytes: buf.byteLength,
+      note: "Image attached as a user message after this tool result.",
+    };
+  }
+  if (isTextMediaType(mediaType)) {
+    const full = readFileSync(absPath, "utf-8");
+    // Reading text via fetch counts as a read for the edit-gate too —
+    // the agent might decide to edit after viewing.
+    ctx.readPaths.add(readGateKey(space.name, normalized));
+    const truncated = full.length > TEXT_BODY_CAP;
+    return {
+      target: path,
+      kind: "text",
+      media_type: mediaType,
+      size_bytes: full.length,
+      truncated,
+      text: truncated ? full.slice(0, TEXT_BODY_CAP) : full,
+    };
+  }
+  return {
+    target: path,
+    kind: "error",
+    error:
+      `unsupported file type for '${normalized}' (media type '${mediaType}') — this tool can view PNG, JPEG, WebP, GIF, or text content`,
+  };
+}
+
 // ── Registry ──────────────────────────────────────────────────────
 
 export const ALL_TOOLS: Record<string, ToolFactory> = {
@@ -1219,4 +1543,5 @@ export const ALL_TOOLS: Record<string, ToolFactory> = {
   delete_wiki: deleteWikiTool,
   tag_entity: tagEntityTool,
   mark_processed: markProcessedTool,
+  fetch: fetchTool,
 };

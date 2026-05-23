@@ -21,12 +21,26 @@ import { z } from "zod";
 import type { AgentContext } from "./runtime.js";
 import { truncateForTrace } from "./tracer.js";
 
+/** Per-invocation metadata surfaced to the tool's call function.
+ *  Today this is just `toolCallId` — the stable ID the AI SDK assigns
+ *  each tool call, used by image-bearing tools (`fetch`) to key entries
+ *  in `ctx.imageQueue` so the runtime's prepareStep wrapper can find
+ *  them between steps. Tools that don't queue images can ignore it. */
+export interface ToolInvocation {
+  toolCallId: string;
+}
+
 export interface DefineToolOptions<TInput, TOutput> {
   description: string;
   inputSchema: z.ZodType<TInput>;
-  /** What actually runs. Receives the validated input and the agent
-   *  context (space, applyEdit, log, ...). */
-  call: (input: TInput, ctx: AgentContext) => Promise<TOutput> | TOutput;
+  /** What actually runs. Receives the validated input, the agent
+   *  context (space, applyEdit, log, ...), and per-invocation metadata
+   *  (toolCallId). */
+  call: (
+    input: TInput,
+    ctx: AgentContext,
+    invocation: ToolInvocation,
+  ) => Promise<TOutput> | TOutput;
   /** Optional small summary of the tool's result for trace events.
    *  Tools whose results can be large (search, list_entities, read_file)
    *  should supply this so traces stay legible. If omitted, the tracer
@@ -45,15 +59,22 @@ export function defineTool<TInput, TOutput>(
     const definition = {
       description: opts.description,
       inputSchema: opts.inputSchema,
-      execute: async (input: TInput) => {
+      execute: async (
+        input: TInput,
+        sdkOptions: { toolCallId: string; messages?: unknown[] },
+      ) => {
+        const invocation: ToolInvocation = {
+          toolCallId: sdkOptions.toolCallId,
+        };
         ctx.log("info", `tool/${name}`, { input });
         ctx.trace("tool.call", {
           tool: name,
+          tool_call_id: sdkOptions.toolCallId,
           args: truncateForTrace(input),
         });
         const startedAt = Date.now();
         try {
-          const result = await opts.call(input, ctx);
+          const result = await opts.call(input, ctx, invocation);
           ctx.trace("tool.result", {
             tool: name,
             ok: true,
