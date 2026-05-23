@@ -182,10 +182,18 @@ describe("assertTextContent", () => {
     expect(() => assertTextContent(buf, "sources/foo.md")).not.toThrow();
   });
 
-  it("rejects binary extensions even with text body", () => {
+  it("rejects asset extensions even with text body (asset uploads go through disk)", () => {
+    // PNGs are kind='asset' — they ARE indexable, just not via the HTTP
+    // text write-back. Drop them in the watch dir directly.
     expect(() =>
       assertTextContent(Buffer.from("PNG"), "sources/foo.png"),
-    ).toThrow(/not indexable/);
+    ).toThrow(/binary asset/);
+  });
+
+  it("rejects secret-bearing extensions", () => {
+    expect(() =>
+      assertTextContent(Buffer.from("KEY=value"), "sources/prod.env"),
+    ).toThrow(/secrets or scratch/);
   });
 
   it("rejects buffers with NUL bytes when extension is unknown", () => {

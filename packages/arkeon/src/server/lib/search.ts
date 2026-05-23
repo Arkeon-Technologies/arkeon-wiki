@@ -14,6 +14,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { rgPath } from "@vscode/ripgrep";
 
+import { TEXT_EXTENSION_GLOB } from "./fs-watcher.js";
 import { createSql } from "./sql.js";
 import type { EntityType } from "./entities.js";
 
@@ -179,8 +180,9 @@ export function runRipgrep(opts: {
     args.push("--glob", "!.arkeon");
     args.push("--glob", "!.git");
     args.push("--glob", "!node_modules");
-    // Restrict to the file types we index.
-    args.push("--type-add", "arkeon:*.{md,txt,json,csv,xml,html,rst}");
+    // Restrict to the same text extensions the watcher indexes (single
+    // source of truth: TEXT_EXTENSIONS in fs-watcher.ts).
+    args.push("--type-add", `arkeon:${TEXT_EXTENSION_GLOB}`);
     args.push("--type", "arkeon");
     for (const q of opts.queries) {
       args.push("-e", q);

@@ -24,10 +24,15 @@ system: |-
      content hash:
 
        list_entities(type="file",
+                     kind="text",
                      tag_outdated="editor.processed_hash",
                      sort="updated_at",
                      limit=10,
                      include_counts=true)
+
+     `kind="text"` keeps assets out of the queue — images, PDFs, and
+     other attachments are indexed so links to them resolve, but
+     they're never corpus material the editor processes.
 
      `tag_outdated` returns entities whose tag is either ABSENT or
      has a value that doesn't match the entity's current

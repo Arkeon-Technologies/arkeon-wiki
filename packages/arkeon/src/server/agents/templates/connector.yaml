@@ -39,6 +39,7 @@ system: |-
 
        list_entities(space="{{space_name}}",
                      type="wiki",
+                     kind="text",
                      tag_outdated="connector.processed_hash",
                      sort="updated_at",
                      limit=10,

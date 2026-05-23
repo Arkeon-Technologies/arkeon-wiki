@@ -33,9 +33,11 @@ import {
   getEntity,
   listEntities,
   listRedLinks,
+  parseEntityKinds,
   parseEntityTypes,
   setEntityTag,
   type EntityDetail,
+  type EntityKind,
   type EntityType,
 } from "../lib/entities.js";
 import { loadSpacesMap } from "../lib/spaces.js";
@@ -347,8 +349,15 @@ const listEntitiesTool = defineTool("list_entities", {
     "sources (type=file inbound_max=0 → 'nothing links to this file yet'), " +
     "or surface recently-updated articles. Each row carries `space_name`, " +
     "`source_path`, `space_url` (the canonical `/{space}/{path}` form — " +
-    "paste directly into an <a href>), `type`, `label`, `source_hash`, " +
-    "`properties`, `tags`, and optional `counts.inbound`/`counts.outbound`. " +
+    "paste directly into an <a href>), `type`, `kind`, `label`, " +
+    "`source_hash`, `properties`, `tags`, and optional " +
+    "`counts.inbound`/`counts.outbound`. " +
+    "`kind` is 'text' for parsed corpus material (wikis and indexed text " +
+    "sources — what enters the editor / proposer / connector queue) or " +
+    "'asset' for binary attachments (images, PDFs, audio, video) that get " +
+    "entity rows so links resolve but never feed the agents. Pass " +
+    "`kind='text'` on any queue query so attachments don't end up in your " +
+    "work feed. " +
     "`source_hash` is the " +
     "SHA-256 of the file content at last sync — pass it as the `value` to " +
     "`tag_entity` when marking 'I processed this' so content-change " +
@@ -365,6 +374,18 @@ const listEntitiesTool = defineTool("list_entities", {
       .optional()
       .describe(
         "Comma-separated entity types: 'wiki' or 'file'. Pass null (or omit) for both.",
+      ),
+    kind: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        "Comma-separated kinds: 'text' (parsed corpus material — wikis " +
+          "and indexed text sources) or 'asset' (binary attachments — " +
+          "images, PDFs, audio, video, archives). Queue queries should " +
+          "pass `kind='text'` to keep assets out of the work feed; " +
+          "queries that look up what attachments an article references " +
+          "use `kind='asset'`. Pass null (or omit) for both.",
       ),
     label_contains: z
       .string()
@@ -512,8 +533,10 @@ const listEntitiesTool = defineTool("list_entities", {
   }),
   call: async (input, ctx) => {
     let types: EntityType[] | undefined;
+    let kinds: EntityKind[] | undefined;
     try {
       types = parseEntityTypes(input.type);
+      kinds = parseEntityKinds(input.kind);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(`list_entities: ${msg}`);
@@ -527,6 +550,7 @@ const listEntitiesTool = defineTool("list_entities", {
       const result = await listEntities({
         space_name: t.name,
         types,
+        kinds,
         label_contains: input.label_contains,
         path_contains: input.path_contains,
         inbound_min: input.inbound_min,

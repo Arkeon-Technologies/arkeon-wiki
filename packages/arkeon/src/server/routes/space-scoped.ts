@@ -30,6 +30,7 @@ import {
   getEntity,
   listEntities,
   listRedLinks,
+  parseEntityKinds,
   parseEntityTypes,
 } from "../lib/entities.js";
 import {
@@ -76,6 +77,7 @@ spaceScopedRouter.get("/:space/entities", async (c) => {
   const result = await listEntities({
     space_name: space,
     types: parseEntityTypes(c.req.query("type")),
+    kinds: parseEntityKinds(c.req.query("kind")),
     label_contains: c.req.query("label_contains"),
     path_contains: c.req.query("path_contains"),
     inbound_min: parseNumQuery(c.req.query("inbound_min"), "inbound_min"),

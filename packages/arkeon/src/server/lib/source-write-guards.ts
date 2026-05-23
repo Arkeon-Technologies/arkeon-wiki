@@ -9,10 +9,13 @@
  *     `safeResolve` already enforces the traversal rule downstream;
  *     this catches the same class earlier so the error message is
  *     specific to the source-write endpoints.
- *   - `assertTextContent` — body must not look binary. Same heuristic
- *     the watcher uses: if the extension is in `TEXT_EXTENSIONS` we
- *     trust it; otherwise the first 8 KB must have no NUL byte, AND
- *     the extension must not be in `BINARY_EXTENSIONS`.
+ *   - `assertTextContent` — body must be text. The write-back APIs are
+ *     for corpus material (markdown, prose, JSON, etc.) — asset uploads
+ *     (images, PDFs, archives) need to go through the filesystem
+ *     directly, not the HTTP API. Reject if the extension is on the
+ *     SKIP set (secrets), on the ASSET set (binary attachments), or
+ *     if the body sniffs as binary (NUL byte in first 8 KB) and the
+ *     extension isn't on the explicit text allowlist.
  *   - `sanitizeCaller` — turns the `X-Caller` header into the value
  *     we write to `entity_edits.by_role`. Allowlist `[A-Za-z0-9._-]{1,40}`,
  *     silent fallback to `"api"` for missing/invalid.
@@ -21,7 +24,8 @@
 import { extname } from "node:path";
 import { ApiError } from "./errors.js";
 import {
-  BINARY_EXTENSIONS,
+  ASSET_EXTENSIONS,
+  SKIP_EXTENSIONS,
   TEXT_EXTENSIONS,
   sniffBufferIsText,
 } from "./fs-watcher.js";
@@ -63,18 +67,32 @@ export function assertSourcePath(relativePath: string): void {
 }
 
 /**
- * Throws if `buf` looks binary AND the extension isn't on the text
- * allowlist. Mirrors `isEligibleFile`: explicit text extensions short-
- * circuit; explicit binary extensions always reject; anything else
- * falls back to the NUL sniff.
+ * Throws if the upload isn't text. The write-back APIs are deliberately
+ * text-only — asset uploads go through the filesystem directly so the
+ * fs-watcher classifies them as kind='asset' on its own. This guard
+ * keeps the HTTP write surface focused on the corpus-material use case.
+ *
+ *   - SKIP_EXTENSIONS (`.env`, `.pem`, …) → reject. These are secret-
+ *     bearing or junk and never belong in the corpus.
+ *   - ASSET_EXTENSIONS (`.pdf`, `.png`, …) → reject with a hint to
+ *     drop the file on disk instead.
+ *   - TEXT_EXTENSIONS (`.md`, `.txt`, …) → accept without inspection.
+ *   - Otherwise sniff: NUL byte in first 8 KB → reject.
  */
 export function assertTextContent(buf: Buffer, relativePath: string): void {
   const ext = extname(relativePath).toLowerCase();
-  if (ext && BINARY_EXTENSIONS.has(ext)) {
+  if (ext && SKIP_EXTENSIONS.has(ext)) {
     throw new ApiError(
       400,
       "validation_error",
-      `extension '${ext}' is not indexable; upload as a text format`,
+      `extension '${ext}' is not indexable (secrets or scratch); pick a different filename`,
+    );
+  }
+  if (ext && ASSET_EXTENSIONS.has(ext)) {
+    throw new ApiError(
+      400,
+      "validation_error",
+      `extension '${ext}' is a binary asset; this endpoint is text-only — drop the file in the watch directory and the watcher will index it as an asset`,
     );
   }
   if (ext && TEXT_EXTENSIONS.has(ext)) return;

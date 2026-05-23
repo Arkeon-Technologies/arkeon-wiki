@@ -21,6 +21,7 @@ import { ApiError } from "./errors.js";
 import { createSql } from "./sql.js";
 
 export type EntityType = "wiki" | "file";
+export type EntityKind = "text" | "asset";
 export type EntitySort = "updated_at" | "label" | "inbound" | "outbound";
 
 // All optional filters accept `null` as well as `undefined` — the AI SDK /
@@ -32,6 +33,12 @@ export interface ListEntitiesOptions {
   space_name?: string | null;
   /** Restrict to one or more entity types. */
   types?: EntityType[] | null;
+  /** Restrict to one or more kinds. `text` = parsed corpus material
+   *  (queue-eligible for the editor / proposer / connector).
+   *  `asset` = binary attachments indexed for link resolution only —
+   *  images, PDFs, audio, video, archives. Queue queries pass
+   *  `kinds: ['text']` to keep assets out of the work feed. */
+  kinds?: EntityKind[] | null;
   /** Case-insensitive substring match on `label`. */
   label_contains?: string | null;
   /** Case-insensitive substring match on `source_path`. */
@@ -75,6 +82,7 @@ export interface EntityListRow {
   space_name: string;
   source_path: string;
   type: EntityType;
+  kind: EntityKind;
   label: string | null;
   /** SHA-256 of the file content as of the last sync. Stable
    *  across reconciles unless the file's bytes change. Useful as a
@@ -137,6 +145,11 @@ export async function listEntities(
     const placeholders = opts.types.map(() => "?").join(",");
     innerConditions.push(`e.type IN (${placeholders})`);
     innerParams.push(...opts.types);
+  }
+  if (opts.kinds && opts.kinds.length > 0) {
+    const placeholders = opts.kinds.map(() => "?").join(",");
+    innerConditions.push(`e.kind IN (${placeholders})`);
+    innerParams.push(...opts.kinds);
   }
   if (opts.label_contains) {
     const escaped = opts.label_contains.replace(/[\\%_]/g, "\\$&");
@@ -231,7 +244,7 @@ export async function listEntities(
 
   const baseSelect = `
     SELECT
-      e.space_name, e.source_path, e.type, e.label, e.source_hash,
+      e.space_name, e.source_path, e.type, e.kind, e.label, e.source_hash,
       e.properties, e.tags, e.created_at, e.updated_at,
       (SELECT COUNT(*) FROM relationships r
         WHERE r.space_name = e.space_name AND r.target_path = e.source_path) AS inbound,
@@ -255,6 +268,7 @@ export async function listEntities(
     space_name: string;
     source_path: string;
     type: EntityType;
+    kind: EntityKind | null;
     label: string | null;
     source_hash: string;
     properties: Record<string, unknown> | string;
@@ -288,6 +302,10 @@ export async function listEntities(
         space_name: row.space_name,
         source_path: row.source_path,
         type: row.type,
+        // `kind` was added in migration 003. Pre-migration rows (and
+        // any future bootstrap edge case where the column is missing)
+        // default to 'text' to match the schema's DEFAULT clause.
+        kind: row.kind ?? "text",
         label: row.label,
         source_hash: row.source_hash,
         properties: row.properties,
@@ -449,6 +467,28 @@ export function parseEntityTypes(raw: string | null | undefined): EntityType[] |
 }
 
 /**
+ * Parse a comma-separated list of entity kinds, validating each one.
+ * Used by route handlers to coerce `?kind=text,asset` into the typed array.
+ */
+export function parseEntityKinds(raw: string | null | undefined): EntityKind[] | undefined {
+  if (!raw) return undefined;
+  const out: EntityKind[] = [];
+  for (const part of raw.split(",")) {
+    const k = part.trim();
+    if (!k) continue;
+    if (k !== "text" && k !== "asset") {
+      throw new ApiError(
+        400,
+        "validation_error",
+        `Invalid entity kind "${k}": must be one of text, asset`,
+      );
+    }
+    out.push(k);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/**
  * Fetch a single entity by (space_name, source_path) including outbound
  * relationships. Returns null if the entity does not exist.
  *
@@ -474,7 +514,7 @@ export async function getEntity(
 ): Promise<EntityDetail | null> {
   const sql = createSql();
   const rows = await sql`
-    SELECT space_name, source_path, type, label, source_hash, properties, tags,
+    SELECT space_name, source_path, type, kind, label, source_hash, properties, tags,
       created_at, updated_at,
       (SELECT by_role FROM entity_edits ed
         WHERE ed.space_name = entities.space_name AND ed.entity_path = entities.source_path
@@ -505,6 +545,9 @@ export async function getEntity(
     space_name: row.space_name as string,
     source_path: row.source_path as string,
     type: row.type as EntityType,
+    // `kind` was added in migration 003. Pre-migration rows default to
+    // 'text' to match the schema's DEFAULT clause.
+    kind: (row.kind as EntityKind | null) ?? "text",
     label: row.label as string | null,
     source_hash: row.source_hash as string,
     properties: row.properties as Record<string, unknown> | string,

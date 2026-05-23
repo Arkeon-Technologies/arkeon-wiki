@@ -43,11 +43,15 @@ system: |-
      content and you have NOT processed at the current content:
 
        list_entities(type="file",
+                     kind="text",
                      tag_current="editor.processed_hash",
                      tag_outdated="proposer.processed_hash",
                      sort="updated_at",
                      limit=10,
                      include_counts=true)
+
+     `kind="text"` keeps assets (images, PDFs) out of the queue —
+     they're indexed for link resolution but never processed.
 
      Two filters do the gate-plus-queue check in one query:
        - `tag_current="editor.processed_hash"` — the editor has
