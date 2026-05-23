@@ -22,6 +22,7 @@
  */
 
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { posix } from "node:path";
 
 import { z } from "zod";
 
@@ -1307,20 +1308,46 @@ const fetchTool = defineTool("fetch", {
     "the four universal image formats above can be viewed today.\n\n" +
     "Per-target failures (404, timeout, unsupported MIME) don't abort " +
     "the batch — they come back as `kind='error'` items in `results[]` " +
-    "so the other targets still come through.",
+    "so the other targets still come through.\n\n" +
+    "Path resolution for local targets: when you grab an `<img src>` or " +
+    "`<a href>` value out of an HTML file, that path is RELATIVE TO THE " +
+    "HTML FILE, not the watch_dir. Pass the HTML file's path as `from` " +
+    "and the tool resolves the same way a browser does. Without `from`, " +
+    "local paths are interpreted relative to the watch_dir root.\n\n" +
+    "Example — HTML at `sources/post.html` contains " +
+    "`<img src=\"../images/chart.png\">`. To view it, pass the href " +
+    "VERBATIM as the target and set `from` to the HTML's path:\n" +
+    "  fetch({ targets: [\"../images/chart.png\"], " +
+    "from: \"sources/post.html\" })\n" +
+    "The tool resolves to `images/chart.png` (relative to watch_dir). " +
+    "If you'd rather pre-resolve and pass `images/chart.png` directly, " +
+    "leave `from` unset — both forms work.",
   inputSchema: z.object({
     targets: z
       .array(z.string())
       .min(1)
       .max(MAX_FETCH_TARGETS)
       .describe(
-        "URLs or space-relative paths. 1.." +
+        "URLs or local paths. 1.." +
           String(MAX_FETCH_TARGETS) +
-          " entries.",
+          " entries. For local paths copied straight out of an " +
+          "<img src> / <a href> attribute, pair with `from` so they " +
+          "resolve correctly.",
+      ),
+    from: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        "Optional space-relative path of the file the targets came " +
+          "from. When set, each local target is resolved relative to " +
+          "this file's directory (browser-style href resolution). " +
+          "Use whenever you've pulled paths from an HTML source's " +
+          "<img src> / <a href> attributes.",
       ),
     space: z.string().nullable().optional().describe(SPACE_PARAM_DESC),
   }),
-  call: async ({ targets, space }, ctx, { toolCallId }) => {
+  call: async ({ targets, from, space }, ctx, { toolCallId }) => {
     // Local-file targets land in a specific space. Mirror read_file's
     // multi-space contract: explicit `space` arg or the triggering one.
     let target: Space;
@@ -1345,7 +1372,9 @@ const fetchTool = defineTool("fetch", {
     }> = [];
 
     const results = await Promise.all(
-      targets.map((rawTarget) => fetchOne(rawTarget, ctx, target, queuedImages)),
+      targets.map((rawTarget) =>
+        fetchOne(rawTarget, ctx, target, queuedImages, from ?? null),
+      ),
     );
 
     if (queuedImages.length > 0) {
@@ -1374,12 +1403,13 @@ async function fetchOne(
   ctx: AgentContext,
   space: Space,
   imagesOut: Array<{ source: string; mediaType: string; data: Buffer }>,
+  from: string | null,
 ): Promise<FetchResultItem> {
   try {
     if (/^https?:\/\//i.test(rawTarget)) {
       return await fetchRemote(rawTarget, imagesOut);
     }
-    return await fetchLocal(rawTarget, ctx, space, imagesOut);
+    return await fetchLocal(rawTarget, ctx, space, imagesOut, from);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { target: rawTarget, kind: "error", error: msg };
@@ -1465,6 +1495,7 @@ async function fetchLocal(
   ctx: AgentContext,
   space: Space,
   imagesOut: Array<{ source: string; mediaType: string; data: Buffer }>,
+  from: string | null,
 ): Promise<FetchResultItem> {
   // Normalize the canonical /{space}/... form too — the agent may paste
   // a space_url from a tool result directly into fetch.
@@ -1474,15 +1505,31 @@ async function fetchLocal(
     normalized = normalized.slice(spacePrefix.length);
   } else if (normalized.startsWith("/")) {
     normalized = normalized.replace(/^\/+/, "");
+  } else if (from) {
+    // Browser-style href resolution: resolve `path` against the directory
+    // of `from`, then normalize. Lets agents paste raw <img src> /
+    // <a href> values from an HTML source without doing the path math
+    // themselves. safeResolve below still guards against escapes.
+    const fromDir = posix.dirname(from);
+    normalized = posix.normalize(posix.join(fromDir, normalized));
   }
 
-  const absPath = safeResolve(space.watch_dir, normalized);
+  let absPath = safeResolve(space.watch_dir, normalized);
   if (!existsSync(absPath)) {
-    return {
-      target: path,
-      kind: "error",
-      error: `not found: ${normalized}`,
-    };
+    // Belt and suspenders: if `from`-relative resolution missed, the
+    // model may have already pre-resolved against the watch_dir root.
+    // Try that interpretation as a fallback before giving up.
+    if (from && path !== normalized && !path.startsWith("/")) {
+      const fallback = safeResolve(space.watch_dir, path);
+      if (existsSync(fallback)) {
+        normalized = path;
+        absPath = fallback;
+      } else {
+        return { target: path, kind: "error", error: `not found: ${normalized}` };
+      }
+    } else {
+      return { target: path, kind: "error", error: `not found: ${normalized}` };
+    }
   }
   if (statSync(absPath).isDirectory()) {
     return {
