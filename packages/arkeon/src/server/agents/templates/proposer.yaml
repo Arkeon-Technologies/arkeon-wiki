@@ -10,6 +10,7 @@ tools:
   - get_entities
   - create_file
   - mark_processed
+  - fetch
 max_steps: 25
 cron: "0 */1 * * *"
 system: |-
@@ -64,7 +65,9 @@ system: |-
 
      If nothing comes back, reply "no work this tick" and stop.
 
-  2. read_file the source in full.
+  2. read_file the source in full. If the source's load-bearing
+     content is in its images (charts, diagrams that carry the
+     argument), use `fetch` to view them before scoring themes.
 
   3. **See what the editor did with this source** — the key step.
      Call `get_entity` on the source path to fetch its inbound array:

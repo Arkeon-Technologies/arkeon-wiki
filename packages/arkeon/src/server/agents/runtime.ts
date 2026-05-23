@@ -47,6 +47,19 @@ export interface ToolEditOpts {
   note?: string;
 }
 
+/**
+ * A single image queued by an image-bearing tool (e.g. `fetch`), waiting
+ * to be spliced into the next step's messages by the runtime's
+ * prepareStep wrapper. `mediaType` is the canonical content-type the
+ * AI SDK expects; `data` is the raw bytes.
+ */
+export interface QueuedImage {
+  /** Display string in the bridge text — e.g. the URL or local path. */
+  source: string;
+  mediaType: string;
+  data: Buffer;
+}
+
 export interface AgentContext {
   space: Space;
   allowedSpaces: Space[];
@@ -72,6 +85,33 @@ export interface AgentContext {
    * makes the invariant obvious).
    */
   readPaths: Set<string>;
+  /**
+   * Per-toolCallId queue of images the tool fetched, waiting for the
+   * runtime's `prepareStep` wrapper to splice them into the next step's
+   * conversation as a synthetic user message.
+   *
+   * The wrapper exists because OpenAI / Gemini / open-source vision
+   * models don't accept images in `tool`-role messages (only Anthropic
+   * does, and only when using the native provider — not via OpenAI-compat
+   * gateways). The portable pattern is: tool returns a textual stub,
+   * runtime splices `assistant("Reviewing the fetched content.")` (the
+   * "bridge" — required by Mistral-style chat templates that reject a
+   * user message directly after a tool result) + `user([text, image, …])`
+   * containing the actual image bytes before the next `generateText`
+   * step. Validated 15/18 across Anthropic / OpenAI direct / Gemini /
+   * Qwen / Mistral / Llama 3.2 Vision in pre-PR experiments.
+   *
+   * Tools push by calling `ctx.imageQueue.set(toolCallId, [...])`;
+   * a single tool call may queue multiple images (e.g. a batched
+   * `fetch(targets=[url1, url2, url3])` puts all three under one
+   * toolCallId, and they all get attached to one synthetic user
+   * message). `prepareStep` drains entries matching the previous
+   * step's tool calls — entries for tool calls in earlier steps stay
+   * around only until those steps are done (which is "immediately
+   * next step" in practice; the queue is per-run so it can never
+   * leak across runAgent invocations).
+   */
+  imageQueue: Map<string, QueuedImage[]>;
   applyEdit(edit: FileEdit, opts: ToolEditOpts): Promise<ApplyEditResult>;
   log(level: "info" | "warn" | "error", msg: string, meta?: Record<string, unknown>): void;
   trace(event: string, fields?: Record<string, unknown>): void;
@@ -215,6 +255,7 @@ export async function runAgent(
           messages: conversation,
           tools,
           stopWhen: stepCountIs(phase.maxSteps),
+          prepareStep: makeImageInjectionPrepareStep(ctx),
           ...(providerOptions ? { providerOptions } : {}),
         });
 
@@ -296,6 +337,7 @@ export function makeContext(
   const tracer = options.tracer ?? getTracer();
   const allowedSpaces = options.allowedSpaces ?? [space];
   const readPaths = new Set<string>();
+  const imageQueue = new Map<string, QueuedImage[]>();
   const ctx: AgentContext = {
     space,
     allowedSpaces,
@@ -304,6 +346,7 @@ export function makeContext(
     currentPhase: null,
     edits,
     readPaths,
+    imageQueue,
     applyEdit: async (edit, opts) => {
       const result = await applyEdit(space, edit, {
         role,
@@ -357,4 +400,86 @@ export function readGateKey(spaceName: string, path: string): string {
 
 function describeModel(model: ModelConfig): string {
   return `${model.provider}:${model.id}`;
+}
+
+/**
+ * Build a `prepareStep` callback that drains `ctx.imageQueue` after each
+ * step and splices the fetched images into the next step's conversation
+ * as a synthetic user message.
+ *
+ * Shape of the splice, for each step where the prior step's tool calls
+ * queued images:
+ *
+ *   ...messages (the conversation so far, including the tool result),
+ *   { role: "assistant", content: "Reviewing the fetched content." },
+ *   { role: "user", content: [
+ *       { type: "text",  text: "[Image from fetch(<source>):]" },
+ *       { type: "image", image: <bytes>, mediaType: "image/png" },
+ *       ...more (text, image) pairs per queued image...
+ *   ] }
+ *
+ * The `assistant` bridge is required by Mistral-style chat templates
+ * that reject a `user` message directly after a `tool` message. It's
+ * harmless on Anthropic / OpenAI / Gemini (treated as a brief filler
+ * turn) — validated 15/18 in pre-PR experiments across every major
+ * vision model family.
+ *
+ * No-op when the previous step's tool calls didn't queue any images,
+ * or when there's no previous step (first step of the phase).
+ */
+export function makeImageInjectionPrepareStep(
+  ctx: AgentContext,
+): (options: {
+  steps: ReadonlyArray<{ toolCalls: ReadonlyArray<{ toolCallId: string }> }>;
+  messages: ModelMessage[];
+}) => { messages: ModelMessage[] } | undefined {
+  return ({ steps, messages }) => {
+    if (steps.length === 0) return undefined;
+    const lastStep = steps[steps.length - 1];
+    if (!lastStep || lastStep.toolCalls.length === 0) return undefined;
+
+    interface ImagePart {
+      type: "image";
+      image: Buffer;
+      mediaType: string;
+    }
+    interface TextPart {
+      type: "text";
+      text: string;
+    }
+    const injections: Array<TextPart | ImagePart> = [];
+    for (const call of lastStep.toolCalls) {
+      const queued = ctx.imageQueue.get(call.toolCallId);
+      if (!queued || queued.length === 0) continue;
+      for (const img of queued) {
+        injections.push({
+          type: "text",
+          text: `[Image from fetch(${img.source}) — you can see this:]`,
+        });
+        injections.push({
+          type: "image",
+          image: img.data,
+          mediaType: img.mediaType,
+        });
+      }
+      ctx.imageQueue.delete(call.toolCallId);
+    }
+    if (injections.length === 0) return undefined;
+
+    ctx.trace("image_injection", {
+      images: injections.filter((p): p is ImagePart => p.type === "image")
+        .length,
+    });
+
+    return {
+      messages: [
+        ...messages,
+        {
+          role: "assistant",
+          content: "Reviewing the fetched content.",
+        },
+        { role: "user", content: injections },
+      ],
+    };
+  };
 }

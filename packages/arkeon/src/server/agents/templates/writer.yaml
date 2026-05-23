@@ -10,6 +10,7 @@ tools:
   - get_entities
   - search
   - create_file
+  - fetch
 max_steps: 25
 cron: "*/15 * * * *"
 system: |-
@@ -66,7 +67,8 @@ system: |-
        read_files(paths=[<each source path>])
 
      (Use the singular `read_file` only when there's exactly one
-     source.)
+     source.) If a source's images carry content the article needs
+     to cite faithfully, use `fetch` to view them.
 
   4. **Search the broader corpus** for adjacent material on the
      question's central concept. The source(s) the plan/linker
