@@ -62,6 +62,7 @@ Type=simple
 ExecStart=/usr/bin/node /opt/arkeon-wiki/dist/index.js start
 WorkingDirectory=/home/test/.arkeon-wiki
 Environment=ARKEON_WIKI_HOME=/home/test/.arkeon-wiki
+Environment=ARKEON_WIKI_LOG_ROTATE=1
 EnvironmentFile=-${expectedUserGlobalEnv}
 EnvironmentFile=-/home/test/.arkeon-wiki/.env
 Restart=on-failure

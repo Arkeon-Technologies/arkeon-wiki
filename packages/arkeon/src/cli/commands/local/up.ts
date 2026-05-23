@@ -134,7 +134,12 @@ async function runUp(options: UpOptions): Promise<void> {
   const child = spawn(entry.cmd, childArgs, {
     detached: true,
     stdio: ["ignore", logFd, logFd],
-    env: process.env,
+    // ARKEON_WIKI_LOG_ROTATE tells the spawned daemon to install the
+    // in-process size-capped log rotation over its stdout/stderr. We
+    // opt in explicitly (not via TTY-sniffing) so foreground users
+    // who pipe `arkeon-wiki start` somewhere don't get their output
+    // silently redirected to ~/.arkeon-wiki/arkeon.log.
+    env: { ...process.env, ARKEON_WIKI_LOG_ROTATE: "1" },
   });
   child.unref();
 

@@ -24,6 +24,7 @@ import {
   DEFAULT_API_PORT,
   ensureArkeonDir,
   isProcessAlive,
+  logfile,
   readPidfile,
   removePidfile,
   writePidfile,
@@ -33,6 +34,7 @@ import {
   registerInstance,
   unregisterInstance,
 } from "../../lib/instances.js";
+import { installRotatingStdLog } from "../../lib/rotating-log.js";
 import { runMigrations } from "../../../schema/index.js";
 
 interface StartOptions {
@@ -69,6 +71,17 @@ async function runStart(options: StartOptions): Promise<void> {
   }
 
   ensureArkeonDir();
+
+  // Install size-capped log rotation when our parent (the `up`
+  // spawner, launchd, or systemd) explicitly opts in via
+  // ARKEON_WIKI_LOG_ROTATE. We can't gate on `process.stdout.isTTY`
+  // because that fires for `arkeon-wiki start > my.log`, which would
+  // surprisingly redirect output to ~/.arkeon-wiki/arkeon.log instead
+  // of the user's chosen file. Explicit signal is safer.
+  if (process.env.ARKEON_WIKI_LOG_ROTATE) {
+    installRotatingStdLog(logfile());
+  }
+
   const db = dbPath();
 
   console.log("[arkeon-wiki] Starting local stack");

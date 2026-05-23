@@ -115,6 +115,7 @@ Type=simple
 ExecStart=${startArgs}
 WorkingDirectory=${home}
 Environment=ARKEON_WIKI_HOME=${home}
+Environment=ARKEON_WIKI_LOG_ROTATE=1
 EnvironmentFile=-${userGlobalEnv}
 EnvironmentFile=-${perInstanceEnv}
 Restart=on-failure
