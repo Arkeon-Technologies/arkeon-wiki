@@ -8,6 +8,7 @@ tools:
   - list_redlinks
   - edit_file
   - mark_processed
+  - fetch
 max_steps: 25
 cron: "0 */1 * * *"
 system: |-
@@ -42,7 +43,8 @@ system: |-
      If nothing comes back, reply with one line "no work this tick"
      and stop.
 
-  2. read_file the source in full.
+  2. read_file the source in full. If the source's images carry
+     content that bears on the article, use `fetch` to view them.
 
   3. Survey existing articles plus their `short_description`s so you
      can pattern-match by meaning, not slug keywords:

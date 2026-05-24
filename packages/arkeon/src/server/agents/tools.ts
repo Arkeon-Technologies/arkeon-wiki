@@ -22,6 +22,7 @@
  */
 
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { posix } from "node:path";
 
 import { z } from "zod";
 
@@ -1204,6 +1205,531 @@ const markProcessedTool = defineTool("mark_processed", {
   }),
 });
 
+// ── fetch ────────────────────────────────────────────────────────
+//
+// Batched URL + local-path fetch tool that surfaces images to the model
+// via the runtime's prepareStep image-injection wrapper. Universal-image
+// MIMEs (PNG/JPEG/WebP/GIF) are side-buffered into ctx.imageQueue under
+// the toolCallId; the runtime drains the queue between steps and splices
+// the bytes into a synthetic user message. Text content (HTML / JSON /
+// XML / plain text) is returned inline in the tool result, capped so a
+// large page doesn't blow the model's input budget.
+//
+// One tool, two sources: the dispatch is purely on the prefix
+// (`^https?://`) so the agent doesn't need to remember which call to
+// make. URLs go through the network; everything else is resolved
+// relative to the space's watch_dir.
+//
+// Why this exists at all: only Anthropic's native provider accepts
+// images in tool-role messages — every other vision-capable provider
+// (OpenAI, Gemini, open-source via Ollama/vLLM/DeepInfra/OpenRouter)
+// requires images in user messages. The runtime wrapper translates;
+// this tool just queues. See ../runtime.ts:makeImageInjectionPrepareStep.
+
+const MAX_FETCH_TARGETS = 10;
+const FETCH_TIMEOUT_MS = 10_000;
+const TEXT_BODY_CAP = 32 * 1024; // 32 KB — enough for typical pages
+
+/**
+ * RAM-safety cap on body reads (default 25 MB). Distinct from the per-
+ * image / per-run budgets we deliberately don't enforce — that decision
+ * was about the model's context window, not RAM. A multi-GB image
+ * stream (accidental or hostile) would otherwise buffer entirely into
+ * memory and OOM the daemon since the rotating-log change only bounds
+ * disk usage. Override at deploy time via `ARKEON_WIKI_FETCH_MAX_BYTES`
+ * (bytes, integer); set explicitly to a small number for low-RAM hosts,
+ * or a larger one for fat-asset workflows.
+ */
+const FETCH_MAX_BYTES = (() => {
+  const raw = process.env.ARKEON_WIKI_FETCH_MAX_BYTES;
+  if (!raw) return 25 * 1024 * 1024;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 25 * 1024 * 1024;
+})();
+
+/**
+ * Operator kill switch — when set to "1", "true", or "yes" (case-
+ * insensitive), the fetch tool refuses every target with an error stub.
+ * Evaluated on each call (not at module load) so an operator can flip
+ * the var on a running daemon and have it take effect next tick
+ * without bouncing the process.
+ */
+function fetchToolDisabledByEnv(): boolean {
+  const raw = (process.env.ARKEON_WIKI_FETCH_DISABLED ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
+const SUPPORTED_IMAGE_MEDIA_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+]);
+
+const EXT_TO_MEDIA_TYPE: Record<string, string> = {
+  // Universal-safe image set
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  // Text — only what the watcher considers text-shaped. (Falls through
+  // to a "this is text, inline it" branch in the tool.)
+  ".txt": "text/plain",
+  ".md": "text/markdown",
+  ".markdown": "text/markdown",
+  ".html": "text/html",
+  ".htm": "text/html",
+  ".json": "application/json",
+  ".xml": "text/xml",
+  ".csv": "text/csv",
+  ".tsv": "text/tab-separated-values",
+  ".yaml": "text/yaml",
+  ".yml": "text/yaml",
+  ".log": "text/plain",
+  ".rst": "text/x-rst",
+};
+
+function mediaTypeFromExt(path: string): string {
+  const idx = path.lastIndexOf(".");
+  if (idx < 0) return "application/octet-stream";
+  const ext = path.slice(idx).toLowerCase();
+  return EXT_TO_MEDIA_TYPE[ext] ?? "application/octet-stream";
+}
+
+function normalizeMediaType(raw: string | null | undefined): string {
+  if (!raw) return "application/octet-stream";
+  return raw.split(";")[0]!.trim().toLowerCase();
+}
+
+function isTextMediaType(mt: string): boolean {
+  if (mt.startsWith("text/")) return true;
+  if (mt === "application/json") return true;
+  if (mt === "application/xml" || mt === "application/xhtml+xml") return true;
+  if (mt === "application/javascript" || mt === "application/typescript") return true;
+  return false;
+}
+
+const fetchTool = defineTool("fetch", {
+  description:
+    "Fetch one or more URLs or local files in a single batched call. " +
+    "Use this when a source you're reading contains images whose " +
+    "content matters to your work — charts, diagrams, screenshots, " +
+    "tweets — and you need to see what they actually depict before " +
+    "reasoning about the source. Skip decorative images (avatars, " +
+    "logos, page chrome, share buttons) — they cost context and add " +
+    "nothing.\n\n" +
+    "Each target is either a remote URL (http:// or https://) or a " +
+    "space-relative path inside the space's watch_dir. Batching is " +
+    "the point: pass every image you want to look at in one call " +
+    "instead of N separate calls. Results come back in the same " +
+    "order as the input.\n\n" +
+    "Per-target outcomes:\n" +
+    "  - PNG / JPEG / WebP / GIF: the image bytes are attached as a " +
+    "user message right after this tool result, so you can see the " +
+    "image directly on your next turn. The tool returns a stub with " +
+    "media_type + size_bytes for your reference.\n" +
+    "  - Text content (HTML / JSON / XML / markdown / plain text): " +
+    "the body is returned inline (capped at 32 KB; `truncated: true` " +
+    "if cut off).\n" +
+    "  - Anything else (PDF, archives, video, unsupported image " +
+    "formats like SVG / HEIC / AVIF): a structured error stub. Only " +
+    "the four universal image formats above can be viewed today.\n\n" +
+    "Per-target failures (404, timeout, unsupported MIME) don't abort " +
+    "the batch — they come back as `kind='error'` items in `results[]` " +
+    "so the other targets still come through.\n\n" +
+    "Local-target path forms (in order of preference):\n" +
+    "  1. Space-rooted URL — `/{spaceName}/{path}`. The canonical form " +
+    "every tool's `space_url` field returns. Picks the watch_dir from " +
+    "the named space, so a multi-space role can fetch images across " +
+    "spaces it's scoped to (e.g. an article in space A can reference a " +
+    "chart asset in space B). Pasting a `space_url` verbatim Just Works.\n" +
+    "  2. Watch-dir-relative — `images/chart.png` (no leading slash). " +
+    "Resolved against the current space's watch_dir.\n" +
+    "  3. href-relative + `from` — pass the raw `<img src>` / `<a href>` " +
+    "value verbatim and set `from` to the HTML file's path. Tool " +
+    "resolves the way a browser does. Example: HTML at " +
+    "`sources/post.html` containing `<img src=\"../images/chart.png\">` " +
+    "→ `fetch({ targets: [\"../images/chart.png\"], " +
+    "from: \"sources/post.html\" })` resolves to `images/chart.png`.\n" +
+    "Prefer (1) when you have a space_url from a prior tool result; (3) " +
+    "is the no-math option when you've just pulled hrefs out of HTML.",
+  inputSchema: z.object({
+    targets: z
+      .array(z.string())
+      .min(1)
+      .max(MAX_FETCH_TARGETS)
+      .describe(
+        "URLs or local paths. 1.." +
+          String(MAX_FETCH_TARGETS) +
+          " entries. For local paths copied straight out of an " +
+          "<img src> / <a href> attribute, pair with `from` so they " +
+          "resolve correctly.",
+      ),
+    from: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        "Optional space-relative path of the file the targets came " +
+          "from. When set, each local target is resolved relative to " +
+          "this file's directory (browser-style href resolution). " +
+          "Use whenever you've pulled paths from an HTML source's " +
+          "<img src> / <a href> attributes.",
+      ),
+    space: z.string().nullable().optional().describe(SPACE_PARAM_DESC),
+  }),
+  call: async ({ targets, from, space }, ctx, { toolCallId }) => {
+    // Operator kill switch — flip the env var on a running daemon to
+    // disable fetch without redeploying. Useful when a tenant abuses
+    // it, when a CVE drops in the underlying fetch stack, or when
+    // network egress needs to be revoked in a hurry. Evaluated each
+    // call so the change takes effect immediately on next agent tick;
+    // the runtime doesn't need to be bounced.
+    if (fetchToolDisabledByEnv()) {
+      return {
+        results: targets.map((t) => ({
+          target: t,
+          kind: "error" as const,
+          error:
+            "fetch tool disabled by operator " +
+            "(ARKEON_WIKI_FETCH_DISABLED is set)",
+        })),
+        space: ctx.space.name,
+      };
+    }
+
+    // `defaultSpace` is the fallback for bare (non-space-rooted, non-URL)
+    // targets. Single-space role → always the triggering space. Multi-
+    // space role → must be explicit (the call's `space` arg) OR every
+    // target must be space-rooted/URL so the per-target resolver can
+    // pick the space without ambiguity.
+    let defaultSpace: Space | null = null;
+    if (ctx.allowedSpaces.length <= 1) {
+      defaultSpace = ctx.space;
+    } else if (space != null && space !== "") {
+      defaultSpace = resolveSpaceArg(space, ctx.allowedSpaces);
+    }
+
+    // All images surfaced from this single call get bundled into one
+    // synthetic user message by the runtime wrapper, keyed by the
+    // toolCallId the AI SDK assigned this invocation.
+    const queuedImages: Array<{
+      source: string;
+      mediaType: string;
+      data: Buffer;
+    }> = [];
+
+    const results = await Promise.all(
+      targets.map((rawTarget) =>
+        fetchOne(rawTarget, ctx, defaultSpace, queuedImages, from ?? null),
+      ),
+    );
+
+    if (queuedImages.length > 0) {
+      ctx.imageQueue.set(toolCallId, queuedImages);
+    }
+
+    return { results, space: defaultSpace?.name ?? ctx.space.name };
+  },
+  summarize: (r) => ({
+    space: r.space,
+    count: r.results.length,
+    images: r.results.filter((x) => x.kind === "image").length,
+    text: r.results.filter((x) => x.kind === "text").length,
+    errors: r.results.filter((x) => x.kind === "error").length,
+  }),
+});
+
+/**
+ * Fetch a single target (URL or local path) and decide what to do with
+ * the bytes. Mutates `imagesOut` for image hits; the caller will commit
+ * them to `ctx.imageQueue` keyed by toolCallId once the batched call
+ * completes.
+ */
+async function fetchOne(
+  rawTarget: string,
+  ctx: AgentContext,
+  defaultSpace: Space | null,
+  imagesOut: Array<{ source: string; mediaType: string; data: Buffer }>,
+  from: string | null,
+): Promise<FetchResultItem> {
+  try {
+    if (/^https?:\/\//i.test(rawTarget)) {
+      return await fetchRemote(rawTarget, imagesOut);
+    }
+    return await fetchLocal(rawTarget, ctx, defaultSpace, imagesOut, from);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { target: rawTarget, kind: "error", error: msg };
+  }
+}
+
+interface FetchTextItem {
+  target: string;
+  kind: "text";
+  media_type: string;
+  size_bytes: number;
+  truncated: boolean;
+  text: string;
+}
+interface FetchImageItem {
+  target: string;
+  kind: "image";
+  media_type: string;
+  size_bytes: number;
+  note: string;
+}
+interface FetchErrorItem {
+  target: string;
+  kind: "error";
+  error: string;
+}
+type FetchResultItem = FetchTextItem | FetchImageItem | FetchErrorItem;
+
+async function fetchRemote(
+  url: string,
+  imagesOut: Array<{ source: string; mediaType: string; data: Buffer }>,
+): Promise<FetchResultItem> {
+  const controller = new AbortController();
+  // One timer covers headers + body: if the whole transfer takes more
+  // than FETCH_TIMEOUT_MS we abort. Don't clear until both reads are
+  // done (or one of them errored) — otherwise a slow body trickle has
+  // no upper bound. The finally below handles every exit path.
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) {
+      return {
+        target: url,
+        kind: "error",
+        error: `HTTP ${res.status} ${res.statusText}`,
+      };
+    }
+    const mediaType = normalizeMediaType(res.headers.get("content-type"));
+
+    // Content-Length lets us reject oversize responses BEFORE reading
+    // any bytes — much cheaper than streaming N MB just to throw it
+    // away. Servers can lie or omit it; the streaming cap below
+    // catches both cases.
+    const declaredLen = parseContentLength(res.headers.get("content-length"));
+    if (declaredLen != null && declaredLen > FETCH_MAX_BYTES) {
+      controller.abort();
+      return {
+        target: url,
+        kind: "error",
+        error:
+          `body declared ${declaredLen} bytes, exceeds cap of ` +
+          `${FETCH_MAX_BYTES} (ARKEON_WIKI_FETCH_MAX_BYTES)`,
+      };
+    }
+
+    if (SUPPORTED_IMAGE_MEDIA_TYPES.has(mediaType)) {
+      const buf = await readBodyCapped(res, controller);
+      imagesOut.push({ source: url, mediaType, data: buf });
+      return {
+        target: url,
+        kind: "image",
+        media_type: mediaType,
+        size_bytes: buf.byteLength,
+        note: "Image attached as a user message after this tool result.",
+      };
+    }
+    if (isTextMediaType(mediaType)) {
+      const buf = await readBodyCapped(res, controller);
+      const full = buf.toString("utf-8");
+      const truncated = full.length > TEXT_BODY_CAP;
+      return {
+        target: url,
+        kind: "text",
+        media_type: mediaType,
+        size_bytes: full.length,
+        truncated,
+        text: truncated ? full.slice(0, TEXT_BODY_CAP) : full,
+      };
+    }
+    return {
+      target: url,
+      kind: "error",
+      error:
+        `unsupported media type '${mediaType}' — this tool can view PNG, JPEG, WebP, GIF, or text content`,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function parseContentLength(raw: string | null): number | null {
+  if (!raw) return null;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+/**
+ * Stream `res.body` into a single Buffer, aborting the underlying
+ * fetch (so the connection drops, not just the JS-side reader) the
+ * moment cumulative bytes exceed FETCH_MAX_BYTES. Without this guard
+ * a server that streams chunks past a missing/lying Content-Length
+ * could buffer arbitrary bytes into memory and OOM the daemon.
+ */
+async function readBodyCapped(
+  res: Response,
+  controller: AbortController,
+): Promise<Buffer> {
+  if (!res.body) {
+    // No streaming body (e.g. HEAD response, empty 204). Fall back to
+    // arrayBuffer; it'll just be empty in practice.
+    return Buffer.from(await res.arrayBuffer());
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > FETCH_MAX_BYTES) {
+      controller.abort();
+      try { reader.releaseLock(); } catch { /* ignore */ }
+      throw new Error(
+        `body exceeded cap of ${FETCH_MAX_BYTES} bytes ` +
+          `(ARKEON_WIKI_FETCH_MAX_BYTES) during stream`,
+      );
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength)));
+}
+
+async function fetchLocal(
+  path: string,
+  ctx: AgentContext,
+  defaultSpace: Space | null,
+  imagesOut: Array<{ source: string; mediaType: string; data: Buffer }>,
+  from: string | null,
+): Promise<FetchResultItem> {
+  let normalized = path;
+  let space: Space | null = defaultSpace;
+  // Space-rooted URL form: `/{spaceName}/{rest}` — the canonical shape
+  // returned by every tool's `space_url` field and the form wikis use
+  // for `<a href>` cross-references. Pasting it here is the intended
+  // use; the parsed space name picks which watch_dir to resolve
+  // against and may differ from `defaultSpace` (cross-space fetch).
+  // Spaces NOT in this role's allowedSpaces are rejected — a multi-
+  // space role can only read what it's scoped to.
+  if (normalized.startsWith("/")) {
+    const slash = normalized.indexOf("/", 1);
+    const maybeSpaceName = slash > 0 ? normalized.slice(1, slash) : normalized.slice(1);
+    const matched = ctx.allowedSpaces.find((s) => s.name === maybeSpaceName);
+    if (!matched) {
+      return {
+        target: path,
+        kind: "error",
+        error:
+          `'/${maybeSpaceName}/...' references space '${maybeSpaceName}' which is not in ` +
+          `this role's allowed set [${ctx.allowedSpaces.map((s) => s.name).join(", ")}]. ` +
+          `Paste a space_url from a tool result, or use a watch_dir-relative path.`,
+      };
+    }
+    space = matched;
+    normalized = slash > 0 ? normalized.slice(slash + 1) : "";
+    if (!normalized) {
+      return {
+        target: path,
+        kind: "error",
+        error: `missing path after /${maybeSpaceName}/`,
+      };
+    }
+  } else if (!space) {
+    // Bare path on a multi-space role without an explicit `space` arg
+    // — we can't tell which watch_dir to resolve against. Multi-space
+    // roles can either supply `space` for the whole call or use the
+    // space-rooted URL form per target.
+    return {
+      target: path,
+      kind: "error",
+      error:
+        `multi-space role: bare path '${path}' is ambiguous. Either pass ` +
+        `\`space\` on the call, or use the space-rooted URL form ` +
+        `/{spaceName}/${path}.`,
+    };
+  } else if (from) {
+    // Browser-style href resolution: resolve `path` against the directory
+    // of `from`, then normalize. Lets agents paste raw <img src> /
+    // <a href> values from an HTML source without doing the path math
+    // themselves. safeResolve below still guards against escapes.
+    const fromDir = posix.dirname(from);
+    normalized = posix.normalize(posix.join(fromDir, normalized));
+  }
+
+  // Invariant after the if/else chain above: `space` is non-null —
+  // either the path was space-rooted (set above), bare-with-default
+  // (already non-null), bare-without-default (early-returned), or
+  // had `from` (defaultSpace was non-null to reach the else-if).
+  if (!space) {
+    return { target: path, kind: "error", error: "internal: space unresolved" };
+  }
+  let absPath = safeResolve(space.watch_dir, normalized);
+  if (!existsSync(absPath)) {
+    // Belt and suspenders: if `from`-relative resolution missed, the
+    // model may have already pre-resolved against the watch_dir root.
+    // Try that interpretation as a fallback before giving up.
+    if (from && path !== normalized && !path.startsWith("/")) {
+      const fallback = safeResolve(space.watch_dir, path);
+      if (existsSync(fallback)) {
+        normalized = path;
+        absPath = fallback;
+      } else {
+        return { target: path, kind: "error", error: `not found: ${normalized}` };
+      }
+    } else {
+      return { target: path, kind: "error", error: `not found: ${normalized}` };
+    }
+  }
+  if (statSync(absPath).isDirectory()) {
+    return {
+      target: path,
+      kind: "error",
+      error: `is a directory: ${normalized}`,
+    };
+  }
+
+  const mediaType = mediaTypeFromExt(normalized);
+
+  if (SUPPORTED_IMAGE_MEDIA_TYPES.has(mediaType)) {
+    const buf = readFileSync(absPath);
+    imagesOut.push({ source: normalized, mediaType, data: buf });
+    return {
+      target: path,
+      kind: "image",
+      media_type: mediaType,
+      size_bytes: buf.byteLength,
+      note: "Image attached as a user message after this tool result.",
+    };
+  }
+  if (isTextMediaType(mediaType)) {
+    const full = readFileSync(absPath, "utf-8");
+    // Reading text via fetch counts as a read for the edit-gate too —
+    // the agent might decide to edit after viewing.
+    ctx.readPaths.add(readGateKey(space.name, normalized));
+    const truncated = full.length > TEXT_BODY_CAP;
+    return {
+      target: path,
+      kind: "text",
+      media_type: mediaType,
+      size_bytes: full.length,
+      truncated,
+      text: truncated ? full.slice(0, TEXT_BODY_CAP) : full,
+    };
+  }
+  return {
+    target: path,
+    kind: "error",
+    error:
+      `unsupported file type for '${normalized}' (media type '${mediaType}') — this tool can view PNG, JPEG, WebP, GIF, or text content`,
+  };
+}
+
 // ── Registry ──────────────────────────────────────────────────────
 
 export const ALL_TOOLS: Record<string, ToolFactory> = {
@@ -1219,4 +1745,5 @@ export const ALL_TOOLS: Record<string, ToolFactory> = {
   delete_wiki: deleteWikiTool,
   tag_entity: tagEntityTool,
   mark_processed: markProcessedTool,
+  fetch: fetchTool,
 };
