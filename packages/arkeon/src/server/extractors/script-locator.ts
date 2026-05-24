@@ -41,3 +41,23 @@ export function resolvePythonScript(scriptName: string): string {
   }
   throw new ExtractorScriptNotFoundError(scriptName, candidates);
 }
+
+/**
+ * Locate the shipped Python requirements lockfile (`requirements.lock`),
+ * if any. Returns null when no lockfile is bundled — install-deps
+ * then falls back to the per-handler DependencySpec versionConstraint.
+ *
+ * The lockfile has exact-version pins + SHA-256 hashes for every wheel
+ * variant we vetted (see comments at the top of the file for
+ * regeneration instructions).
+ */
+export function resolvePythonRequirementsLock(): string | null {
+  const candidates = [
+    join(__dirname, "python", "requirements.lock"),
+    join(__dirname, "extractor-scripts", "requirements.lock"),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}

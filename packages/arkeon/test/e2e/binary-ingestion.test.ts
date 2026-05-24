@@ -22,6 +22,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   rmSync,
   writeFileSync,
@@ -203,6 +204,51 @@ describeIfPython("runExtraction(pdf) with real PyMuPDF", () => {
     expect(sidecarEntity!.source_hash).toBeTruthy();
   });
 
+  it("re-extracts when the binary's content changes", async () => {
+    const pdfPath = join(SPACE.watch_dir, "sources/edited.pdf");
+    buildMinimalPdf(pdfPath);
+    await syncFile(SPACE, "sources/edited.pdf");
+
+    const first = await runExtraction({
+      space: SPACE,
+      relativePath: "sources/edited.pdf",
+    });
+    expect(first!.status).toBe("extracted");
+    const sidecarFirstHash = (
+      await getEntity(SPACE.name, "sources/edited.pdf.html")
+    )!.source_hash;
+
+    // Append a PDF comment — keeps the file valid but changes its
+    // hash (and would change the sidecar content in a real edit).
+    writeFileSync(pdfPath, Buffer.concat([
+      readFileSync(pdfPath),
+      Buffer.from("\n%edit\n"),
+    ]));
+    await syncFile(SPACE, "sources/edited.pdf"); // refreshes binary's source_hash
+
+    const second = await runExtraction({
+      space: SPACE,
+      relativePath: "sources/edited.pdf",
+    });
+    expect(second!.status).toBe("extracted");
+    if (second!.status !== "extracted") throw new Error("unreachable");
+    // Either the sidecar content changed (most cases) or stayed the
+    // same (PyMuPDF ignores trailing PDF comments). Either way, the
+    // extractor RAN — that's what we're asserting against the bug
+    // where extracted_by=pymupdf would have skipped.
+    expect(second.extractedBy).toBe("pymupdf");
+
+    // Sidecar entity still has extracted_by=pymupdf, no failed-hash.
+    const sidecar = await getEntity(SPACE.name, "sources/edited.pdf.html");
+    const tags =
+      typeof sidecar!.tags === "string"
+        ? JSON.parse(sidecar!.tags)
+        : sidecar!.tags;
+    expect(tags.extracted_by).toBe("pymupdf");
+    expect(tags.failed_for_binary_hash).toBeUndefined();
+    void sidecarFirstHash; // tracked above; kept for diagnostic clarity
+  });
+
   it("skips re-extraction when sidecar exists without an extracted_by tag", async () => {
     const pdfPath = join(SPACE.watch_dir, "sources/old.pdf");
     buildMinimalPdf(pdfPath);
@@ -220,6 +266,74 @@ describeIfPython("runExtraction(pdf) with real PyMuPDF", () => {
       relativePath: "sources/old.pdf",
     });
     expect(outcome!.status).toBe("skipped");
+  });
+});
+
+describeIfPython("failed-sidecar retry behavior", () => {
+  it("skips re-extraction when the prior run failed on the same content", async () => {
+    // Force a failure by giving the extractor a malformed PDF.
+    const pdfPath = join(SPACE.watch_dir, "sources/badcontent.pdf");
+    writeFileSync(pdfPath, "%PDF-1.4\nthis is bogus content\n%%EOF\n");
+    await syncFile(SPACE, "sources/badcontent.pdf");
+
+    const first = await runExtraction({
+      space: SPACE,
+      relativePath: "sources/badcontent.pdf",
+    });
+    expect(first!.status).toBe("failed");
+
+    // Sidecar should now carry extracted_by=failed plus the binary's hash.
+    const binary = await getEntity(SPACE.name, "sources/badcontent.pdf");
+    const sidecar1 = await getEntity(SPACE.name, "sources/badcontent.pdf.html");
+    const tags1 =
+      typeof sidecar1!.tags === "string"
+        ? JSON.parse(sidecar1!.tags)
+        : sidecar1!.tags;
+    expect(tags1.extracted_by).toBe("failed");
+    expect(tags1.failed_for_binary_hash).toBe(binary!.source_hash);
+
+    // Second run on identical content: should SKIP, not retry.
+    const second = await runExtraction({
+      space: SPACE,
+      relativePath: "sources/badcontent.pdf",
+    });
+    expect(second!.status).toBe("skipped");
+    if (second!.status !== "skipped") throw new Error("unreachable");
+    expect(second.reason).toMatch(/previously failed/);
+  });
+
+  it("retries the failed extractor when the binary's content changes", async () => {
+    const pdfPath = join(SPACE.watch_dir, "sources/recovering.pdf");
+    writeFileSync(pdfPath, "%PDF-1.4\ngarbage\n%%EOF\n");
+    await syncFile(SPACE, "sources/recovering.pdf");
+
+    const first = await runExtraction({
+      space: SPACE,
+      relativePath: "sources/recovering.pdf",
+    });
+    expect(first!.status).toBe("failed");
+
+    // Replace the malformed PDF with a real one.
+    buildMinimalPdf(pdfPath);
+    await syncFile(SPACE, "sources/recovering.pdf");
+
+    const second = await runExtraction({
+      space: SPACE,
+      relativePath: "sources/recovering.pdf",
+    });
+    // Binary changed → retry should proceed. The minimal PDF either
+    // extracts successfully OR fails for a different reason; either
+    // way the skip-loop didn't engage.
+    expect(second!.status === "extracted" || second!.status === "failed").toBe(true);
+    if (second!.status === "extracted") {
+      // On success, the failed-hash tag should be cleared.
+      const sidecar = await getEntity(SPACE.name, "sources/recovering.pdf.html");
+      const tags =
+        typeof sidecar!.tags === "string"
+          ? JSON.parse(sidecar!.tags)
+          : sidecar!.tags;
+      expect(tags.failed_for_binary_hash).toBeUndefined();
+    }
   });
 });
 

@@ -47,8 +47,12 @@ export const pdfHandler: FileHandler = {
   dependencies: [
     {
       kind: "python_package",
+      // Exact pin: install-deps installs from the bundled lockfile
+      // with --require-hashes when available. The version here drives
+      // the verify-only --check path + llms.txt summary so they stay
+      // in sync with the lockfile.
       name: "pymupdf",
-      versionConstraint: ">=1.24",
+      versionConstraint: "==1.27.2.3",
       installHint: {
         mac: "managed automatically by `arkeon-wiki install-deps`",
         linux: "managed automatically by `arkeon-wiki install-deps`",

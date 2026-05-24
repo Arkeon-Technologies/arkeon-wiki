@@ -29,7 +29,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { getEntity, setEntityTag } from "../lib/entities.js";
+import { deleteEntityTag, getEntity, setEntityTag } from "../lib/entities.js";
 import { setEditContext, clearEditContext } from "../lib/edit-context.js";
 import { withPathLock } from "../lib/path-lock.js";
 import { removeByPath, syncFile, type Space } from "../lib/sync.js";
@@ -56,6 +56,18 @@ const EXTRACTED_BY_TAG = "extracted_by";
 
 /** Tagged value distinguishing failed sidecars from successful ones. */
 const EXTRACTED_BY_FAILED = "failed";
+
+/**
+ * When a sidecar is "failed", we also stamp the binary's source_hash
+ * at the time of failure. The skip rule short-circuits re-extraction
+ * only when the binary's CURRENT hash matches — i.e., we already
+ * failed on this exact content. If the binary changes, the hashes
+ * differ and we retry.
+ *
+ * Without this, every watcher restart re-runs the failing extractor
+ * forever (retry-on-every-restart instead of retry-on-content-change).
+ */
+const FAILED_FOR_BINARY_HASH_TAG = "failed_for_binary_hash";
 
 export interface RunExtractionOptions {
   space: Space;
@@ -110,7 +122,7 @@ async function runExtractionInner(
   // Re-extraction skip: if an existing sidecar was authored by hand
   // (no extracted_by tag) or explicitly tagged "manual", leave it
   // alone. Users can force re-extraction by deleting the sidecar.
-  const skipReason = await shouldSkipExisting(space, sidecarRelPath);
+  const skipReason = await shouldSkipExisting(space, relativePath, sidecarRelPath);
   if (skipReason) {
     return { status: "skipped", reason: skipReason };
   }
@@ -209,13 +221,16 @@ async function runExtractionInner(
     }
 
     // Tag the sidecar so re-extraction skips manual overrides and so
-    // we can identify failed vs. successful sidecars later.
+    // we can identify failed vs. successful sidecars later. Also clear
+    // any stale failed-hash tag from a previous failure so a future
+    // failure can't accidentally read it as fresh.
     await setEntityTag(
       space.name,
       sidecarRelPath,
       EXTRACTED_BY_TAG,
       result.extractedBy,
     );
+    await deleteEntityTag(space.name, sidecarRelPath, FAILED_FOR_BINARY_HASH_TAG);
 
     const assets = readdirSync(assetsAbsDir);
     log(
@@ -271,6 +286,19 @@ async function runExtractionInner(
         EXTRACTED_BY_TAG,
         EXTRACTED_BY_FAILED,
       );
+      // Stamp the binary's current hash so future watcher events on
+      // the same content skip the retry loop. The binary entity was
+      // synced before this extractor fired (kind='asset' path), so
+      // its source_hash is fresh.
+      const binary = await getEntity(space.name, relativePath);
+      if (binary?.source_hash) {
+        await setEntityTag(
+          space.name,
+          sidecarRelPath,
+          FAILED_FOR_BINARY_HASH_TAG,
+          binary.source_hash,
+        );
+      }
     } catch (stubErr) {
       console.error(
         `[ingest/${handler.name}] failed to write stub sidecar for ${relativePath}: ${(stubErr as Error).message}`,
@@ -289,14 +317,18 @@ async function runExtractionInner(
  *
  * Rules:
  * - No sidecar entity yet → proceed (first extraction).
- * - Sidecar has extracted_by tag = a known value other than "manual" →
- *   proceed (re-extract; the content changed).
  * - Sidecar has extracted_by = "manual" → skip (user took it over).
  * - Sidecar exists but no extracted_by tag → skip (user authored it
  *   before the extractor existed for this format).
+ * - Sidecar has extracted_by = "failed" AND failed_for_binary_hash
+ *   matches the binary's current source_hash → skip (we already
+ *   failed on this exact content; retry only on content change).
+ * - Sidecar has any other extracted_by → proceed (re-extract; either
+ *   the content changed or we want a fresh run).
  */
 async function shouldSkipExisting(
   space: Space,
+  binaryRelPath: string,
   sidecarRelPath: string,
 ): Promise<string | null> {
   const entity = await getEntity(space.name, sidecarRelPath);
@@ -308,8 +340,27 @@ async function shouldSkipExisting(
   if (extractedBy === undefined || extractedBy === null) {
     return "sidecar exists without extracted_by tag (treated as manual)";
   }
-  if (typeof extractedBy === "string" && extractedBy.toLowerCase() === "manual") {
+  const extractedByStr =
+    typeof extractedBy === "string" ? extractedBy.toLowerCase() : null;
+  if (extractedByStr === "manual") {
     return "sidecar tagged extracted_by=manual";
+  }
+  if (extractedByStr === EXTRACTED_BY_FAILED) {
+    // Failed sidecar — only skip if we failed on the binary's CURRENT
+    // content. If the user touched / edited / replaced the binary, the
+    // hashes differ and we retry.
+    const failedFor = tags[FAILED_FOR_BINARY_HASH_TAG];
+    if (typeof failedFor !== "string" || failedFor.length === 0) {
+      // Old failed sidecar from before we started stamping the hash —
+      // fall through and retry once, which will re-stamp it.
+      return null;
+    }
+    const binary = await getEntity(space.name, binaryRelPath);
+    if (binary && binary.source_hash === failedFor) {
+      return "sidecar previously failed on this content (extracted_by=failed)";
+    }
+    // Hash differs → content changed → retry.
+    return null;
   }
   return null;
 }

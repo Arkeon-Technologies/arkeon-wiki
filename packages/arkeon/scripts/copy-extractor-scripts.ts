@@ -38,7 +38,7 @@ mkdirSync(target, { recursive: true });
 
 let copied = 0;
 for (const entry of readdirSync(source)) {
-  if (entry.endsWith(".py")) {
+  if (entry.endsWith(".py") || entry.endsWith(".lock") || entry === "requirements.lock") {
     cpSync(join(source, entry), join(target, entry));
     copied += 1;
   }

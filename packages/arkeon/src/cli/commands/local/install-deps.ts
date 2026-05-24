@@ -36,6 +36,7 @@ import {
 import {
   HANDLERS,
 } from "../../../server/extractors/index.js";
+import { resolvePythonRequirementsLock } from "../../../server/extractors/script-locator.js";
 import type {
   AdaptersManifest,
   DependencySpec,
@@ -278,13 +279,51 @@ function ensurePythonVenv(venvDir: string): void {
 
 function installPythonPackages(venvPythonPath: string, plan: DependencyPlan): void {
   if (plan.pythonPackages.size === 0) return;
+
+  // Prefer the bundled lockfile with hash verification when available —
+  // protects against a hijacked PyPI mirror or compromised package
+  // release shipping a wheel we didn't vet. The lockfile is generated
+  // via `uv pip compile --generate-hashes`. See
+  // src/server/extractors/python/requirements.lock.
+  const lockfile = resolvePythonRequirementsLock();
+  if (lockfile) {
+    output.progress(`[install-deps] python: installing from ${lockfile} (--require-hashes)`);
+    if (whichSync("uv")) {
+      const res = spawnSync(
+        "uv",
+        ["pip", "install", "--python", venvPythonPath, "--require-hashes", "-r", lockfile],
+        { stdio: ["ignore", "inherit", "inherit"] },
+      );
+      if (res.status !== 0) {
+        throw new Error(`\`uv pip install --require-hashes\` failed with exit code ${res.status}`);
+      }
+      return;
+    }
+    const res = spawnSync(
+      venvPythonPath,
+      ["-m", "pip", "install", "--require-hashes", "-r", lockfile],
+      { stdio: ["ignore", "inherit", "inherit"] },
+    );
+    if (res.status !== 0) {
+      throw new Error(
+        `pip install --require-hashes failed with exit code ${res.status} (venv: ${venvPythonPath})`,
+      );
+    }
+    return;
+  }
+
+  // Fallback: no lockfile present (running against a dev tree that
+  // hasn't been rebuilt, or a custom packaging). Install from the
+  // per-handler DependencySpec — version pin without hash verification.
+  // Log a warning so this isn't silent in production.
+  output.warn(
+    "[install-deps] python: no requirements.lock found, installing without hash verification",
+  );
   const specs = Array.from(plan.pythonPackages).map((pkg) => {
     const constraint = plan.pythonVersions.get(pkg);
     return constraint ? `${pkg}${constraint}` : pkg;
   });
 
-  // Prefer `uv pip install --python <venv-python>` so we get uv's
-  // resolver + cache; fall back to the venv's pip module.
   if (whichSync("uv")) {
     const res = spawnSync(
       "uv",
