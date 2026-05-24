@@ -174,6 +174,7 @@ Tags exist so multi-agent pipelines can track "has role X processed entity Y" wi
 - `src/server/agents/cron.ts` — `nextTick(expr, from)` via `cron-parser`. Drives the scheduler's `setTimeout` chain.
 - `src/server/agents/scheduler.ts` — per-space cron. Cron ticks queue per-space (FIFO) behind any in-flight or queued run via `queueSpaceMutex`. The HTTP run route stays fail-fast via `withSpaceMutex`. No orphan reclaim.
 - `src/server/agents/space-scope.ts` — `resolveAllowedSpaces(scope, ownSpace)` + `resolveSpaceArg(arg, allowed)`. Multi-space reads, writes always to `ctx.space`.
+- `src/server/extractors/` — binary file → HTML sidecar pipeline. `types.ts` declares `FileHandler` (name, extensions, declarative `dependencies`, async `extract` fn). `index.ts` is the registry: drop a new handler into `HANDLERS`, and the watcher, install-deps, and llms.txt auto-pick it up. `pdf.ts` is the only handler in v0 — spawns the bundled `python/pdf_extract.py` via the managed venv, emits HTML with text + `<img>` references to extracted figures + per-page renders into a `<binary>.assets/` sibling directory. `runner.ts` orchestrates: stage assets in a `.arkeon-ingest.*` dir, validate handler output, atomic rename, write sidecar, `setEditContext({role:"ingest"})` so `entity_edits` records the attribution, then `setEntityTag(extracted_by=<handler>)` so re-extraction can detect manual sidecars (`extracted_by=manual`) and skip them. `subprocess.ts` is the shared spawn helper — timeout, AbortSignal, global concurrency semaphore (default 4 via `ARKEON_WIKI_INGEST_CONCURRENCY`). The fs-watcher dispatches in parallel with `syncAsset` after a kind='asset' file with a registered extension lands; the sidecar's subsequent watcher event indexes it as a normal kind='text' source that flows into the editor's queue.
 
 ## API endpoints
 
@@ -224,6 +225,8 @@ arkeon-wiki search <query> [--space <name>]
 arkeon-wiki start                    # foreground (pm2/launchd/etc.)
 arkeon-wiki install                  # persistent service: starts at login, restarts on crash
 arkeon-wiki uninstall                # remove the service
+arkeon-wiki install-deps             # bootstrap the binary-ingestion toolchain (Python venv + system bins)
+arkeon-wiki install-deps --check     # verify-only — exit non-zero on missing dep
 ```
 
 Run multiple instances side by side with `--name`:
@@ -273,6 +276,8 @@ E2e tests start a real stack in-process — no running daemon needed.
 - `~/.arkeon-wiki/<home>/arkeon.log` — daemon stdout/stderr. Size-capped via in-process rotation when `ARKEON_WIKI_LOG_ROTATE=1` is set: each file is held under 50 MB and 3 backups are retained (`arkeon.log.1` ... `.3`), bounding total disk usage to ~200 MB per instance. The `up` spawner, launchd plist, and systemd unit all set the env var so headless daemons get rotation by default; foreground `arkeon-wiki start` runs without it. Override the size knobs via `ARKEON_WIKI_LOG_MAX_BYTES` / `ARKEON_WIKI_LOG_MAX_FILES`.
 - `~/.arkeon-wiki/instances/<name>.json` — registry of running instances
 - `~/.arkeon-wiki/.env` — user-global env file. `install` writes API keys here; the agent runtime reads them at startup. Never overwritten — values rotate by editing the file.
+- `~/.arkeon-wiki/python/` — managed Python venv bootstrapped by `install-deps`. Houses the runtime for handler extractors (currently PyMuPDF for PDFs). Re-running `install-deps` is idempotent and upgrades packages in place.
+- `~/.arkeon-wiki/adapters.json` — versioned manifest written by `install-deps` recording resolved paths to the venv's Python + system binaries + installed package versions. Read at extraction time; throw `AdaptersManifestMissingError` if missing (run `install-deps`).
 - `~/Library/LaunchAgents/tech.arkeon.wiki[.<name>].plist` — service plist when `install` has been run on macOS. Owned by the user; survives reboot.
 - `~/.config/systemd/user/arkeon-wiki[-<name>].service` — service unit when `install` has been run on Linux. Symlinked from `default.target.wants/` after `enable`; survives reboot with `loginctl enable-linger`.
 - `.arkeon/state.json` — per-directory space binding (`{api_url, space_name, created_at}`). The old `space_id` field is gone — names are PKs now.
@@ -292,6 +297,36 @@ When enabled, one JSON object per line is appended to `<arkeonHome>/agent-trace.
 - `run.end` / `run.error` — total steps, edits, usage, duration
 
 Tail with `tail -f <path> | jq` or query with `jq -c 'select(.event=="tool.call" and .tool=="search")'`.
+
+## Binary ingestion
+
+Binary files like PDFs are indexed as `kind='asset'` (linkable from any wiki, never queued) and then run through an **extractor pipeline** that writes an HTML **sidecar** the editor can read on the queue.
+
+Lifecycle of `paper.pdf` landing in `sources/`:
+
+1. Watcher sees the file → `syncFile` creates a `kind='asset'` entity row.
+2. Watcher dispatches to `runExtraction` if the extension is in `INGESTABLE_EXTENSIONS` (PDF in v0).
+3. Runner spawns the bundled `pdf_extract.py` script via the managed Python venv. Script writes:
+   - `paper.pdf.html` (sidecar — text-as-HTML, `<img>` references to extracted figures + per-page renders)
+   - `paper.pdf.assets/page-N.png` (whole-page renders at 150 DPI — always emitted, defensive)
+   - `paper.pdf.assets/page-N-fig-M.{png|jpg}` (embedded figures)
+4. Watcher fires again for the sidecar → it indexes as `kind='text'`, enters the editor's queue.
+5. Sidecar's `<img>` references resolve to indexed asset entities (PR #167 walks `<img src>` as relationships). The agent reads images via the `fetch` tool (PR #169).
+
+**Adding a new handler:** drop a new module under `src/server/extractors/<format>.ts` exporting a `FileHandler` (extensions, declarative `dependencies`, async `extract`), register it in `index.ts`'s `HANDLERS` array, and add a fixture. The watcher dispatch, install-deps planning, and llms-txt all derive their behavior from the registry — no edits needed elsewhere.
+
+**Install-deps required.** Run `arkeon-wiki install-deps` once per machine to bootstrap `~/.arkeon-wiki/python/` (uses `uv` if present, falls back to `python3 -m venv`). The daemon starts fine without it; PDFs just get skipped with a log line until install-deps completes.
+
+**Re-extraction skip rules.** The sidecar's `extracted_by` tag protects user work:
+- `extracted_by` is missing (sidecar pre-existed our extractor or was hand-written) → skip.
+- `extracted_by="manual"` (user took it over) → skip.
+- `extracted_by="pymupdf"` or other known handler → re-extract on binary content change.
+
+Force a re-extraction by deleting the sidecar; the next watcher tick will rebuild it.
+
+**Concurrency.** `runSubprocess` enforces a global cap (default 4, override via `ARKEON_WIKI_INGEST_CONCURRENCY`). A fresh corpus dump of 100 PDFs won't fan out 100 subprocesses.
+
+**Failure mode.** If extraction throws (subprocess crash, timeout, validation failure), the runner writes a **stub sidecar** with the error inline. Editor still sees the source exists; failure is visible at the next read.
 
 ## Schema migrations
 

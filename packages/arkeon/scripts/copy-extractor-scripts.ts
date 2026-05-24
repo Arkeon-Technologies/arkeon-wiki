@@ -1,0 +1,49 @@
+// Copyright (c) 2026 Arkeon Technologies, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * Copies src/server/extractors/python/*.py → dist/extractor-scripts/*.py
+ * at arkeon build time.
+ *
+ * Runs after `tsup` (see the `build` script in package.json) so tsup's
+ * `clean: true` doesn't wipe the output. At runtime, script-locator.ts
+ * probes for a sibling `extractor-scripts/` directory via __dirname of
+ * the bundled file (which lands at dist/).
+ *
+ * Mirrors copy-schema.ts / copy-agent-templates.ts. Intentionally
+ * dumb — if you find yourself adding filtering or transformation,
+ * push that into the source tree.
+ */
+
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const pkgRoot = join(here, "..");
+const source = join(pkgRoot, "src", "server", "extractors", "python");
+const target = join(pkgRoot, "dist", "extractor-scripts");
+
+if (!existsSync(source)) {
+  console.error(
+    `[copy-extractor-scripts] source not found at ${source}. ` +
+      `Is the build running from inside the arkeon package?`,
+  );
+  process.exit(1);
+}
+
+mkdirSync(dirname(target), { recursive: true });
+if (existsSync(target)) rmSync(target, { recursive: true, force: true });
+mkdirSync(target, { recursive: true });
+
+let copied = 0;
+for (const entry of readdirSync(source)) {
+  if (entry.endsWith(".py") || entry.endsWith(".lock") || entry === "requirements.lock") {
+    cpSync(join(source, entry), join(target, entry));
+    copied += 1;
+  }
+}
+
+console.log(
+  `[copy-extractor-scripts] copied ${copied} Python file(s) from ${source} → ${target}`,
+);

@@ -13,10 +13,15 @@
  * cron-paced — they query entities directly on each tick.
  */
 
-import { watch, type FSWatcher, existsSync, readdirSync, openSync, readSync, closeSync } from "node:fs";
+import { watch, type FSWatcher, existsSync, readdirSync, openSync, readSync, closeSync, statSync } from "node:fs";
 import { join, extname, basename } from "node:path";
 
 import { startScheduler } from "../agents/scheduler.js";
+import {
+  cleanStaleStaging,
+  isIngestable,
+  runExtraction,
+} from "../extractors/runner.js";
 import { syncFile, syncDirectory, removeByPath, type Space } from "./sync.js";
 
 type SchedulerHandle = Awaited<ReturnType<typeof startScheduler>>;
@@ -350,12 +355,32 @@ export async function startWatching(space: Space): Promise<void> {
   }
 
   console.log(`[watcher] Reconciling space "${space.name}" (${space.watch_dir})`);
+  // Sweep any staging dirs left behind by a daemon crash mid-extraction.
+  // Best-effort; only nukes dirs untouched for >5 min so a slow in-flight
+  // extraction from a parallel process (shouldn't exist, but defensive)
+  // is safe.
+  cleanStaleStaging(space.watch_dir);
   const files = walkEligibleFiles(space.watch_dir);
   const summary = await syncDirectory(space, files);
   console.log(
     `[watcher] Reconciled: ${summary.created} created, ${summary.updated} updated, ` +
       `${summary.unchanged} unchanged, ${summary.removed} removed`,
   );
+
+  // After the initial sync, fire the extractor on every asset that has a
+  // registered handler. Re-extraction skip rules inside runExtraction
+  // mean already-processed sidecars short-circuit; this is just the
+  // bootstrap pass to cover assets that landed while the daemon was off.
+  for (const relPath of files) {
+    if (isIngestable(relPath)) {
+      runExtraction({ space, relativePath: relPath }).catch((err) => {
+        console.error(
+          `[ingest] bootstrap extraction failed for ${relPath}:`,
+          (err as Error).message,
+        );
+      });
+    }
+  }
 
   try {
     const scheduler = await startScheduler({ space });
@@ -406,6 +431,18 @@ async function handleFileEvent(space: Space, relativePath: string): Promise<void
   const absPath = join(space.watch_dir, relativePath);
 
   if (existsSync(absPath)) {
+    // Skip events for directories. fs.watch with recursive:true emits
+    // rename events on both files AND the directories they sit in;
+    // syncFile would readFileSync the dir and throw EISDIR. (The
+    // directory's contained files generate their own events that we
+    // do process.)
+    try {
+      if (statSync(absPath).isDirectory()) return;
+    } catch {
+      // race between event + delete — fall through, removeByPath
+      // path below will no-op
+      return;
+    }
     // Full eligibility (may sniff content). A file that passes the
     // path-only pre-filter but turns out to be binary on inspection
     // gets dropped here — not indexed.
@@ -414,6 +451,23 @@ async function handleFileEvent(space: Space, relativePath: string): Promise<void
       const result = await syncFile(space, relativePath);
       if (result.action !== "unchanged") {
         console.log(`[watcher] ${result.action}: ${result.label} (${relativePath})`);
+      }
+      // Asset with a registered extractor handler (PDF, future DOCX, etc.):
+      // fire-and-forget the extraction pipeline. The per-binary path lock
+      // inside runExtraction coalesces rapid edits; the sidecar's atomic
+      // write triggers a subsequent watcher event that syncs it as
+      // kind='text'.
+      if (
+        result.action !== "unchanged" &&
+        result.kind === "asset" &&
+        isIngestable(relativePath)
+      ) {
+        runExtraction({ space, relativePath }).catch((err) => {
+          console.error(
+            `[ingest] extraction failed for ${relativePath}:`,
+            (err as Error).message,
+          );
+        });
       }
     } catch (err) {
       console.error(`[watcher] Error syncing ${relativePath}:`, (err as Error).message);

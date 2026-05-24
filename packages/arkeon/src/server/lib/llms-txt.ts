@@ -57,6 +57,19 @@ Only secrets (\`.env\`, \`.pem\`, …) and OS junk (\`.DS_Store\`, vim swap,
 \`.tmp\`) are refused indexing. Use the \`sources/scan\` endpoint to see
 what was skipped.
 
+**Binary ingestion (PDF in v0).** When a binary lands whose extension
+has a registered extractor (currently \`.pdf\`), the daemon writes a
+sibling HTML **sidecar** \`<binary>.html\` plus an asset directory
+\`<binary>.assets/\` of extracted figures and per-page image renders. The
+binary itself stays \`kind='asset'\` (linkable, not queued); the sidecar
+is \`kind='text'\` and flows into the editor's queue like any HTML
+source. The sidecar references its assets via standard \`<img>\` tags
+that resolve to indexed asset entities — agents fetch them via the
+\`fetch\` tool. Sidecars carry an \`extracted_by\` tag identifying the
+handler; a hand-written or absent tag (\`extracted_by="manual"\` or
+unset) marks the sidecar as user-owned and re-extraction skips it.
+Bootstrap the extractor toolchain with \`arkeon-wiki install-deps\`.
+
 **Relationship**: every internal \`<a href>\` in a wiki becomes an
 edge with \`source_path\` → \`target_path\`. Paths are resolved relative
 to the article's directory. External URLs (\`https://\`, \`mailto:\`,
