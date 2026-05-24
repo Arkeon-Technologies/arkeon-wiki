@@ -5,6 +5,7 @@ import { Command } from "commander";
 
 import { registerDownCommand } from "./down.js";
 import { registerInstallCommand } from "./install.js";
+import { registerInstallDepsCommand } from "./install-deps.js";
 import { registerLogsCommand } from "./logs.js";
 import { registerLsCommand } from "./ls.js";
 import { registerMcpCommand } from "./mcp.js";
@@ -23,6 +24,7 @@ export function registerLocalCommands(program: Command): void {
   registerLsCommand(program);
   registerLogsCommand(program);
   registerInstallCommand(program);
+  registerInstallDepsCommand(program);
   registerUninstallCommand(program);
   registerMcpCommand(program);
 }
