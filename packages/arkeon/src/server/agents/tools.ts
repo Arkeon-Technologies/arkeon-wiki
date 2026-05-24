@@ -28,6 +28,14 @@ import { z } from "zod";
 
 import { safeResolve, validateWikiHtmlDocument } from "../lib/file-edits.js";
 import { rewriteHrefsForWrite } from "../lib/href-rewrite.js";
+import {
+  ADD_SOURCE_EXTENSIONS,
+  buildInboxContent,
+  extractFilenameFromUrl,
+  resolveAddSourcePath,
+  resolveInboxPath,
+  type InboxKind,
+} from "../lib/inbox.js";
 import { MAX_QUERY_PATTERNS, searchKeyword } from "../lib/search.js";
 import {
   deleteEntityTag,
@@ -44,6 +52,15 @@ import {
 import { loadSpacesMap } from "../lib/spaces.js";
 
 import { defineTool, type ToolFactory } from "./define-tool.js";
+import {
+  FETCH_MAX_BYTES,
+  FETCH_TIMEOUT_MS,
+  fetchRemoteToBuffer,
+  networkFetchDisabledByEnv,
+  normalizeMediaType,
+  parseContentLength,
+  readBodyCapped,
+} from "./remote-fetch.js";
 import { describeAllowed, resolveSpaceArg } from "./space-scope.js";
 import { readGateKey, type AgentContext } from "./runtime.js";
 import type { Space } from "../lib/sync.js";
@@ -1205,6 +1222,160 @@ const markProcessedTool = defineTool("mark_processed", {
   }),
 });
 
+// ── inbox ─────────────────────────────────────────────────────────
+
+const inboxTool = defineTool("inbox", {
+  description:
+    "Drop a free-text note into the source corpus so a later editor / " +
+    "proposer tick picks it up. Writes to " +
+    "`sources/inbox/<UTC-date>/<slug>.<md|txt>` (slug derived from " +
+    "`title`, or a ULID prefix if absent; collisions auto-suffix). " +
+    "Useful for capturing working notes the agent wants future ticks to " +
+    "consider — \"this pattern keeps cropping up across sources, worth " +
+    "a synthesis later\". The new file lands without any " +
+    "`*.processed_hash` tag, so it enters the editor queue automatically.",
+  inputSchema: z.object({
+    text: z
+      .string()
+      .min(1)
+      .describe(
+        "The note body. Required, non-empty. UTF-8. Avoid embedding the " +
+          "title in the body — pass `title` separately and we'll prepend " +
+          "an `# <title>` heading when `kind: \"md\"`.",
+      ),
+    title: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        "Short title. Becomes the filename slug and (for md) the first " +
+          "heading. Omit to get a ULID-prefixed filename and a body with " +
+          "no leading heading.",
+      ),
+    kind: z
+      .enum(["md", "txt"])
+      .nullable()
+      .optional()
+      .describe(
+        "File extension to use. `md` (default) adds an `# <title>` " +
+          "heading when a title is given. `txt` writes the body verbatim.",
+      ),
+  }),
+  call: async ({ text, title, kind }, ctx) => {
+    const resolvedKind: InboxKind = kind ?? "md";
+    const resolvedTitle = title ?? undefined;
+    const { relativePath } = resolveInboxPath({
+      watchDir: ctx.space.watch_dir,
+      title: resolvedTitle,
+      kind: resolvedKind,
+    });
+    const content = buildInboxContent({
+      text,
+      title: resolvedTitle,
+      kind: resolvedKind,
+    });
+    const result = await ctx.applyEdit(
+      { kind: "create", path: relativePath, content },
+      { edit_kind: "create" },
+    );
+    const entity = await getEntity(ctx.space.name, result.path);
+    return {
+      path: result.path,
+      space: ctx.space.name,
+      entity,
+    };
+  },
+  summarize: (r) => ({ path: r.path, space: r.space }),
+});
+
+// ── add_source ────────────────────────────────────────────────────
+
+const addSourceTool = defineTool("add_source", {
+  description:
+    "Download a URL's bytes into `sources/inbox/<UTC-date>/<filename>` " +
+    "so a later editor / proposer tick processes it. Use this when a " +
+    "source you're reading links to a substantive PDF, article, or paper " +
+    "that isn't already in the corpus. Skip navigation links, marketing " +
+    "pages, login walls, and anything that doesn't carry primary content " +
+    "— this tool spends network bandwidth and corpus storage every time.\n\n" +
+    "Filename comes from Content-Disposition, then the URL basename, " +
+    "then a ULID fallback. Only files whose extension is one of " +
+    "[.pdf, .html, .htm, .md, .markdown, .txt, .json, .xml, .csv, .png, " +
+    ".jpg, .jpeg, .webp, .gif] are accepted — anything else returns an " +
+    "`unsupported_media_type` error. PDFs and images land as " +
+    "`kind='asset'` (addressable for citations but not yet processed by " +
+    "the editor); HTML / MD / TXT / JSON land as `kind='text'` and enter " +
+    "the editor queue on the next tick.\n\n" +
+    "Returns the synced entity on success. On per-call failures (URL " +
+    "unreachable, body too large, unsupported MIME) returns `{ error: " +
+    "'<message>' }` so the agent can decide whether to retry or move on.",
+  inputSchema: z.object({
+    url: z
+      .string()
+      .describe(
+        "Absolute http:// or https:// URL. The URL is fetched verbatim " +
+          "with a 10s timeout and 25MB body cap (shared with the `fetch` " +
+          "tool's operator levers).",
+      ),
+  }),
+  call: async ({ url }, ctx) => {
+    if (networkFetchDisabledByEnv()) {
+      return {
+        error:
+          "add_source tool disabled by operator " +
+          "(ARKEON_WIKI_FETCH_DISABLED is set)",
+      } as const;
+    }
+    if (!/^https?:\/\//i.test(url)) {
+      return {
+        error: `url must start with http:// or https:// (got '${url}')`,
+      } as const;
+    }
+    const fetched = await fetchRemoteToBuffer(url);
+    if (!fetched.ok) {
+      return { error: fetched.error } as const;
+    }
+    const filename = extractFilenameFromUrl({
+      url,
+      contentType: fetched.mediaType,
+      contentDisposition: fetched.contentDisposition,
+    });
+    if (!filename) {
+      return {
+        error:
+          `unsupported_media_type: '${fetched.mediaType}' — add_source ` +
+          `accepts ${[...ADD_SOURCE_EXTENSIONS].sort().join(", ")}`,
+      } as const;
+    }
+    const { relativePath } = resolveAddSourcePath({
+      watchDir: ctx.space.watch_dir,
+      filename,
+    });
+    const result = await ctx.applyEdit(
+      { kind: "create", path: relativePath, content: fetched.bytes },
+      { edit_kind: "create" },
+    );
+    const entity = await getEntity(ctx.space.name, result.path);
+    return {
+      path: result.path,
+      space: ctx.space.name,
+      url,
+      media_type: fetched.mediaType,
+      size_bytes: fetched.bytes.byteLength,
+      entity,
+    };
+  },
+  summarize: (r) =>
+    "error" in r
+      ? { error: r.error }
+      : {
+          path: r.path,
+          space: r.space,
+          media_type: r.media_type,
+          size_bytes: r.size_bytes,
+        },
+});
+
 // ── fetch ────────────────────────────────────────────────────────
 //
 // Batched URL + local-path fetch tool that surfaces images to the model
@@ -1227,37 +1398,7 @@ const markProcessedTool = defineTool("mark_processed", {
 // this tool just queues. See ../runtime.ts:makeImageInjectionPrepareStep.
 
 const MAX_FETCH_TARGETS = 10;
-const FETCH_TIMEOUT_MS = 10_000;
 const TEXT_BODY_CAP = 32 * 1024; // 32 KB — enough for typical pages
-
-/**
- * RAM-safety cap on body reads (default 25 MB). Distinct from the per-
- * image / per-run budgets we deliberately don't enforce — that decision
- * was about the model's context window, not RAM. A multi-GB image
- * stream (accidental or hostile) would otherwise buffer entirely into
- * memory and OOM the daemon since the rotating-log change only bounds
- * disk usage. Override at deploy time via `ARKEON_WIKI_FETCH_MAX_BYTES`
- * (bytes, integer); set explicitly to a small number for low-RAM hosts,
- * or a larger one for fat-asset workflows.
- */
-const FETCH_MAX_BYTES = (() => {
-  const raw = process.env.ARKEON_WIKI_FETCH_MAX_BYTES;
-  if (!raw) return 25 * 1024 * 1024;
-  const n = parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : 25 * 1024 * 1024;
-})();
-
-/**
- * Operator kill switch — when set to "1", "true", or "yes" (case-
- * insensitive), the fetch tool refuses every target with an error stub.
- * Evaluated on each call (not at module load) so an operator can flip
- * the var on a running daemon and have it take effect next tick
- * without bouncing the process.
- */
-function fetchToolDisabledByEnv(): boolean {
-  const raw = (process.env.ARKEON_WIKI_FETCH_DISABLED ?? "").trim().toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes";
-}
 
 const SUPPORTED_IMAGE_MEDIA_TYPES = new Set([
   "image/png",
@@ -1295,11 +1436,6 @@ function mediaTypeFromExt(path: string): string {
   if (idx < 0) return "application/octet-stream";
   const ext = path.slice(idx).toLowerCase();
   return EXT_TO_MEDIA_TYPE[ext] ?? "application/octet-stream";
-}
-
-function normalizeMediaType(raw: string | null | undefined): string {
-  if (!raw) return "application/octet-stream";
-  return raw.split(";")[0]!.trim().toLowerCase();
 }
 
 function isTextMediaType(mt: string): boolean {
@@ -1386,7 +1522,7 @@ const fetchTool = defineTool("fetch", {
     // network egress needs to be revoked in a hurry. Evaluated each
     // call so the change takes effect immediately on next agent tick;
     // the runtime doesn't need to be bounced.
-    if (fetchToolDisabledByEnv()) {
+    if (networkFetchDisabledByEnv()) {
       return {
         results: targets.map((t) => ({
           target: t,
@@ -1491,114 +1627,39 @@ async function fetchRemote(
   url: string,
   imagesOut: Array<{ source: string; mediaType: string; data: Buffer }>,
 ): Promise<FetchResultItem> {
-  const controller = new AbortController();
-  // One timer covers headers + body: if the whole transfer takes more
-  // than FETCH_TIMEOUT_MS we abort. Don't clear until both reads are
-  // done (or one of them errored) — otherwise a slow body trickle has
-  // no upper bound. The finally below handles every exit path.
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) {
-      return {
-        target: url,
-        kind: "error",
-        error: `HTTP ${res.status} ${res.statusText}`,
-      };
-    }
-    const mediaType = normalizeMediaType(res.headers.get("content-type"));
-
-    // Content-Length lets us reject oversize responses BEFORE reading
-    // any bytes — much cheaper than streaming N MB just to throw it
-    // away. Servers can lie or omit it; the streaming cap below
-    // catches both cases.
-    const declaredLen = parseContentLength(res.headers.get("content-length"));
-    if (declaredLen != null && declaredLen > FETCH_MAX_BYTES) {
-      controller.abort();
-      return {
-        target: url,
-        kind: "error",
-        error:
-          `body declared ${declaredLen} bytes, exceeds cap of ` +
-          `${FETCH_MAX_BYTES} (ARKEON_WIKI_FETCH_MAX_BYTES)`,
-      };
-    }
-
-    if (SUPPORTED_IMAGE_MEDIA_TYPES.has(mediaType)) {
-      const buf = await readBodyCapped(res, controller);
-      imagesOut.push({ source: url, mediaType, data: buf });
-      return {
-        target: url,
-        kind: "image",
-        media_type: mediaType,
-        size_bytes: buf.byteLength,
-        note: "Image attached as a user message after this tool result.",
-      };
-    }
-    if (isTextMediaType(mediaType)) {
-      const buf = await readBodyCapped(res, controller);
-      const full = buf.toString("utf-8");
-      const truncated = full.length > TEXT_BODY_CAP;
-      return {
-        target: url,
-        kind: "text",
-        media_type: mediaType,
-        size_bytes: full.length,
-        truncated,
-        text: truncated ? full.slice(0, TEXT_BODY_CAP) : full,
-      };
-    }
+  const result = await fetchRemoteToBuffer(url);
+  if (!result.ok) {
+    return { target: url, kind: "error", error: result.error };
+  }
+  const { mediaType, bytes } = result;
+  if (SUPPORTED_IMAGE_MEDIA_TYPES.has(mediaType)) {
+    imagesOut.push({ source: url, mediaType, data: bytes });
     return {
       target: url,
-      kind: "error",
-      error:
-        `unsupported media type '${mediaType}' — this tool can view PNG, JPEG, WebP, GIF, or text content`,
+      kind: "image",
+      media_type: mediaType,
+      size_bytes: bytes.byteLength,
+      note: "Image attached as a user message after this tool result.",
     };
-  } finally {
-    clearTimeout(timer);
   }
-}
-
-function parseContentLength(raw: string | null): number | null {
-  if (!raw) return null;
-  const n = parseInt(raw, 10);
-  return Number.isFinite(n) && n >= 0 ? n : null;
-}
-
-/**
- * Stream `res.body` into a single Buffer, aborting the underlying
- * fetch (so the connection drops, not just the JS-side reader) the
- * moment cumulative bytes exceed FETCH_MAX_BYTES. Without this guard
- * a server that streams chunks past a missing/lying Content-Length
- * could buffer arbitrary bytes into memory and OOM the daemon.
- */
-async function readBodyCapped(
-  res: Response,
-  controller: AbortController,
-): Promise<Buffer> {
-  if (!res.body) {
-    // No streaming body (e.g. HEAD response, empty 204). Fall back to
-    // arrayBuffer; it'll just be empty in practice.
-    return Buffer.from(await res.arrayBuffer());
+  if (isTextMediaType(mediaType)) {
+    const full = bytes.toString("utf-8");
+    const truncated = full.length > TEXT_BODY_CAP;
+    return {
+      target: url,
+      kind: "text",
+      media_type: mediaType,
+      size_bytes: full.length,
+      truncated,
+      text: truncated ? full.slice(0, TEXT_BODY_CAP) : full,
+    };
   }
-  const reader = res.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > FETCH_MAX_BYTES) {
-      controller.abort();
-      try { reader.releaseLock(); } catch { /* ignore */ }
-      throw new Error(
-        `body exceeded cap of ${FETCH_MAX_BYTES} bytes ` +
-          `(ARKEON_WIKI_FETCH_MAX_BYTES) during stream`,
-      );
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength)));
+  return {
+    target: url,
+    kind: "error",
+    error:
+      `unsupported media type '${mediaType}' — this tool can view PNG, JPEG, WebP, GIF, or text content`,
+  };
 }
 
 async function fetchLocal(
@@ -1746,4 +1807,6 @@ export const ALL_TOOLS: Record<string, ToolFactory> = {
   tag_entity: tagEntityTool,
   mark_processed: markProcessedTool,
   fetch: fetchTool,
+  inbox: inboxTool,
+  add_source: addSourceTool,
 };

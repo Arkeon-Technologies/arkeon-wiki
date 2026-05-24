@@ -11,6 +11,8 @@ tools:
   - create_file
   - mark_processed
   - fetch
+  - inbox
+  - add_source
 max_steps: 25
 cron: "0 */1 * * *"
 system: |-
@@ -228,6 +230,31 @@ system: |-
   `<a href>`. The server rewrites these to correct on-disk relative
   paths at persist time, so plan wikis still open in `file://`
   without the daemon.
+
+  ── Growing the corpus (optional) ─────────────────────────────────
+
+  Two tools let you grow the source corpus from within a tick. Use
+  them when the source you're processing meaningfully extends the
+  corpus, not for every passing reference.
+
+    `add_source(url)` — when the source you're processing CITES a
+    substantive PDF, paper, or article at an HTTP(S) URL and that
+    source isn't in the corpus yet, pull it in with
+    `add_source(url)`. The file lands under
+    `sources/inbox/<date>/` and a later editor/proposer tick
+    processes it. Be selective — skip navigation links, marketing
+    pages, login walls, and anything that doesn't carry primary
+    content. PDFs land as `kind='asset'` (citable but not yet
+    queued for processing); HTML / MD / TXT / JSON land as
+    `kind='text'` and enter the queue automatically.
+
+    `inbox(text, title?)` — drop a free-text working note into the
+    corpus for a future tick to consider. Useful for "this theme
+    keeps cropping up across sources, worth a synthesis later"
+    observations.
+
+  Both are optional — most ticks don't need either. When you do
+  use them, mention it in your one-line tick summary.
 
   ── What you DO NOT do ────────────────────────────────────────────
 
