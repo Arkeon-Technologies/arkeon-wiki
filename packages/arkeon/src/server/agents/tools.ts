@@ -1230,6 +1230,35 @@ const MAX_FETCH_TARGETS = 10;
 const FETCH_TIMEOUT_MS = 10_000;
 const TEXT_BODY_CAP = 32 * 1024; // 32 KB — enough for typical pages
 
+/**
+ * RAM-safety cap on body reads (default 25 MB). Distinct from the per-
+ * image / per-run budgets we deliberately don't enforce — that decision
+ * was about the model's context window, not RAM. A multi-GB image
+ * stream (accidental or hostile) would otherwise buffer entirely into
+ * memory and OOM the daemon since the rotating-log change only bounds
+ * disk usage. Override at deploy time via `ARKEON_WIKI_FETCH_MAX_BYTES`
+ * (bytes, integer); set explicitly to a small number for low-RAM hosts,
+ * or a larger one for fat-asset workflows.
+ */
+const FETCH_MAX_BYTES = (() => {
+  const raw = process.env.ARKEON_WIKI_FETCH_MAX_BYTES;
+  if (!raw) return 25 * 1024 * 1024;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 25 * 1024 * 1024;
+})();
+
+/**
+ * Operator kill switch — when set to "1", "true", or "yes" (case-
+ * insensitive), the fetch tool refuses every target with an error stub.
+ * Evaluated on each call (not at module load) so an operator can flip
+ * the var on a running daemon and have it take effect next tick
+ * without bouncing the process.
+ */
+function fetchToolDisabledByEnv(): boolean {
+  const raw = (process.env.ARKEON_WIKI_FETCH_DISABLED ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
+}
+
 const SUPPORTED_IMAGE_MEDIA_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -1351,6 +1380,25 @@ const fetchTool = defineTool("fetch", {
     space: z.string().nullable().optional().describe(SPACE_PARAM_DESC),
   }),
   call: async ({ targets, from, space }, ctx, { toolCallId }) => {
+    // Operator kill switch — flip the env var on a running daemon to
+    // disable fetch without redeploying. Useful when a tenant abuses
+    // it, when a CVE drops in the underlying fetch stack, or when
+    // network egress needs to be revoked in a hurry. Evaluated each
+    // call so the change takes effect immediately on next agent tick;
+    // the runtime doesn't need to be bounced.
+    if (fetchToolDisabledByEnv()) {
+      return {
+        results: targets.map((t) => ({
+          target: t,
+          kind: "error" as const,
+          error:
+            "fetch tool disabled by operator " +
+            "(ARKEON_WIKI_FETCH_DISABLED is set)",
+        })),
+        space: ctx.space.name,
+      };
+    }
+
     // `defaultSpace` is the fallback for bare (non-space-rooted, non-URL)
     // targets. Single-space role → always the triggering space. Multi-
     // space role → must be explicit (the call's `space` arg) OR every
@@ -1444,51 +1492,113 @@ async function fetchRemote(
   imagesOut: Array<{ source: string; mediaType: string; data: Buffer }>,
 ): Promise<FetchResultItem> {
   const controller = new AbortController();
+  // One timer covers headers + body: if the whole transfer takes more
+  // than FETCH_TIMEOUT_MS we abort. Don't clear until both reads are
+  // done (or one of them errored) — otherwise a slow body trickle has
+  // no upper bound. The finally below handles every exit path.
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  let res: Response;
   try {
-    res = await fetch(url, { signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-  if (!res.ok) {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) {
+      return {
+        target: url,
+        kind: "error",
+        error: `HTTP ${res.status} ${res.statusText}`,
+      };
+    }
+    const mediaType = normalizeMediaType(res.headers.get("content-type"));
+
+    // Content-Length lets us reject oversize responses BEFORE reading
+    // any bytes — much cheaper than streaming N MB just to throw it
+    // away. Servers can lie or omit it; the streaming cap below
+    // catches both cases.
+    const declaredLen = parseContentLength(res.headers.get("content-length"));
+    if (declaredLen != null && declaredLen > FETCH_MAX_BYTES) {
+      controller.abort();
+      return {
+        target: url,
+        kind: "error",
+        error:
+          `body declared ${declaredLen} bytes, exceeds cap of ` +
+          `${FETCH_MAX_BYTES} (ARKEON_WIKI_FETCH_MAX_BYTES)`,
+      };
+    }
+
+    if (SUPPORTED_IMAGE_MEDIA_TYPES.has(mediaType)) {
+      const buf = await readBodyCapped(res, controller);
+      imagesOut.push({ source: url, mediaType, data: buf });
+      return {
+        target: url,
+        kind: "image",
+        media_type: mediaType,
+        size_bytes: buf.byteLength,
+        note: "Image attached as a user message after this tool result.",
+      };
+    }
+    if (isTextMediaType(mediaType)) {
+      const buf = await readBodyCapped(res, controller);
+      const full = buf.toString("utf-8");
+      const truncated = full.length > TEXT_BODY_CAP;
+      return {
+        target: url,
+        kind: "text",
+        media_type: mediaType,
+        size_bytes: full.length,
+        truncated,
+        text: truncated ? full.slice(0, TEXT_BODY_CAP) : full,
+      };
+    }
     return {
       target: url,
       kind: "error",
-      error: `HTTP ${res.status} ${res.statusText}`,
+      error:
+        `unsupported media type '${mediaType}' — this tool can view PNG, JPEG, WebP, GIF, or text content`,
     };
+  } finally {
+    clearTimeout(timer);
   }
-  const mediaType = normalizeMediaType(res.headers.get("content-type"));
+}
 
-  if (SUPPORTED_IMAGE_MEDIA_TYPES.has(mediaType)) {
-    const buf = Buffer.from(await res.arrayBuffer());
-    imagesOut.push({ source: url, mediaType, data: buf });
-    return {
-      target: url,
-      kind: "image",
-      media_type: mediaType,
-      size_bytes: buf.byteLength,
-      note: "Image attached as a user message after this tool result.",
-    };
+function parseContentLength(raw: string | null): number | null {
+  if (!raw) return null;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+/**
+ * Stream `res.body` into a single Buffer, aborting the underlying
+ * fetch (so the connection drops, not just the JS-side reader) the
+ * moment cumulative bytes exceed FETCH_MAX_BYTES. Without this guard
+ * a server that streams chunks past a missing/lying Content-Length
+ * could buffer arbitrary bytes into memory and OOM the daemon.
+ */
+async function readBodyCapped(
+  res: Response,
+  controller: AbortController,
+): Promise<Buffer> {
+  if (!res.body) {
+    // No streaming body (e.g. HEAD response, empty 204). Fall back to
+    // arrayBuffer; it'll just be empty in practice.
+    return Buffer.from(await res.arrayBuffer());
   }
-  if (isTextMediaType(mediaType)) {
-    const full = await res.text();
-    const truncated = full.length > TEXT_BODY_CAP;
-    return {
-      target: url,
-      kind: "text",
-      media_type: mediaType,
-      size_bytes: full.length,
-      truncated,
-      text: truncated ? full.slice(0, TEXT_BODY_CAP) : full,
-    };
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > FETCH_MAX_BYTES) {
+      controller.abort();
+      try { reader.releaseLock(); } catch { /* ignore */ }
+      throw new Error(
+        `body exceeded cap of ${FETCH_MAX_BYTES} bytes ` +
+          `(ARKEON_WIKI_FETCH_MAX_BYTES) during stream`,
+      );
+    }
+    chunks.push(value);
   }
-  return {
-    target: url,
-    kind: "error",
-    error:
-      `unsupported media type '${mediaType}' — this tool can view PNG, JPEG, WebP, GIF, or text content`,
-  };
+  return Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength)));
 }
 
 async function fetchLocal(

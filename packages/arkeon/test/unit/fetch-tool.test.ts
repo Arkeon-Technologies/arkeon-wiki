@@ -383,3 +383,102 @@ describe("fetch — batched mixed", () => {
     expect(ctx.imageQueue.has("text-only")).toBe(false);
   });
 });
+
+describe("fetch — failure modes", () => {
+  it("rejects bodies declared larger than the cap (Content-Length pre-check)", async () => {
+    // 50 MB declared, default cap is 25 MB → reject before reading.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(Buffer.alloc(0), {
+            status: 200,
+            headers: {
+              "content-type": "image/png",
+              "content-length": String(50 * 1024 * 1024),
+            },
+          }),
+      ),
+    );
+    const result = (await exec(getFetchTool(ctx), {
+      targets: ["https://example.com/huge.png"],
+    })) as { results: ResultItem[] };
+    expect(result.results[0].kind).toBe("error");
+    expect(result.results[0].error).toMatch(/exceeds cap/);
+    expect(result.results[0].error).toMatch(/ARKEON_WIKI_FETCH_MAX_BYTES/);
+  });
+
+  it("rejects oversize streamed bodies (no/lying Content-Length)", async () => {
+    // 30 MB streamed in 1 MB chunks, no Content-Length advertised. The
+    // stream cap must catch it once cumulative bytes pass 25 MB.
+    const chunk = new Uint8Array(1024 * 1024);
+    const stream = new ReadableStream({
+      start(controller) {
+        for (let i = 0; i < 30; i++) controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(stream, {
+            status: 200,
+            headers: { "content-type": "image/png" },
+          }),
+      ),
+    );
+    const result = (await exec(getFetchTool(ctx), {
+      targets: ["https://example.com/streamy.png"],
+    })) as { results: ResultItem[] };
+    expect(result.results[0].kind).toBe("error");
+    expect(result.results[0].error).toMatch(/exceeded cap/);
+  });
+
+  it("returns an error stub when fetch throws (network error)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    );
+    const result = (await exec(getFetchTool(ctx), {
+      targets: ["https://example.com/down"],
+    })) as { results: ResultItem[] };
+    expect(result.results[0].kind).toBe("error");
+    expect(result.results[0].error).toMatch(/fetch failed/);
+  });
+
+  it("ARKEON_WIKI_FETCH_DISABLED short-circuits every target", async () => {
+    vi.stubEnv("ARKEON_WIKI_FETCH_DISABLED", "1");
+    writeFileSync(join(workdir, "sources/notes.md"), "would have read this");
+
+    const result = (await exec(getFetchTool(ctx), {
+      targets: [
+        "https://example.com/x.png",
+        "sources/notes.md",
+        "images/local.png",
+      ],
+    })) as { results: ResultItem[] };
+
+    expect(result.results).toHaveLength(3);
+    for (const r of result.results) {
+      expect(r.kind).toBe("error");
+      expect(r.error).toMatch(/disabled by operator/);
+      expect(r.error).toMatch(/ARKEON_WIKI_FETCH_DISABLED/);
+    }
+    // No real fetch should have been issued.
+    expect(ctx.imageQueue.size).toBe(0);
+  });
+
+  it("ARKEON_WIKI_FETCH_DISABLED treats 'true' / 'yes' / case as truthy", async () => {
+    for (const val of ["true", "TRUE", "yes", "Yes"]) {
+      vi.stubEnv("ARKEON_WIKI_FETCH_DISABLED", val);
+      const result = (await exec(getFetchTool(ctx), {
+        targets: ["sources/whatever.md"],
+      })) as { results: ResultItem[] };
+      expect(result.results[0].kind).toBe("error");
+      expect(result.results[0].error).toMatch(/disabled/);
+    }
+  });
+});
