@@ -25,7 +25,10 @@ import { createSql } from "../lib/sql.js";
 import { applyEdit, safeResolve } from "../lib/file-edits.js";
 import { getEntity, setEntityTag } from "../lib/entities.js";
 import {
+  ADD_SOURCE_EXTENSIONS,
   buildInboxContent,
+  extractFilenameFromUrl,
+  resolveAddSourcePath,
   resolveInboxPath,
   type InboxKind,
 } from "../lib/inbox.js";
@@ -34,6 +37,10 @@ import {
   assertTextContent,
   sanitizeCaller,
 } from "../lib/source-write-guards.js";
+import {
+  fetchRemoteToBuffer,
+  networkFetchDisabledByEnv,
+} from "../agents/remote-fetch.js";
 
 export const inboxRouter = new Hono<AppBindings>();
 
@@ -126,6 +133,88 @@ inboxRouter.post("/:space/inbox", async (c) => {
   return c.json({ space: spaceName, path: relativePath, entity }, 201);
 });
 
+// ── POST /:space/sources/from-url ───────────────────────────────────
+//
+// HTTP analogue of the `add_source` agent tool. Lets external callers
+// (the MCP server, scripts, dashboards) push a URL into the corpus
+// without doing the fetch themselves — the daemon enforces the
+// allowlist, byte cap, and kill switch in one place. Reuses the same
+// `fetchRemoteToBuffer` + `extractFilenameFromUrl` + `resolveAddSourcePath`
+// helpers that the agent tool composes, so the on-disk shape is
+// identical: `sources/inbox/<UTC-date>/<filename>` via `applyEdit`,
+// audit row stamped with `X-Caller`.
+
+interface FromUrlBody {
+  url?: unknown;
+}
+
+inboxRouter.post("/:space/sources/from-url", async (c) => {
+  const spaceName = c.req.param("space");
+  const space = await loadSpace(spaceName);
+
+  let body: FromUrlBody;
+  try {
+    body = await c.req.json<FromUrlBody>();
+  } catch {
+    throw new ApiError(400, "validation_error", "request body must be JSON");
+  }
+  const url = parseUrl(body.url);
+  const caller = sanitizeCaller(c.req.header("x-caller"));
+
+  if (networkFetchDisabledByEnv()) {
+    throw new ApiError(
+      503,
+      "service_unavailable",
+      "URL fetch disabled by operator (ARKEON_WIKI_FETCH_DISABLED is set)",
+    );
+  }
+
+  const fetched = await fetchRemoteToBuffer(url);
+  if (!fetched.ok) {
+    // 502 for upstream errors (HTTP 4xx/5xx, network failure, oversize).
+    // The caller didn't do anything wrong — the remote did.
+    throw new ApiError(502, "bad_gateway", fetched.error);
+  }
+
+  const filename = extractFilenameFromUrl({
+    url,
+    contentType: fetched.mediaType,
+    contentDisposition: fetched.contentDisposition,
+  });
+  if (!filename) {
+    throw new ApiError(
+      415,
+      "unsupported_media_type",
+      `media type '${fetched.mediaType}' is not accepted — ` +
+        `from-url accepts ${[...ADD_SOURCE_EXTENSIONS].sort().join(", ")}`,
+    );
+  }
+
+  const { relativePath } = resolveAddSourcePath({
+    watchDir: space.watch_dir,
+    filename,
+  });
+
+  await applyEdit(
+    space,
+    { kind: "create", path: relativePath, content: fetched.bytes },
+    { role: caller, edit_kind: "create" },
+  );
+
+  const entity = await getEntity(spaceName, relativePath);
+  return c.json(
+    {
+      space: spaceName,
+      path: relativePath,
+      url,
+      media_type: fetched.mediaType,
+      size_bytes: fetched.bytes.byteLength,
+      entity,
+    },
+    201,
+  );
+});
+
 // ── PUT /:space/sources/* ───────────────────────────────────────────
 
 inboxRouter.put("/:space/sources/*", async (c) => {
@@ -212,6 +301,20 @@ inboxRouter.put("/:space/sources/*", async (c) => {
 });
 
 // ── body parsers ────────────────────────────────────────────────────
+
+function parseUrl(raw: unknown): string {
+  if (typeof raw !== "string" || raw.length === 0) {
+    throw new ApiError(400, "validation_error", "url is required and must be a non-empty string");
+  }
+  if (!/^https?:\/\//i.test(raw)) {
+    throw new ApiError(
+      400,
+      "validation_error",
+      `url must start with http:// or https:// (got '${raw}')`,
+    );
+  }
+  return raw;
+}
 
 function parseText(raw: unknown): string {
   if (typeof raw !== "string") {

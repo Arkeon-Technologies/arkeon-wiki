@@ -69,7 +69,7 @@ describe("MCP server", () => {
     }
   });
 
-  it("registers 9 tools and 6 prompts", async () => {
+  it("registers 10 tools and 6 prompts", async () => {
     const server = buildServer(new ArkeonWikiClient({ apiUrl: "http://localhost:1", caller: "test" }));
     // Access the internal registries — McpServer exposes them as public
     // properties for introspection.
@@ -79,6 +79,7 @@ describe("MCP server", () => {
     );
     expect(tools.sort()).toEqual(
       [
+        "add_source",
         "capture_thought",
         "create_space",
         "daemon_status",

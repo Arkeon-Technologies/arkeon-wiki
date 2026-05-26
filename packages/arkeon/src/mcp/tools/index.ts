@@ -4,6 +4,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { ArkeonWikiClient } from "../client.js";
+import { registerAddSource } from "./add-source.js";
 import { registerCaptureThought } from "./capture-thought.js";
 import { registerCreateSpace } from "./create-space.js";
 import { registerDaemonStatus } from "./daemon-status.js";
@@ -23,5 +24,6 @@ export function registerAllTools(server: McpServer, client: ArkeonWikiClient): v
   registerReadArticle(server, client);
   registerListRedlinks(server, client);
   registerCaptureThought(server, client);
+  registerAddSource(server, client);
   registerSaveConversation(server, client);
 }
