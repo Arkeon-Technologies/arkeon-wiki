@@ -69,7 +69,7 @@ describe("MCP server", () => {
     }
   });
 
-  it("registers 9 tools and 6 prompts", async () => {
+  it("registers 10 tools and 6 prompts", async () => {
     const server = buildServer(new ArkeonWikiClient({ apiUrl: "http://localhost:1", caller: "test" }));
     // Access the internal registries — McpServer exposes them as public
     // properties for introspection.
@@ -79,6 +79,7 @@ describe("MCP server", () => {
     );
     expect(tools.sort()).toEqual(
       [
+        "add_source",
         "capture_thought",
         "create_space",
         "daemon_status",
@@ -123,6 +124,81 @@ describe("MCP server", () => {
     // tool received. Any transformation (trim, escape, summarize) would
     // break this.
     expect(parsed.text).toBe(verbatim);
+  });
+
+  it("add_source POSTs the URL to /:space/sources/from-url with the caller header", async () => {
+    stub = await startStub({
+      "POST /test-space/sources/from-url": {
+        status: 201,
+        body: {
+          space: "test-space",
+          path: "sources/inbox/2026-05-26/paper.pdf",
+          url: "https://example.com/paper.pdf",
+          media_type: "application/pdf",
+          size_bytes: 12345,
+          entity: { kind: "asset", source_hash: "abc", created_at: "now" },
+        },
+      },
+    });
+    const client = new ArkeonWikiClient({
+      apiUrl: `http://127.0.0.1:${stub.port}`,
+      space: "test-space",
+      caller: "test",
+    });
+    const server = buildServer(client);
+    const handler = (server as unknown as {
+      _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<unknown> }>;
+    })._registeredTools.add_source;
+    const result = (await handler.handler(
+      { url: "https://example.com/paper.pdf", space: null },
+      {},
+    )) as { content: Array<{ text: string }>; isError?: boolean };
+
+    expect(stub.recorded).toHaveLength(1);
+    const req = stub.recorded[0];
+    expect(req.method).toBe("POST");
+    expect(req.url).toBe("/test-space/sources/from-url");
+    expect(req.headers["x-caller"]).toBe("test");
+    expect(JSON.parse(req.body)).toEqual({ url: "https://example.com/paper.pdf" });
+
+    // Text output ships a ready-made markdown link the model can paste
+    // verbatim — same contract as the other tools.
+    expect(result.isError).toBeFalsy();
+    expect(result.content[0].text).toContain(
+      `[sources/inbox/2026-05-26/paper.pdf](http://127.0.0.1:${stub.port}/test-space/sources/inbox/2026-05-26/paper.pdf)`,
+    );
+    // Asset kind gets the "binary asset" annotation so the model knows
+    // it's not in the editor queue yet.
+    expect(result.content[0].text).toMatch(/binary asset/);
+  });
+
+  it("add_source surfaces a 415 unsupported_media_type as a structured tool error (not a throw)", async () => {
+    stub = await startStub({
+      "POST /test-space/sources/from-url": {
+        status: 415,
+        body: { error: { code: "unsupported_media_type", message: "media type 'application/x-msdownload' not accepted" } },
+      },
+    });
+    const client = new ArkeonWikiClient({
+      apiUrl: `http://127.0.0.1:${stub.port}`,
+      space: "test-space",
+      caller: "test",
+    });
+    const server = buildServer(client);
+    const handler = (server as unknown as {
+      _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<unknown> }>;
+    })._registeredTools.add_source;
+    const result = (await handler.handler(
+      { url: "https://example.com/installer.exe", space: null },
+      {},
+    )) as { content: Array<{ text: string }>; isError?: boolean };
+
+    // The model needs the daemon's structured failure surfaced as a
+    // tool-text + isError, not a thrown exception — otherwise the
+    // FETCH_FLOW's paywall/unsupported-media fallback can't fire.
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/415/);
+    expect(result.content[0].text).toMatch(/unsupported_media_type/);
   });
 
   it("search_wiki emits ready-made [Label](url) markdown links in text output", async () => {

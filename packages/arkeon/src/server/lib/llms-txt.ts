@@ -199,6 +199,21 @@ to the watched directory directly. The standard convention is the
                                                 way to "drop a note,
                                                 let the agents pick it
                                                 up."
+  - \`POST /{space}/sources/from-url\`         — JSON \`{url}\`. Server
+                                                fetches the URL itself
+                                                (allowlist, byte cap,
+                                                and operator kill
+                                                switch enforced
+                                                centrally) and lands the
+                                                bytes under
+                                                \`sources/inbox/<UTC-
+                                                date>/<filename>\`. PDFs
+                                                and images come in as
+                                                \`kind='asset'\`; HTML /
+                                                MD / TXT / JSON as
+                                                \`kind='text'\` (queued).
+                                                Replaces the WebFetch-
+                                                then-POST-/inbox pattern.
   - \`PUT /{space}/sources/{path}\`            — raw body, caller-chosen
                                                 path under \`sources/\`.
                                                 409 on existing path
@@ -315,6 +330,24 @@ them up on its next cron tick.
   \`entity_edits.by_role\`. 10 MB body cap. 413 on oversized body, 400
   on validation, 404 on missing space.
   Response (201): \`{space, path, entity}\` with the synced entity inline.
+
+\`POST /{space}/sources/from-url\`
+  Pull a URL into the corpus. Body: \`{ "url": "https://..." }\`. The
+  daemon fetches the bytes itself (so the allowlist, byte cap, and
+  kill switch are enforced server-side, not at the caller) and lands
+  the file at \`sources/inbox/<YYYY-MM-DD>/<filename>\`. Filename comes
+  from \`Content-Disposition\` → URL basename → ULID fallback. Extension
+  must be on the allowlist (\`.pdf .html .htm .md .markdown .txt .json
+  .xml .csv .png .jpg .jpeg .webp .gif\`) — otherwise 415
+  \`unsupported_media_type\`. Same \`X-Caller\` contract as \`/inbox\`.
+  Operator levers: \`ARKEON_WIKI_FETCH_DISABLED\` returns 503;
+  \`ARKEON_WIKI_FETCH_MAX_BYTES\` (default 25 MB) caps body size.
+  Errors: 400 (missing / non-http url), 415 (unsupported media type),
+  502 (upstream HTTP error or oversize body), 503 (kill switch on).
+  Response (201): \`{space, path, url, media_type, size_bytes, entity}\`.
+  This is the recommended path for any caller that wants a URL in the
+  corpus — replaces "WebFetch then POST /inbox" patterns by moving the
+  fetch into the daemon where the operator levers live.
 
 \`PUT /{space}/sources/{path}\`
   Path-explicit source write. URL tail is the disk path (always rooted

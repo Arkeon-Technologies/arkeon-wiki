@@ -265,13 +265,26 @@ describe("extractFilenameFromUrl", () => {
     expect(filename).toBe("2026-augustine-grief.pdf");
   });
 
-  it("ignores URL basename without an allowed extension", () => {
+  it("uses extensionless URL basename + media-type extension", () => {
+    // The URL has no `.ext` but the media type says `text/html`, so we
+    // get a human-readable `<basename>.html` rather than a ULID slug.
     const filename = extractFilenameFromUrl({
-      url: "https://example.com/article",
+      url: "https://en.wikipedia.org/wiki/Photosynthesis",
       contentType: "text/html",
       contentDisposition: null,
     });
-    // No allowed ext on the URL basename, so fall through to ULID + .html
+    expect(filename).toBe("photosynthesis.html");
+  });
+
+  it("does NOT replace a non-allowlisted extension with the media-type one", () => {
+    // The basename has `.exe` (an extension, just not on the allowlist).
+    // Replacing it with `.html` because the server happens to serve
+    // HTML would be too aggressive — fall through to ULID instead.
+    const filename = extractFilenameFromUrl({
+      url: "https://example.com/installer.exe",
+      contentType: "text/html",
+      contentDisposition: null,
+    });
     expect(filename).toMatch(/^[0-9a-z]{10}\.html$/);
   });
 

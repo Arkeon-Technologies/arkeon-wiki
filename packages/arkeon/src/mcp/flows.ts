@@ -171,33 +171,36 @@ For multi-round exchanges: \`## Round 1 — Question\` / \`## Round 1 — Answer
 
 export const FETCH_FLOW = `# Fetch an external source into the wiki
 
-The user wants something from the web pulled into the corpus. Two sub-flows.
+The user wants something from the web pulled into the corpus. The daemon does the fetching via \`add_source\` — **you do not pre-fetch URLs with WebFetch and pass text through \`capture_thought\`**. \`add_source\` enforces the extension allowlist, byte cap, and operator kill switch in one place, and lands PDFs / images as proper \`kind='asset'\` rows that articles can later cite.
 
 ## A. Direct URL
 
 The user pasted an \`http(s)://\` URL.
 
-1. Use the **WebFetch** tool (provided by Claude itself, not this MCP) to extract clean article text. Prompt WebFetch with: "Extract the article's full body text without navigation, ads, or footer. Preserve paragraphs. Return as plain text including the title/byline."
-2. Pass the cleaned text through to \`capture_thought({ title: <article title>, text: <full extracted text> + "\\n\\n---\\nSource: <URL>\\nFetched: <UTC date>" })\`. The footer lets the editor trace provenance later.
-3. **Pass all of the extracted text, not a summary.** The wiki agents need the source material whole.
+1. Call \`add_source({ url })\`. The daemon downloads the bytes, picks a filename, and lands the file under \`sources/inbox/<UTC-date>/\`. HTML / Markdown / text / JSON → \`kind='text'\` (queued for the editor). PDFs / images → \`kind='asset'\` (addressable for citations, not in the editor queue yet).
+2. Confirm tersely — the tool ships back a clickable \`[path](url)\` link, copy it verbatim.
+3. If \`add_source\` returns an error, see the fallback section below. Do not silently fall back to WebFetch — tell the user which case you hit and ask before pasting.
 
 ## B. Search-then-fetch
 
 The user asked for content on a topic without a URL ("find me something on AI companionship"):
 
-1. Use **WebSearch** for 3-5 candidates.
+1. Use **WebSearch** (Claude's built-in, not this MCP) for 3-5 candidates.
 2. Show the candidates as a numbered list: title + source + one-line description.
 3. Wait for the user to pick one (or "all" / "skip" / refine).
-4. WebFetch the chosen URL(s).
-5. \`capture_thought\` each (same shape as direct URL).
+4. \`add_source\` each chosen URL.
 
 Don't auto-fetch without confirmation — the wiki's editorial direction is shaped by which sources land in it. That's the user's call.
 
-## What NOT to fetch
+## When \`add_source\` fails — the fallback
 
-- Paywalled / login-required content — WebFetch returns a login wall. Tell the user, offer to paste the full text via \`capture_thought\` instead.
-- SPA shells with no real content.
-- Anything that isn't text (the inbox rejects content with NUL bytes).
+\`add_source\` returns a structured error in three cases. None of them are silently recoverable; surface the situation to the user and let them decide.
+
+- **HTTP 401 / 403 / 404 / 5xx (paywall, login wall, dead link, SPA shell that returns nothing useful)** — the daemon got bytes but they aren't the article. Offer: *"I can't pull this directly. Paste the article text here and I'll capture it."* If the user pastes, use \`capture_thought({ title, text })\` with a \`Source: <URL>\\nFetched: <UTC date>\` footer.
+- **\`unsupported_media_type\`** — the URL points at something we don't accept (executable, archive, video, audio, etc.). Tell the user what we saw and ask whether to skip or capture a text description.
+- **\`disabled by operator\`** — \`ARKEON_WIKI_FETCH_DISABLED\` is set on the daemon. Tell the user; this is a deliberate environment lock and there is no workaround from inside the MCP.
+
+WebFetch (Claude's built-in) is **only** for the paste-helper case above — helping a user see cleaned text they're about to paste. It is never a path into the corpus on its own.
 `;
 
 export const MODE_ROUTER = `# Use the arkeon-wiki MCP
@@ -209,6 +212,7 @@ You have tools for reading and writing to a local arkeon-wiki space:
 - \`search_wiki\` / \`list_articles\` / \`read_article\` — read the corpus
 - \`list_redlinks\` — see what articles the wiki "wants next"
 - \`capture_thought\` — dump a thought / pasted content / extracted attachment text into the inbox
+- \`add_source\` — pull an http(s) URL straight into the corpus (the daemon does the fetch — don't use WebFetch + capture_thought)
 - \`save_conversation\` — bundle this exchange as a source the agents will weave into articles
 
 ## Detect mode from the user's input
@@ -218,7 +222,7 @@ You have tools for reading and writing to a local arkeon-wiki space:
 | Empty / "what can you do" | Ask the user what they want |
 | Question (\`?\`, or starts with who/what/how/why/when/where/which/can/does/should/is/are) | **ASK** — search + read + cite |
 | Starts with \`note:\` / \`thought:\` / \`capture:\` / \`dump:\` / \`idea:\` OR is a multi-sentence first-person assertion | **CAPTURE** — preserve verbatim, capture_thought |
-| Contains a URL OR starts with \`find\` / \`fetch\` / \`pull\` | **FETCH** — WebFetch then capture_thought |
+| Contains a URL OR starts with \`find\` / \`fetch\` / \`pull\` | **FETCH** — call \`add_source\` (the daemon fetches; do not WebFetch yourself) |
 | Literal \`save\` / \`save this\` / "add to corpus" | **SAVE** — save_conversation |
 | User wants to set up a new wiki | Call the \`new-space\` prompt |
 | Ambiguous | Ask which mode they want |
@@ -236,6 +240,8 @@ For full per-mode instructions, invoke the \`ask\`, \`capture\`, \`save\`, or \`
 export const TOOL_DESCRIPTIONS = {
   capture_thought:
     "POST a thought, pasted excerpt, or extracted attachment text into the wiki's inbox so the editor agent picks it up. Preserve content verbatim — do not summarize, paraphrase, or tighten the user's words or any quoted source material. The editor wants raw input, not a digest.",
+  add_source:
+    "Download an http(s) URL straight into the wiki's source corpus. The daemon does the fetch — do NOT pre-fetch with WebFetch and pipe the text through capture_thought. The file lands under sources/inbox/<UTC-date>/<filename> via the same allowlist (.pdf .html .htm .md .markdown .txt .json .xml .csv .png .jpg .jpeg .webp .gif), byte cap, and operator kill switch as the agent's add_source tool. Use for direct URLs the user wants pulled. Returns the synced entity. On failure (paywall / unsupported media type / disabled by operator), the tool returns an error message — surface it to the user and offer the capture_thought paste fallback for paywalled or unsupported content.",
   save_conversation:
     "PUT the current conversation (verbatim — questions, answers, captures) as a markdown source under sources/conversations/. The editor agent weaves it into articles on subsequent ticks. Preserve exact wording; do not summarize the exchange.",
 } as const;
