@@ -17,9 +17,9 @@ interface SearchResponse {
   };
 }
 
-export function registerSearchWiki(server: McpServer, client: ArkeonWikiClient): void {
+export function registerSearchWiki(server: McpServer, client: ArkeonWikiClient, namePrefix = ""): void {
   server.registerTool(
-    "search_wiki",
+    `${namePrefix}search_wiki`,
     {
       title: "Search wiki",
       description:

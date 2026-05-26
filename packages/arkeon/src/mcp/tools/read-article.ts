@@ -22,9 +22,9 @@ interface ReadResult {
   error?: string;
 }
 
-export function registerReadArticle(server: McpServer, client: ArkeonWikiClient): void {
+export function registerReadArticle(server: McpServer, client: ArkeonWikiClient, namePrefix = ""): void {
   server.registerTool(
-    "read_article",
+    `${namePrefix}read_article`,
     {
       title: "Read article(s)",
       description:

@@ -34,9 +34,9 @@ function slugify(input: string): string {
   );
 }
 
-export function registerSaveConversation(server: McpServer, client: ArkeonWikiClient): void {
+export function registerSaveConversation(server: McpServer, client: ArkeonWikiClient, namePrefix = ""): void {
   server.registerTool(
-    "save_conversation",
+    `${namePrefix}save_conversation`,
     {
       title: "Save conversation",
       description: TOOL_DESCRIPTIONS.save_conversation,

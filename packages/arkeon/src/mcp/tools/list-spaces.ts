@@ -14,9 +14,9 @@ interface SpacesResponse {
   }>;
 }
 
-export function registerListSpaces(server: McpServer, client: ArkeonWikiClient): void {
+export function registerListSpaces(server: McpServer, client: ArkeonWikiClient, namePrefix = ""): void {
   server.registerTool(
-    "list_spaces",
+    `${namePrefix}list_spaces`,
     {
       title: "List spaces",
       description:

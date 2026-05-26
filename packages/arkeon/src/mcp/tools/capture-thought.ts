@@ -13,9 +13,9 @@ interface InboxResponse {
   entity: { source_hash: string; created_at: string };
 }
 
-export function registerCaptureThought(server: McpServer, client: ArkeonWikiClient): void {
+export function registerCaptureThought(server: McpServer, client: ArkeonWikiClient, namePrefix = ""): void {
   server.registerTool(
-    "capture_thought",
+    `${namePrefix}capture_thought`,
     {
       title: "Capture thought",
       description: TOOL_DESCRIPTIONS.capture_thought,

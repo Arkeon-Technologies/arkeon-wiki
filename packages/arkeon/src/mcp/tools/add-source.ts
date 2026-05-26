@@ -17,9 +17,9 @@ interface AddSourceResponse {
   entity: { source_hash: string; created_at: string; kind: string };
 }
 
-export function registerAddSource(server: McpServer, client: ArkeonWikiClient): void {
+export function registerAddSource(server: McpServer, client: ArkeonWikiClient, namePrefix = ""): void {
   server.registerTool(
-    "add_source",
+    `${namePrefix}add_source`,
     {
       title: "Add source from URL",
       description: TOOL_DESCRIPTIONS.add_source,

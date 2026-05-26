@@ -5,9 +5,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { ArkeonWikiClient } from "../client.js";
 
-export function registerDaemonStatus(server: McpServer, client: ArkeonWikiClient): void {
+export function registerDaemonStatus(server: McpServer, client: ArkeonWikiClient, namePrefix = ""): void {
   server.registerTool(
-    "daemon_status",
+    `${namePrefix}daemon_status`,
     {
       title: "Daemon status",
       description:
