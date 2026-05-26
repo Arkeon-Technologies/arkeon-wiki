@@ -4,9 +4,13 @@
 import { describe, it, expect } from "vitest";
 
 import {
+  ADD_SOURCE_EXTENSIONS,
   buildInboxContent,
+  extractFilenameFromUrl,
+  resolveAddSourcePath,
   resolveInboxPath,
   slugify,
+  splitFilename,
   utcDateStamp,
 } from "../../src/server/lib/inbox.js";
 import {
@@ -209,6 +213,152 @@ describe("assertTextContent", () => {
     // the watcher behaves identically.)
     const buf = Buffer.from([0x68, 0x00, 0x69]);
     expect(() => assertTextContent(buf, "sources/foo.md")).not.toThrow();
+  });
+});
+
+describe("splitFilename", () => {
+  it("splits stem + lowercased ext", () => {
+    expect(splitFilename("paper.PDF")).toEqual({ stem: "paper", ext: ".pdf" });
+    expect(splitFilename("note.tar.gz")).toEqual({
+      stem: "note.tar",
+      ext: ".gz",
+    });
+  });
+
+  it("returns empty ext when no dot", () => {
+    expect(splitFilename("noext")).toEqual({ stem: "noext", ext: "" });
+  });
+
+  it("treats a leading dot as no extension (dotfile)", () => {
+    expect(splitFilename(".gitignore")).toEqual({
+      stem: ".gitignore",
+      ext: "",
+    });
+  });
+});
+
+describe("extractFilenameFromUrl", () => {
+  it("prefers Content-Disposition when extension is allowed", () => {
+    const filename = extractFilenameFromUrl({
+      url: "https://example.com/api/download?id=42",
+      contentType: "application/pdf",
+      contentDisposition: 'attachment; filename="Quarterly Report Q1.pdf"',
+    });
+    expect(filename).toBe("quarterly-report-q1.pdf");
+  });
+
+  it("decodes RFC 5987 extended filename", () => {
+    const filename = extractFilenameFromUrl({
+      url: "https://example.com/x",
+      contentType: "application/pdf",
+      contentDisposition: "attachment; filename*=UTF-8''na%C3%AFve%20paper.pdf",
+    });
+    expect(filename).toBe("naive-paper.pdf");
+  });
+
+  it("falls back to URL basename when Content-Disposition is absent", () => {
+    const filename = extractFilenameFromUrl({
+      url: "https://example.com/papers/2026-augustine-grief.pdf?utm=foo",
+      contentType: "application/pdf",
+      contentDisposition: null,
+    });
+    expect(filename).toBe("2026-augustine-grief.pdf");
+  });
+
+  it("ignores URL basename without an allowed extension", () => {
+    const filename = extractFilenameFromUrl({
+      url: "https://example.com/article",
+      contentType: "text/html",
+      contentDisposition: null,
+    });
+    // No allowed ext on the URL basename, so fall through to ULID + .html
+    expect(filename).toMatch(/^[0-9a-z]{10}\.html$/);
+  });
+
+  it("returns null for unsupported media types", () => {
+    expect(
+      extractFilenameFromUrl({
+        url: "https://example.com/foo",
+        contentType: "application/octet-stream",
+        contentDisposition: null,
+      }),
+    ).toBeNull();
+    expect(
+      extractFilenameFromUrl({
+        url: "https://example.com/installer.dmg",
+        contentType: "application/x-apple-diskimage",
+        contentDisposition: null,
+      }),
+    ).toBeNull();
+  });
+
+  it("strips query string and decodes URL-encoded basenames", () => {
+    const filename = extractFilenameFromUrl({
+      url: "https://example.com/papers/Augustine%20on%20grief.pdf?download=1",
+      contentType: "application/pdf",
+      contentDisposition: null,
+    });
+    expect(filename).toBe("augustine-on-grief.pdf");
+  });
+
+  it("ULID fallback when no useful filename can be derived", () => {
+    const filename = extractFilenameFromUrl({
+      url: "https://example.com/",
+      contentType: "text/html",
+      contentDisposition: null,
+    });
+    expect(filename).toMatch(/^[0-9a-z]{10}\.html$/);
+  });
+});
+
+describe("ADD_SOURCE_EXTENSIONS", () => {
+  it("includes the universal-safe image set + pdf + common text", () => {
+    for (const ext of [".pdf", ".png", ".html", ".md", ".txt"]) {
+      expect(ADD_SOURCE_EXTENSIONS.has(ext)).toBe(true);
+    }
+    for (const ext of [".exe", ".dmg", ".sh", ".zip", ".js"]) {
+      expect(ADD_SOURCE_EXTENSIONS.has(ext)).toBe(false);
+    }
+  });
+});
+
+describe("resolveAddSourcePath", () => {
+  const now = new Date("2026-05-15T10:00:00Z");
+
+  it("uses the filename verbatim under sources/inbox/<date>/", () => {
+    const { relativePath } = resolveAddSourcePath({
+      watchDir: "/tmp/space",
+      filename: "augustine-on-grief.pdf",
+      now,
+      exists: () => false,
+    });
+    expect(relativePath).toBe(
+      "sources/inbox/2026-05-15/augustine-on-grief.pdf",
+    );
+  });
+
+  it("auto-suffixes on collision while preserving the extension", () => {
+    const taken = new Set([
+      "/tmp/space/sources/inbox/2026-05-15/paper.pdf",
+      "/tmp/space/sources/inbox/2026-05-15/paper-2.pdf",
+    ]);
+    const { relativePath } = resolveAddSourcePath({
+      watchDir: "/tmp/space",
+      filename: "paper.pdf",
+      now,
+      exists: (p) => taken.has(p),
+    });
+    expect(relativePath).toBe("sources/inbox/2026-05-15/paper-3.pdf");
+  });
+
+  it("handles extensionless filenames", () => {
+    const { relativePath } = resolveAddSourcePath({
+      watchDir: "/tmp/space",
+      filename: "raw",
+      now,
+      exists: () => false,
+    });
+    expect(relativePath).toBe("sources/inbox/2026-05-15/raw");
   });
 });
 

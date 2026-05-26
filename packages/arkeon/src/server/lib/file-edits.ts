@@ -47,7 +47,7 @@ import {
 import { removeByPath, syncFile, type Space, type SyncResult } from "./sync.js";
 
 export type FileEdit =
-  | { kind: "create"; path: string; content: string }
+  | { kind: "create"; path: string; content: string | Buffer }
   | {
       kind: "insert_at_line";
       path: string;
@@ -121,7 +121,14 @@ export async function applyEdit(
         );
       }
       mkdirSync(dirname(absPath), { recursive: true });
-      writeFileSync(absPath, edit.content, "utf-8");
+      if (typeof edit.content === "string") {
+        writeFileSync(absPath, edit.content, "utf-8");
+      } else {
+        // Binary path — `add_source` lands PDFs/images here. The watcher
+        // classifies them as `kind='asset'` automatically; we don't need
+        // any other special-case on the sync side.
+        writeFileSync(absPath, edit.content);
+      }
       const sync = await syncFile(space, edit.path);
       return { path: edit.path, kind: "create", sync };
     }
