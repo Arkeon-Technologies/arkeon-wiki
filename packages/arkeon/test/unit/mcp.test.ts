@@ -69,7 +69,7 @@ describe("MCP server", () => {
     }
   });
 
-  it("registers 10 tools and 6 prompts", async () => {
+  it("registers 10 tools and 6 prompts (bare names when no space is bound)", async () => {
     const server = buildServer(new ArkeonWikiClient({ apiUrl: "http://localhost:1", caller: "test" }));
     // Access the internal registries — McpServer exposes them as public
     // properties for introspection.
@@ -94,6 +94,38 @@ describe("MCP server", () => {
     expect(prompts.sort()).toEqual(["ask", "capture", "fetch", "mode-router", "new-space", "save"].sort());
   });
 
+  it("namespaces tool names with the bound space (defeats Claude Desktop's name-based dedup)", async () => {
+    // When ARKEON_WIKI_SPACE is set (the standard claude_desktop_config
+    // shape), every registered tool name picks up a `<space>__` prefix.
+    // Without this, two arkeon-wiki MCP entries with different spaces
+    // both register `list_articles` — Claude Desktop's local tool
+    // registry routes a single canonical `list_articles` somewhere, and
+    // the other server's version becomes uncallable. Sanitization rule:
+    // any non-[a-zA-Z0-9] char in the space becomes `_` so `augustine-
+    // chesterton` → `augustine_chesterton__list_articles`.
+    const client = new ArkeonWikiClient({
+      apiUrl: "http://localhost:1",
+      space: "augustine-chesterton",
+      caller: "test",
+    });
+    const server = buildServer(client);
+    const tools = Object.keys((server as unknown as { _registeredTools: Record<string, unknown> })._registeredTools ?? {});
+    expect(tools.sort()).toEqual(
+      [
+        "augustine_chesterton__add_source",
+        "augustine_chesterton__capture_thought",
+        "augustine_chesterton__create_space",
+        "augustine_chesterton__daemon_status",
+        "augustine_chesterton__list_articles",
+        "augustine_chesterton__list_redlinks",
+        "augustine_chesterton__list_spaces",
+        "augustine_chesterton__read_article",
+        "augustine_chesterton__save_conversation",
+        "augustine_chesterton__search_wiki",
+      ].sort(),
+    );
+  });
+
   it("capture_thought POSTs the verbatim text body", async () => {
     stub = await startStub({
       "POST /test-space/inbox": {
@@ -111,7 +143,7 @@ describe("MCP server", () => {
       "This is the user's thought. It has\n\nmultiple paragraphs and a quote: \"do not summarize me\".";
     const handler = (server as unknown as {
       _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<unknown> }>;
-    })._registeredTools.capture_thought;
+    })._registeredTools["test_space__capture_thought"];
     await handler.handler({ title: "A thought", text: verbatim, kind: "md", space: null }, {});
 
     expect(stub.recorded).toHaveLength(1);
@@ -148,7 +180,7 @@ describe("MCP server", () => {
     const server = buildServer(client);
     const handler = (server as unknown as {
       _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<unknown> }>;
-    })._registeredTools.add_source;
+    })._registeredTools["test_space__add_source"];
     const result = (await handler.handler(
       { url: "https://example.com/paper.pdf", space: null },
       {},
@@ -187,7 +219,7 @@ describe("MCP server", () => {
     const server = buildServer(client);
     const handler = (server as unknown as {
       _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<unknown> }>;
-    })._registeredTools.add_source;
+    })._registeredTools["test_space__add_source"];
     const result = (await handler.handler(
       { url: "https://example.com/installer.exe", space: null },
       {},
@@ -223,7 +255,7 @@ describe("MCP server", () => {
     const server = buildServer(client);
     const handler = (server as unknown as {
       _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<unknown> }>;
-    })._registeredTools.search_wiki;
+    })._registeredTools["test_space__search_wiki"];
     const result = (await handler.handler({ q: "anything", limit: 10, type: null, space: null }, {})) as {
       content: Array<{ text: string }>;
     };
@@ -282,7 +314,7 @@ describe("MCP server", () => {
     const server = buildServer(client);
     const handler = (server as unknown as {
       _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<unknown> }>;
-    })._registeredTools.save_conversation;
+    })._registeredTools["test_space__save_conversation"];
     await handler.handler({ slug: "collides", transcript: "body", space: null }, {});
     // The retry loop must have made exactly two attempts: first 409,
     // second success with -2 suffix.
@@ -310,7 +342,7 @@ describe("MCP server", () => {
     const transcript = "# Title\n\n## Question\nQ?\n\n## Answer\nA — with **markdown** intact.";
     const handler = (server as unknown as {
       _registeredTools: Record<string, { handler: (args: unknown, extra: unknown) => Promise<unknown> }>;
-    })._registeredTools.save_conversation;
+    })._registeredTools["test_space__save_conversation"];
     try {
       await handler.handler({ slug: "foo", transcript, space: null }, {});
     } catch {

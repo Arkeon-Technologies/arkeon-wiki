@@ -15,9 +15,9 @@ interface EntitiesResponse {
   }>;
 }
 
-export function registerListArticles(server: McpServer, client: ArkeonWikiClient): void {
+export function registerListArticles(server: McpServer, client: ArkeonWikiClient, namePrefix = ""): void {
   server.registerTool(
-    "list_articles",
+    `${namePrefix}list_articles`,
     {
       title: "List articles",
       description:

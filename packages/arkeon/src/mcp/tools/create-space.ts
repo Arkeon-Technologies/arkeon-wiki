@@ -6,9 +6,9 @@ import { z } from "zod";
 
 import type { ArkeonWikiClient } from "../client.js";
 
-export function registerCreateSpace(server: McpServer, client: ArkeonWikiClient): void {
+export function registerCreateSpace(server: McpServer, client: ArkeonWikiClient, namePrefix = ""): void {
   server.registerTool(
-    "create_space",
+    `${namePrefix}create_space`,
     {
       title: "Create space",
       description:

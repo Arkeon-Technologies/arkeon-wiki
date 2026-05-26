@@ -14,9 +14,9 @@ interface RedlinksResponse {
   }>;
 }
 
-export function registerListRedlinks(server: McpServer, client: ArkeonWikiClient): void {
+export function registerListRedlinks(server: McpServer, client: ArkeonWikiClient, namePrefix = ""): void {
   server.registerTool(
-    "list_redlinks",
+    `${namePrefix}list_redlinks`,
     {
       title: "List red links",
       description:
