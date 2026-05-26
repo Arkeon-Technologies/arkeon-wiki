@@ -277,15 +277,19 @@ export interface ExtractFilenameFromUrlOpts {
  *
  * Resolution order:
  *   1. Content-Disposition filename, if present and its extension is on
- *      ADD_SOURCE_EXTENSIONS.
+ *      ADD_SOURCE_EXTENSIONS — use its extension.
  *   2. URL pathname basename, if present and its extension is on
- *      ADD_SOURCE_EXTENSIONS.
- *   3. ULID fallback (`<ULID-10>.<ext-from-content-type>`), only when
+ *      ADD_SOURCE_EXTENSIONS — use its extension.
+ *   3. Either of the same candidates with the media type's extension
+ *      tacked on — covers extensionless URLs like
+ *      `wikipedia.org/wiki/Photosynthesis` (basename is human-readable,
+ *      the media type tells us it's HTML).
+ *   4. ULID fallback (`<ULID-10>.<ext-from-content-type>`), only when
  *      MEDIA_TYPE_TO_EXTENSION knows the media type.
  *
  * Returns `null` when no allowlisted extension can be derived — caller
  * surfaces `unsupported_media_type`. The returned filename is slugified
- * (ASCII kebab-case stem, original extension preserved).
+ * (ASCII kebab-case stem, derived extension appended).
  */
 export function extractFilenameFromUrl(
   opts: ExtractFilenameFromUrlOpts,
@@ -296,6 +300,7 @@ export function extractFilenameFromUrl(
   const fromUrl = urlPathBasename(opts.url);
   if (fromUrl) candidates.push(fromUrl);
 
+  // Pass 1: candidate already carries an allowlisted extension.
   for (const candidate of candidates) {
     const { stem, ext } = splitFilename(candidate);
     if (!ADD_SOURCE_EXTENSIONS.has(ext)) continue;
@@ -303,9 +308,28 @@ export function extractFilenameFromUrl(
     if (slug) return `${slug}${ext}`;
   }
 
-  // ULID fallback. Only viable when we recognise the media type.
-  const ext = MEDIA_TYPE_TO_EXTENSION[opts.contentType];
-  if (!ext) return null;
+  // Pass 2: candidate has no recognisable extension, but the media
+  // type does. Use the candidate's stem (slugified) + media-type ext.
+  // This gives `photosynthesis.html` for
+  // `wikipedia.org/wiki/Photosynthesis` (text/html) instead of falling
+  // through to a ULID slug.
+  const mediaExt = MEDIA_TYPE_TO_EXTENSION[opts.contentType];
+  if (mediaExt) {
+    for (const candidate of candidates) {
+      const { stem, ext } = splitFilename(candidate);
+      // Skip candidates whose existing extension is allowlisted (handled
+      // in pass 1 — the only way through here is an empty `ext`) or
+      // whose existing extension is NOT allowlisted (we'd be replacing
+      // a real extension with one we guessed — too aggressive). Only
+      // act when the candidate is truly extensionless.
+      if (ext !== "") continue;
+      const slug = slugify(stem);
+      if (slug) return `${slug}${mediaExt}`;
+    }
+  }
+
+  // Pass 3: ULID fallback. Only viable when we recognise the media type.
+  if (!mediaExt) return null;
   const stem = generateUlid().slice(0, 10).toLowerCase();
-  return `${stem}${ext}`;
+  return `${stem}${mediaExt}`;
 }

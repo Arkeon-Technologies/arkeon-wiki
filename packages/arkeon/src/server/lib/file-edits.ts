@@ -45,6 +45,7 @@ import {
   type EditKind,
 } from "./edit-context.js";
 import { removeByPath, syncFile, type Space, type SyncResult } from "./sync.js";
+import { isIngestable, runExtraction } from "../extractors/runner.js";
 
 export type FileEdit =
   | { kind: "create"; path: string; content: string | Buffer }
@@ -130,6 +131,22 @@ export async function applyEdit(
         writeFileSync(absPath, edit.content);
       }
       const sync = await syncFile(space, edit.path);
+      // Ingestable assets (PDFs today) need the extractor pipeline to
+      // produce a text sidecar that enters the editor queue. Without
+      // this dispatch the fs-watcher's redundant event sees
+      // `action: 'unchanged'` (we already synced) and skips its own
+      // extraction-dispatch branch. The per-binary path lock inside
+      // runExtraction coalesces against the watcher event, so a duplicate
+      // dispatch is harmless. Fire-and-forget: extraction is minutes-long
+      // and the caller wants the entity row back immediately.
+      if (sync.kind === "asset" && isIngestable(edit.path)) {
+        runExtraction({ space, relativePath: edit.path }).catch((err) => {
+          console.error(
+            `[ingest] extraction failed for ${edit.path}:`,
+            (err as Error).message,
+          );
+        });
+      }
       return { path: edit.path, kind: "create", sync };
     }
 
