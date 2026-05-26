@@ -135,10 +135,14 @@ export async function applyEdit(
       // produce a text sidecar that enters the editor queue. Without
       // this dispatch the fs-watcher's redundant event sees
       // `action: 'unchanged'` (we already synced) and skips its own
-      // extraction-dispatch branch. The per-binary path lock inside
-      // runExtraction coalesces against the watcher event, so a duplicate
-      // dispatch is harmless. Fire-and-forget: extraction is minutes-long
-      // and the caller wants the entity row back immediately.
+      // extraction-dispatch branch in fs-watcher.ts (`result.action
+      // !== 'unchanged'` guard) — so the dispatch must come from here.
+      // No duplicate dispatch in practice: the watcher's redundant
+      // event is gated to no-op above. (`withPathLock` inside
+      // runExtraction is a sequential queue, not a coalescer, so we
+      // can't rely on it to dedupe.) Fire-and-forget: extraction is
+      // seconds-to-minutes long and the caller wants the entity row
+      // back immediately.
       if (sync.kind === "asset" && isIngestable(edit.path)) {
         runExtraction({ space, relativePath: edit.path }).catch((err) => {
           console.error(

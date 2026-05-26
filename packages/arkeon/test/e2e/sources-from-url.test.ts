@@ -143,6 +143,17 @@ async function postFromUrl(
   });
 }
 
+describe("daemon bind posture", () => {
+  it("binds to 127.0.0.1 by default — not all interfaces", () => {
+    // The from-url endpoint is an SSRF gadget for anything that can
+    // reach the daemon (no auth, fetches arbitrary HTTPS URLs from the
+    // daemon's network position, persists the bytes). Loopback-only by
+    // default is the safe posture; `ARKEON_WIKI_HOST` is the opt-in
+    // override for operators who deliberately want a shared daemon.
+    expect(api.address.address).toBe("127.0.0.1");
+  });
+});
+
 describe("POST /:space/sources/from-url", () => {
   it("downloads HTML, lands kind='text', returns the synced entity", async () => {
     const res = await postFromUrl({ url: `${fixtureBaseUrl}/article.html` });

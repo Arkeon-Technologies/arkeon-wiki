@@ -286,6 +286,12 @@ E2e tests start a real stack in-process — no running daemon needed.
 
 Override the state dir with `ARKEON_WIKI_HOME` env var or `--data-dir`.
 
+## Bind posture
+
+The API binds to `127.0.0.1` by default — loopback only, not reachable from other hosts on the LAN or other accounts on a shared machine. The daemon has no auth, and `POST /:space/sources/from-url` will fetch arbitrary HTTP(S) URLs from the daemon's network position, so a bind-everywhere posture turns the daemon into an SSRF gadget for anyone who can reach the port.
+
+Override with `ARKEON_WIKI_HOST` when the operator deliberately wants a cross-host daemon (e.g. `ARKEON_WIKI_HOST=0.0.0.0` to listen on all interfaces, or a specific bind address). The startup log line reflects the actual bind, so a `0.0.0.0` posture is visible in `arkeon.log`.
+
 ## Debugging agent runs
 
 Agents emit verbose, human-readable logs to the daemon log unconditionally (`[agent/<role>/<level>] ...`). For *structured* per-event traces, set `ARKEON_WIKI_AGENT_TRACE=1`. Off by default.
