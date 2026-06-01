@@ -40,7 +40,7 @@ import {
 import {
   fetchRemoteToBuffer,
   networkFetchDisabledByEnv,
-} from "../agents/remote-fetch.js";
+} from "../lib/remote-fetch.js";
 
 export const inboxRouter = new Hono<AppBindings>();
 

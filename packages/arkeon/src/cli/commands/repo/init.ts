@@ -32,11 +32,6 @@ import {
 } from "../../lib/instances.js";
 import { output } from "../../lib/output.js";
 import { loadRepoState, type RepoState } from "../../lib/repo-state.js";
-import {
-  AGENTS_YAML_TEMPLATES,
-  DEFAULT_AGENTS_TEMPLATE,
-  writeAgentsYamlTemplate,
-} from "./config.js";
 
 // --api-url is declared on the root program (src/index.ts); the
 // preAction hook moves the value into ARKE_API_URL. Don't redeclare
@@ -48,15 +43,9 @@ export function registerInitCommand(program: Command): void {
     .command("init")
     .argument("[name]", "Space name (defaults to directory name)")
     .description("Register this directory as an Arkeon space")
-    .option(
-      "--template <name>",
-      `agents.yaml template to lay down (default: ${DEFAULT_AGENTS_TEMPLATE}). ` +
-        `Available: ${Object.keys(AGENTS_YAML_TEMPLATES).sort().join(", ")}.`,
-      DEFAULT_AGENTS_TEMPLATE,
-    )
-    .action(async (name: string | undefined, options: { template: string }) => {
+    .action(async (name: string | undefined) => {
       try {
-        await runInit(name, options.template);
+        await runInit(name);
       } catch (error) {
         output.error(error, { operation: "init" });
         process.exitCode = 1;
@@ -64,10 +53,7 @@ export function registerInitCommand(program: Command): void {
     });
 }
 
-async function runInit(
-  name: string | undefined,
-  template: string,
-): Promise<void> {
+async function runInit(name: string | undefined): Promise<void> {
   const cwd = process.cwd();
   const apiUrl = resolveApiUrl();
 
@@ -111,20 +97,8 @@ async function runInit(
     writeFileSync(join(arkeonDir, "state.json"), JSON.stringify(state, null, 2));
   }
 
-  // ── Reconcile pass (runs in both first-init and re-run) ────────
-  //
-  // All three helpers are idempotent: ensureGitignoreEntries skips
-  // already-present lines, mkdirSync `recursive` is a no-op on an
-  // existing dir, and writeAgentsYamlTemplate refuses to overwrite
-  // an existing file unless `force` is set. So a re-run repairs
-  // anything missing without clobbering hand-edits.
-
-  // Gitignore the per-clone state file AND `.env` (where API keys
-  // land). `.arkeon/agents.yaml` and any other configuration in the
-  // .arkeon dir are intended to be committed so the team shares them.
-  // If `.gitignore` doesn't exist yet we create it — leaking a
-  // provider key is a worse outcome than silently materializing a
-  // one-line file.
+  // Reconcile pass — idempotent helpers fill in anything missing
+  // without clobbering hand-edits.
   const gitignoreChanged = ensureGitignoreEntries(cwd, [
     ".arkeon/state.json",
     ".env",
@@ -134,40 +108,24 @@ async function runInit(
   const wikiDir = join(cwd, "wiki");
   if (!existsSync(wikiDir)) mkdirSync(wikiDir, { recursive: true });
 
-  // Lay down .arkeon/agents.yaml from a named template.
-  const agentsYaml = writeAgentsYamlTemplate({ targetDir: cwd, template });
-
   output.result({
     operation: "init",
     space_name: space.name,
     watch_dir: resolve(cwd),
     reconciled,
-    agents_yaml: {
-      path: agentsYaml.path,
-      created: agentsYaml.created,
-      template: agentsYaml.template,
-    },
     gitignore_updated: gitignoreChanged,
-    hint: buildHint({ reconciled, agentsYamlCreated: agentsYaml.created, gitignoreChanged }),
+    hint: buildHint({ reconciled, gitignoreChanged }),
   });
 }
 
 function buildHint(args: {
   reconciled: boolean;
-  agentsYamlCreated: boolean;
   gitignoreChanged: boolean;
 }): string {
   if (!args.reconciled) {
-    // First init — point the user at config next.
-    return (
-      "The daemon is now watching this directory. Edit .arkeon/agents.yaml " +
-      "to set your provider/model and operator instructions, then drop your " +
-      "API key in ~/.arkeon-wiki/.env or ./.env."
-    );
+    return "The daemon is now watching this directory.";
   }
-  // Re-run — be explicit about what (if anything) was filled in.
   const filled: string[] = [];
-  if (args.agentsYamlCreated) filled.push(".arkeon/agents.yaml");
   if (args.gitignoreChanged) filled.push(".gitignore");
   if (filled.length === 0) {
     return "Already initialized — nothing to reconcile.";

@@ -8,8 +8,6 @@ import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 
 import { registerLocalCommands } from "./cli/commands/local/index.js";
-import { registerAgentCommand } from "./cli/commands/repo/agent.js";
-import { registerConfigCommand } from "./cli/commands/repo/config.js";
 import { registerInitCommand } from "./cli/commands/repo/init.js";
 import { registerSearchCommand } from "./cli/commands/repo/search.js";
 import { registerSourcesCommand } from "./cli/commands/repo/sources.js";
@@ -46,7 +44,5 @@ registerLocalCommands(program);
 registerInitCommand(program);
 registerSearchCommand(program);
 registerSourcesCommand(program);
-registerAgentCommand(program);
-registerConfigCommand(program);
 
 program.parse();

@@ -228,17 +228,6 @@ describe("Phase 1 API shape", () => {
     expect(body.error.code).toBe("validation_error");
   });
 
-  it("POST /:space/chat returns 501 (Phase 3 stub)", async () => {
-    const res = await fetch(`${baseUrl}/${SPACE}/chat`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ message: "hi" }),
-    });
-    expect(res.status).toBe(501);
-    const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("not_implemented");
-  });
-
   it("404s an unknown space cleanly", async () => {
     const res = await fetch(`${baseUrl}/nonexistent/entities`);
     expect(res.status).toBe(404);

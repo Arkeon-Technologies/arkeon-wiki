@@ -10,13 +10,6 @@
  *   GET    /:space/recent                    entity_edits feed
  *   GET    /:space/search?q=...              keyword search
  *   GET    /:space/sources/scan              file inventory by extension
- *   POST   /:space/agents/:role/run          fire one role on demand
- *   POST   /:space/chat                      Phase 3 stub (501)
- *   GET    /:space/chat/:conversation_id     Phase 3 stub (501)
- *   DELETE /:space/chat/:conversation_id     Phase 3 stub (501)
- *
- * The reading-experience endpoints (`/:space/`, `/:space/wiki/*`,
- * `/:space/source/*` that serve rendered HTML pages) are Phase 2.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -39,14 +32,6 @@ import {
   type KeywordSearchResult,
 } from "../lib/search.js";
 import { scanSources } from "../lib/sources-scan.js";
-import { loadAgentConfig } from "../agents/config.js";
-import { buildAgentRole, listAvailableRoles } from "../agents/role-builder.js";
-import { runAgent } from "../agents/runtime.js";
-import {
-  SpaceBusyError,
-  withSpaceMutex,
-} from "../agents/space-mutex.js";
-import { ALL_TOOLS } from "../agents/tools.js";
 
 export const spaceScopedRouter = new Hono<AppBindings>();
 
@@ -57,15 +42,6 @@ async function spaceWatchDir(spaceName: string): Promise<string> {
     throw new ApiError(404, "not_found", `Space '${spaceName}' not found`);
   }
   return rows[0].watch_dir as string;
-}
-
-async function loadSpace(spaceName: string): Promise<{ name: string; watch_dir: string }> {
-  const sql = createSql();
-  const rows = await sql`SELECT name, watch_dir FROM spaces WHERE name = ${spaceName}`;
-  if (rows.length === 0) {
-    throw new ApiError(404, "not_found", `Space '${spaceName}' not found`);
-  }
-  return rows[0] as { name: string; watch_dir: string };
 }
 
 // ── /:space/entities ──────────────────────────────────────────────
@@ -214,79 +190,6 @@ spaceScopedRouter.get("/:space/recent", async (c) => {
   return c.json({ space, edits: rows });
 });
 
-// ── POST /:space/agents/:role/run ─────────────────────────────────
-//
-// Fire one role on demand. Synchronous: blocks until the run finishes
-// or errors, then returns a summary. The per-space mutex applies — if
-// another role (cron-fired or manual) is in flight, we return 409.
-//
-// Body is currently ignored. A future iteration may accept
-// { trigger_path: string } to force a specific target; today's roles
-// pick their own work from list_entities / list_redlinks.
-
-spaceScopedRouter.post("/:space/agents/:role/run", async (c) => {
-  const space = c.req.param("space");
-  const role = c.req.param("role");
-  const spaceRow = await loadSpace(space);
-
-  const config = loadAgentConfig({ spaceDir: spaceRow.watch_dir });
-  // Validate the role exists in the merged config (bundled templates +
-  // YAML). Catches typos before we try to build the role.
-  if (!listAvailableRoles(config).includes(role)) {
-    throw new ApiError(
-      404,
-      "not_found",
-      `Role '${role}' not found. Available: ${listAvailableRoles(config).join(", ") || "(none)"}.`,
-    );
-  }
-
-  let built;
-  try {
-    built = buildAgentRole(role, config);
-  } catch (err) {
-    throw new ApiError(
-      400,
-      "validation_error",
-      `Failed to build role '${role}': ${(err as Error).message}`,
-    );
-  }
-
-  const startedAt = Date.now();
-  try {
-    // Args match `scheduler.fireTick`'s invocation shape: same
-    // AgentInput (`{ space, meta: {} }`), same registry (ALL_TOOLS —
-    // the scheduler exposes a `toolRegistry` injection seam for
-    // tests, but in production both call sites resolve to ALL_TOOLS),
-    // same empty `RunAgentOptions`. Keeping them aligned by hand for
-    // now; if a third call site lands, fold both into a shared
-    // `invokeRole(space, role)` helper.
-    const result = await withSpaceMutex(space, role, () =>
-      runAgent(built, { space: spaceRow, meta: {} }, ALL_TOOLS, {}),
-    );
-    return c.json({
-      space,
-      role,
-      duration_ms: Date.now() - startedAt,
-      steps: result.steps,
-      edits: result.edits.map((e) => ({ path: e.path, kind: e.kind })),
-      skipped: result.skipped,
-      reason: result.reason,
-      usage: result.usage,
-      text: result.text,
-    });
-  } catch (err) {
-    if (err instanceof SpaceBusyError) {
-      throw new ApiError(
-        409,
-        "space_busy",
-        `Space '${space}' is busy running role '${err.inFlightRole}'.`,
-        { in_flight_role: err.inFlightRole },
-      );
-    }
-    throw err;
-  }
-});
-
 // ── /:space/search ────────────────────────────────────────────────
 
 interface SearchResponse {
@@ -328,29 +231,6 @@ spaceScopedRouter.get("/:space/search", async (c) => {
   const response: SearchResponse = { query: queryForKeyword, keyword };
   return c.json(response);
 });
-
-// ── /:space/chat — Phase 3 stubs ──────────────────────────────────
-
-spaceScopedRouter.post("/:space/chat", (c) =>
-  c.json(
-    { error: { code: "not_implemented", message: "chat ships in Phase 3" } },
-    501,
-  ),
-);
-
-spaceScopedRouter.get("/:space/chat/:conversation_id", (c) =>
-  c.json(
-    { error: { code: "not_implemented", message: "chat ships in Phase 3" } },
-    501,
-  ),
-);
-
-spaceScopedRouter.delete("/:space/chat/:conversation_id", (c) =>
-  c.json(
-    { error: { code: "not_implemented", message: "chat ships in Phase 3" } },
-    501,
-  ),
-);
 
 // ── helpers ───────────────────────────────────────────────────────
 

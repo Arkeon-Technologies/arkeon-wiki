@@ -12,7 +12,6 @@ import { serve } from "@hono/node-server";
 import type { AddressInfo } from "node:net";
 
 import { createApp } from "./app.js";
-import { loadAgentEnv } from "./agents/env-loader.js";
 import { startAllWatchers, stopAllWatchers } from "./lib/fs-watcher.js";
 import { initDb, closeDb } from "./lib/sql.js";
 
@@ -45,11 +44,6 @@ export async function startApi(config: ArkeonApiConfig = {}): Promise<ArkeonApi>
     process.env.DATABASE_PATH = config.dbPath;
     initDb(config.dbPath);
   }
-
-  // Load ~/.arkeon-wiki/.env so the agent runtime sees API keys when
-  // the per-space scheduler invokes runAgent. (Per-repo .env layered
-  // by each scheduler when its space starts.)
-  loadAgentEnv();
 
   const app = createApp();
 

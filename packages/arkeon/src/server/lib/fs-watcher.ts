@@ -16,15 +16,12 @@
 import { watch, type FSWatcher, existsSync, readdirSync, openSync, readSync, closeSync, statSync } from "node:fs";
 import { join, extname, basename } from "node:path";
 
-import { startScheduler } from "../agents/scheduler.js";
 import {
   cleanStaleStaging,
   isIngestable,
   runExtraction,
 } from "../extractors/runner.js";
 import { syncFile, syncDirectory, removeByPath, type Space } from "./sync.js";
-
-type SchedulerHandle = Awaited<ReturnType<typeof startScheduler>>;
 
 // Directories to skip during walk + watch.
 const IGNORE_DIRS = new Set([".arkeon", ".git", "node_modules", ".claude", "__pycache__", ".venv"]);
@@ -220,7 +217,6 @@ export function sniffIsText(absPath: string): boolean {
 }
 
 const watchers = new Map<string, FSWatcher>();
-const schedulers = new Map<string, SchedulerHandle>();
 const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 const DEBOUNCE_MS = 500;
@@ -383,16 +379,6 @@ export async function startWatching(space: Space): Promise<void> {
   }
 
   try {
-    const scheduler = await startScheduler({ space });
-    schedulers.set(space.name, scheduler);
-  } catch (err) {
-    console.error(
-      `[watcher] Failed to start agent scheduler for space "${space.name}":`,
-      (err as Error).message,
-    );
-  }
-
-  try {
     const watcher = watch(space.watch_dir, { recursive: true }, (_eventType, filename) => {
       if (!filename) return;
 
@@ -490,21 +476,12 @@ export async function stopWatching(spaceName: string): Promise<void> {
     watcher.close();
     watchers.delete(spaceName);
   }
-  const scheduler = schedulers.get(spaceName);
-  if (scheduler) {
-    await scheduler.stop();
-    schedulers.delete(spaceName);
-  }
 }
 
 export async function stopAllWatchers(): Promise<void> {
   for (const [name, watcher] of watchers) {
     watcher.close();
     watchers.delete(name);
-  }
-  for (const [name, scheduler] of schedulers) {
-    await scheduler.stop();
-    schedulers.delete(name);
   }
   for (const timer of debounceTimers.values()) {
     clearTimeout(timer);
