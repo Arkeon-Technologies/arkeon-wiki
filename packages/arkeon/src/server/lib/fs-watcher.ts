@@ -234,6 +234,10 @@ const DEBOUNCE_MS = 500;
 export function shouldIgnorePath(relativePath: string): boolean {
   const parts = relativePath.split("/");
   for (const part of parts) {
+    // .sidecars/ is the v1 sidecar landing zone — sidecars must be
+    // indexed (kind='text') so they feed FTS5. Every other dot-prefixed
+    // path is skipped (.git, .arkeon, .env, dotfiles in general).
+    if (part === ".sidecars") continue;
     if (part.startsWith(".") && part !== ".") return true;
     if (IGNORE_DIRS.has(part)) return true;
   }
@@ -316,7 +320,9 @@ export function walkEligibleFiles(root: string, prefix = ""): string[] {
   }
 
   for (const entry of entries) {
-    if (entry.name.startsWith(".") && entry.name !== ".") continue;
+    // .sidecars/ is the only dot-prefixed dir we walk into; everything
+    // else dotfile is skipped.
+    if (entry.name.startsWith(".") && entry.name !== ".sidecars") continue;
 
     const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
 

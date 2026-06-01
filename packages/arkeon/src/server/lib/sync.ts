@@ -17,6 +17,7 @@ import { createSql, withTransaction } from "./sql.js";
 import { classifyFile } from "./fs-watcher.js";
 import { parseHtmlMeta } from "./html-meta.js";
 import { extractHtmlLinks } from "./html-links.js";
+import { extractMarkdownLinks } from "./md-links.js";
 
 export type ArtifactKind = "text" | "asset";
 
@@ -53,6 +54,11 @@ function statFingerprint(stats: { mtimeMs: number; size: number }): string {
 function isHtmlPath(relativePath: string): boolean {
   const ext = extname(relativePath).toLowerCase();
   return ext === ".html" || ext === ".htm";
+}
+
+function isMarkdownPath(relativePath: string): boolean {
+  const ext = extname(relativePath).toLowerCase();
+  return ext === ".md" || ext === ".markdown";
 }
 
 /**
@@ -126,21 +132,33 @@ async function syncText(
   fingerprint: string,
   existing: Record<string, unknown> | null,
 ): Promise<SyncResult> {
-  const html = isHtmlPath(relativePath);
-
   let label: string;
   let propsJson: string;
-  let resolvedLinks: { target: string; text: string | null; attrs: Record<string, string> }[] = [];
+  const resolvedLinks: { target: string; text: string | null; attrs: Record<string, string> }[] = [];
 
-  if (html) {
+  if (isHtmlPath(relativePath)) {
     const meta = parseHtmlMeta(content);
     label =
       meta.title ??
       (meta.properties.label as string | undefined) ??
       basename(relativePath, extname(relativePath));
     propsJson = JSON.stringify(meta.properties);
-    const links = extractHtmlLinks(content, relativePath);
-    for (const l of links) {
+    for (const l of extractHtmlLinks(content, relativePath)) {
+      if (l.resolved == null) continue;
+      resolvedLinks.push({
+        target: l.resolved,
+        text: l.text || null,
+        attrs: l.data ?? {},
+      });
+    }
+  } else if (isMarkdownPath(relativePath)) {
+    label = basename(relativePath, extname(relativePath));
+    propsJson = JSON.stringify({ file_type: extname(relativePath).slice(1) });
+    const sql = createSql();
+    const pathRows = await sql`SELECT path FROM artifacts`;
+    const known = new Set<string>();
+    for (const row of pathRows) known.add(row.path as string);
+    for (const l of extractMarkdownLinks(content, relativePath, known)) {
       if (l.resolved == null) continue;
       resolvedLinks.push({
         target: l.resolved,

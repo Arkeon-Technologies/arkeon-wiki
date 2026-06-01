@@ -116,17 +116,21 @@ async function runExtractionInner(
 ): Promise<ExtractionOutcome> {
   const { watchedRoot, relativePath } = opts;
   const absPath = join(watchedRoot, relativePath);
-  const sidecarRelPath = `${relativePath}.html`;
+  // v1 sidecars live in .sidecars/<mirrored-path>.html so they don't
+  // clutter the source tree alongside the binaries.
+  const sidecarRelPath = `.sidecars/${relativePath}.html`;
   const sidecarAbsPath = join(watchedRoot, sidecarRelPath);
-  // assetsRelDir is the dir basename only — that's what the script
-  // embeds in <img src> paths (sidecar lives in the same parent dir).
+  // assetsRelDir is the dir basename only — that's what the extractor
+  // script embeds in <img src> paths (sidecar lives in the same parent dir).
   const assetsRelDir = `${baseName(relativePath)}.assets`;
-  const assetsAbsDir = join(dirname(absPath), assetsRelDir);
-  // assetsSpaceRelDir is the space-relative path used for syncFile —
-  // e.g. "sources/papers/paper.pdf.assets".
-  const binaryParentRel = dirname(relativePath);
+  // Assets directory mirrors the sidecar's location.
+  const sidecarAbsParent = dirname(sidecarAbsPath);
+  const assetsAbsDir = join(sidecarAbsParent, assetsRelDir);
+  // assetsSpaceRelDir is the watch-relative path used for syncFile —
+  // e.g. ".sidecars/sources/papers/paper.pdf.assets".
+  const sidecarParentRel = dirname(sidecarRelPath);
   const assetsSpaceRelDir =
-    binaryParentRel === "." ? assetsRelDir : `${binaryParentRel}/${assetsRelDir}`;
+    sidecarParentRel === "." ? assetsRelDir : `${sidecarParentRel}/${assetsRelDir}`;
 
   // Re-extraction skip: if an existing sidecar was authored by hand
   // (no extracted_by tag) or explicitly tagged "manual", leave it
@@ -190,6 +194,8 @@ async function runExtractionInner(
       }
       rmSync(assetsAbsDir, { recursive: true, force: true });
     }
+    // Ensure .sidecars/<dir>/ exists before the rename lands there.
+    mkdirSync(dirname(assetsAbsDir), { recursive: true });
     renameSync(stagingDir, assetsAbsDir);
     stagingDir = null;
 
@@ -335,15 +341,16 @@ function createStagingDir(binaryAbsPath: string): string {
 
 /**
  * Write `content` to `targetAbsPath` via tmp + rename so the watcher
- * never sees a half-written sidecar.
+ * never sees a half-written sidecar. Ensures the parent directory
+ * exists first (relevant for .sidecars/<mirrored>/).
  */
 function writeSidecarAtomic(targetAbsPath: string, content: string): void {
+  mkdirSync(dirname(targetAbsPath), { recursive: true });
   const tmpPath = `${targetAbsPath}.tmp.${randomBytes(4).toString("hex")}`;
   writeFileSync(tmpPath, content, "utf-8");
   try {
     renameSync(tmpPath, targetAbsPath);
   } catch (err) {
-    // Best-effort cleanup if rename failed (e.g. cross-device).
     try {
       unlinkSync(tmpPath);
     } catch {

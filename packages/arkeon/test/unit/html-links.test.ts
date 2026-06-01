@@ -80,82 +80,53 @@ describe("resolveHref", () => {
 });
 
 describe("extractHtmlLinks", () => {
-  it("walks every <a href> in an HTML body", () => {
+  it("only extracts <a class='wikilink'> anchors", () => {
     const html = `<!doctype html><title>X</title>
 <body>
   <p>
-    See <a href="other.html">other</a> and
-    <a href="../sources/p.md">paper</a>, plus
-    <a href="https://en.wikipedia.org/x">external</a>.
+    <a class="wikilink" href="other.html">wikilink-other</a>
+    <a href="../sources/p.md">plain-anchor</a>
+    <a class="wikilink" href="https://en.wikipedia.org/x">external-wiki</a>
   </p>
-  <a href="biology/chlorophyll.html">chlorophyll</a>
-</body>`;
-    const links = extractHtmlLinks(html, "wiki/foo.html");
-    expect(links).toHaveLength(4);
-
-    const resolved = links.filter((l) => l.resolved !== null);
-    expect(resolved.map((l) => ({ resolved: l.resolved, text: l.text }))).toEqual([
-      { resolved: "wiki/other.html", text: "other" },
-      { resolved: "sources/p.md", text: "paper" },
-      { resolved: "wiki/biology/chlorophyll.html", text: "chlorophyll" },
-    ]);
-
-    const external = links.find((l) => l.href.startsWith("https://"));
-    expect(external?.resolved).toBeNull();
-  });
-
-  it("returns empty array for HTML without anchors", () => {
-    expect(extractHtmlLinks("<p>no links</p>", "wiki/foo.html")).toEqual([]);
-  });
-
-  it("skips anchors without an href attribute", () => {
-    const html = `<a>no-href</a><a href="x.html">x</a>`;
-    const links = extractHtmlLinks(html, "wiki/foo.html");
-    expect(links).toHaveLength(1);
-    expect(links[0].text).toBe("x");
-  });
-
-  it("walks <img src> and emits resolved relationships using `alt` as link text", () => {
-    const html = `<!doctype html><title>X</title>
-<body>
-  <p>See the chart:</p>
-  <img src="../images/chart.png" alt="Trade openness chart">
-  <img src="../images/no-alt.jpg">
-  <img src="https://cdn.example.com/external.png" alt="ext">
+  <a class="other wikilink" href="biology/chlorophyll.html">multi-class</a>
 </body>`;
     const links = extractHtmlLinks(html, "wiki/foo.html");
     expect(links).toHaveLength(3);
 
     const resolved = links.filter((l) => l.resolved !== null);
     expect(resolved.map((l) => ({ resolved: l.resolved, text: l.text }))).toEqual([
-      { resolved: "images/chart.png", text: "Trade openness chart" },
-      { resolved: "images/no-alt.jpg", text: "" },
+      { resolved: "wiki/other.html", text: "wikilink-other" },
+      { resolved: "wiki/biology/chlorophyll.html", text: "multi-class" },
     ]);
 
     const external = links.find((l) => l.href.startsWith("https://"));
     expect(external?.resolved).toBeNull();
   });
 
-  it("skips <img> elements without a src attribute", () => {
-    const html = `<img alt="nothing"><img src="x.png">`;
-    const links = extractHtmlLinks(html, "wiki/foo.html");
-    expect(links).toHaveLength(1);
-    expect(links[0].href).toBe("x.png");
+  it("returns empty array for HTML without wikilink anchors", () => {
+    expect(extractHtmlLinks("<a href='x.html'>plain</a>", "wiki/foo.html")).toEqual([]);
   });
 
-  it("emits both <a> and <img> relationships in a mixed document", () => {
-    const html = `<a href="other.html">other</a>
-                  <img src="../images/x.png" alt="x">
-                  <a href="../sources/notes.md">notes</a>`;
+  it("skips wikilink anchors without an href attribute", () => {
+    const html = `<a class="wikilink">no-href</a><a class="wikilink" href="x.html">x</a>`;
     const links = extractHtmlLinks(html, "wiki/foo.html");
-    const resolved = links
-      .filter((l) => l.resolved !== null)
-      .map((l) => l.resolved)
-      .sort();
-    expect(resolved).toEqual([
-      "images/x.png",
-      "sources/notes.md",
-      "wiki/other.html",
-    ]);
+    expect(links).toHaveLength(1);
+    expect(links[0].text).toBe("x");
+  });
+
+  it("captures data-* attributes on wikilink anchors", () => {
+    const html = `<a class="wikilink" href="paper.pdf.html" data-quote="lorem" data-page="3" data-cite-type="evidence">paper</a>`;
+    const links = extractHtmlLinks(html, "wiki/foo.html");
+    expect(links).toHaveLength(1);
+    expect(links[0].data).toEqual({
+      quote: "lorem",
+      page: "3",
+      "cite-type": "evidence",
+    });
+  });
+
+  it("does NOT extract <img src> (assets resolve via the reader, not the link graph)", () => {
+    const html = `<img src="../images/chart.png" alt="chart">`;
+    expect(extractHtmlLinks(html, "wiki/foo.html")).toEqual([]);
   });
 });
