@@ -24,10 +24,6 @@ export interface QueryOptions {
   not_tag?: string[] | null;
   /** FTS5 match query over artifact body text. */
   text?: string | null;
-  /** Substring of the artifact path (case-insensitive). */
-  path_contains?: string | null;
-  /** Substring of the artifact label (case-insensitive). */
-  label_contains?: string | null;
   limit?: number | null;
   offset?: number | null;
 }
@@ -52,11 +48,20 @@ const MAX_LIMIT = 200;
 const DEFAULT_LIMIT = 50;
 
 /**
- * Parse a `?kind=text,asset` (or repeated `?kind=...`) parameter.
+ * Parse a `kinds` request field. Accepts either a string array
+ * (`["text", "asset"]`, the documented form), or a comma-separated
+ * string (`"text,asset"`) for backward-compat with the older surface.
  */
-export function parseKinds(raw: string | string[] | undefined): ArtifactKind[] | null {
+export function parseKinds(raw: unknown): ArtifactKind[] | null {
   if (raw == null) return null;
-  const parts = Array.isArray(raw) ? raw.flatMap((v) => v.split(",")) : raw.split(",");
+  let parts: string[];
+  if (Array.isArray(raw)) {
+    parts = raw.flatMap((v) => (typeof v === "string" ? v.split(",") : []));
+  } else if (typeof raw === "string") {
+    parts = raw.split(",");
+  } else {
+    throw new ApiError(400, "validation_error", `kinds must be string[] or "text,asset"`);
+  }
   const kinds: ArtifactKind[] = [];
   for (const p of parts) {
     const trimmed = p.trim();
@@ -89,14 +94,6 @@ export async function listArtifacts(opts: QueryOptions): Promise<ListResult> {
   if (opts.kinds && opts.kinds.length > 0) {
     where.push(`a.kind IN (${opts.kinds.map(() => "?").join(",")})`);
     params.push(...opts.kinds);
-  }
-  if (opts.path_contains) {
-    where.push("LOWER(a.path) LIKE LOWER(?)");
-    params.push(`%${opts.path_contains}%`);
-  }
-  if (opts.label_contains) {
-    where.push("LOWER(a.label) LIKE LOWER(?)");
-    params.push(`%${opts.label_contains}%`);
   }
   if (opts.has_tag) {
     for (const spec of opts.has_tag) {
@@ -226,10 +223,15 @@ export async function listRedlinks(opts: ListRedlinksOptions): Promise<RedlinkRe
   )) as { n: number }[];
   const total = Number(totalRow[0]?.n ?? 0);
 
+  // U+001F (ASCII Unit Separator) — a control character that can't
+  // appear in a filesystem path, so we can split the GROUP_CONCAT
+  // result back into individual source paths losslessly. Interpolate
+  // through char(31) on the SQL side so the source-level character
+  // is visible (not a hidden control byte embedded in a string literal).
   const rows = (await sql.query(
     `SELECT l.target_path,
             COUNT(*) AS demand,
-            GROUP_CONCAT(l.source_path, '') AS linked_from_concat
+            GROUP_CONCAT(l.source_path, char(31)) AS linked_from_concat
      FROM links l
      LEFT JOIN artifacts a ON a.path = l.target_path
      ${whereSql}
@@ -242,7 +244,10 @@ export async function listRedlinks(opts: ListRedlinksOptions): Promise<RedlinkRe
   const redlinks: RedlinkRow[] = rows.map((r) => ({
     target_path: r.target_path,
     demand: Number(r.demand),
-    linked_from: (r.linked_from_concat ?? "").split("").filter(Boolean).slice(0, 3),
+    linked_from: (r.linked_from_concat ?? "")
+      .split("\x1f")
+      .filter(Boolean)
+      .slice(0, 3),
   }));
 
   return { redlinks, total };

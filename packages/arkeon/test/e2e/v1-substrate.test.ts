@@ -171,11 +171,42 @@ describe("v1 substrate", () => {
     expect(first!.attrs.quote).toBe("hello");
   });
 
-  it("GET /redlinks lists unresolved targets", async () => {
+  it("GET /redlinks lists unresolved targets with intact linked_from paths", async () => {
     const res = await app.fetch(new Request("http://test/redlinks"));
-    const body = (await res.json()) as { redlinks: Array<{ target_path: string }> };
+    const body = (await res.json()) as {
+      redlinks: Array<{ target_path: string; demand: number; linked_from: string[] }>;
+    };
     const targets = body.redlinks.map((r) => r.target_path);
     expect(targets).toContain("missing-target");
+    // Regression guard for the GROUP_CONCAT separator bug: linked_from
+    // must be intact source paths, not character-shredded fragments.
+    const missing = body.redlinks.find((r) => r.target_path === "missing-target")!;
+    expect(missing.linked_from).toEqual(["iarpa/sources/paper.md"]);
+    expect(missing.demand).toBe(1);
+  });
+
+  it("POST /query filters by documented `kinds` array (not legacy `kind`)", async () => {
+    const res = await app.fetch(
+      new Request("http://test/query", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ folder: "iarpa", kinds: ["text"] }),
+      }),
+    );
+    const body = (await res.json()) as { artifacts: Array<{ path: string; kind: string }> };
+    expect(body.artifacts.length).toBeGreaterThan(0);
+    expect(body.artifacts.every((a) => a.kind === "text")).toBe(true);
+  });
+
+  it("POST /query rejects unknown kinds", async () => {
+    const res = await app.fetch(
+      new Request("http://test/query", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kinds: ["bogus"] }),
+      }),
+    );
+    expect(res.status).toBe(400);
   });
 
   it("POST /query with text invokes FTS5", async () => {
@@ -223,5 +254,32 @@ describe("v1 substrate", () => {
     // The resolved wikilink still carries its class, no redlink.
     expect(text).toContain(`class="wikilink"`);
     expect(text).not.toMatch(/wikilink[^"]*redlink/);
+  });
+
+  it("reader only marks redlinks on <a class='wikilink'>, not plain anchors", async () => {
+    // Drop a fresh file with one wikilink (unresolved) and one plain anchor (unresolved).
+    const fname = "iarpa/mixed-links.html";
+    writeFileSync(
+      join(workdir, fname),
+      `<!doctype html><html><head><title>Mixed</title></head><body>
+         <a class="wikilink" href="./nope-wiki">wiki</a>
+         <a href="./nope-plain">plain</a>
+       </body></html>`,
+    );
+    // Wait briefly for the watcher debounce + sync.
+    const deadline = Date.now() + 2000;
+    const sql = createSql();
+    while (Date.now() < deadline) {
+      const rows = await sql`SELECT 1 FROM artifacts WHERE path = ${fname}`;
+      if (rows.length > 0) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    const res = await app.fetch(new Request(`http://test/${fname}`));
+    const text = await res.text();
+    // The plain anchor must NOT be rewritten — no redlink class.
+    expect(text).toMatch(/<a href="\.\/nope-plain">plain<\/a>/);
+    // The wikilink anchor SHOULD gain the redlink class.
+    expect(text).toMatch(/<a class="wikilink redlink" href="\.\/nope-wiki">/);
   });
 });

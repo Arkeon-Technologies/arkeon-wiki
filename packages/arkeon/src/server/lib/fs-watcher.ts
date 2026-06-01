@@ -139,33 +139,6 @@ export const TEXT_EXTENSIONS = new Set([
   ".lua", ".php", ".pl", ".r", ".jl", ".scala", ".clj", ".cljs", ".ex", ".exs", ".erl",
 ]);
 
-/**
- * Ripgrep `--type-add` glob built from TEXT_EXTENSIONS so search and
- * indexing always see the same set of files. Adding a new text extension
- * above automatically widens search to match — no second list to sync.
- *
- * Form: `*.{ext1,ext2,...}` (no leading dots, alphabetized for stable
- * diffs). Asset extensions are excluded by construction (they're not in
- * TEXT_EXTENSIONS), and ripgrep's built-in binary detection is the
- * second line of defense for anything that slips through (text-shaped
- * binaries like SVG would otherwise be searchable).
- *
- * Lives in this module — not search.ts — to avoid a circular import:
- * fs-watcher → scheduler → tools → search → fs-watcher would otherwise
- * read TEXT_EXTENSIONS before the const initializer finished.
- *
- * Known gap: extensionless text files (README, LICENSE) are indexed
- * as kind='text' but not searchable — ripgrep `--type` selects by
- * extension only. Tracked separately.
- */
-export const TEXT_EXTENSION_GLOB = (() => {
-  const exts = [...TEXT_EXTENSIONS]
-    .map((e) => e.slice(1)) // strip leading dot
-    .filter((e) => /^[a-z0-9_]+$/.test(e)) // drop anything brace-unsafe
-    .sort();
-  return `*.{${exts.join(",")}}`;
-})();
-
 const SNIFF_BYTES = 8192;
 
 /**

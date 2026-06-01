@@ -24,13 +24,17 @@ export function rewriteWikilinks(
 ): string {
   const root = parse(html);
   for (const a of root.querySelectorAll("a")) {
+    const cls = a.getAttribute("class") ?? "";
+    const tokens = new Set(cls.split(/\s+/).filter(Boolean));
+    // Match the extraction rule in html-links.ts: only `class="wikilink"`
+    // anchors participate in the link graph. Plain `<a href>` renders as
+    // ordinary HTML — no redlink rewrite, no styling.
+    if (!tokens.has("wikilink")) continue;
     const href = a.getAttribute("href");
     if (!href) continue;
     const resolved = resolveHref(href, fromPath);
     if (!resolved) continue;
     if (!knownPaths.has(resolved)) {
-      const cls = a.getAttribute("class") ?? "";
-      const tokens = new Set(cls.split(/\s+/).filter(Boolean));
       tokens.add("redlink");
       a.setAttribute("class", [...tokens].join(" "));
     }

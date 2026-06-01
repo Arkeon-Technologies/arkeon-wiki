@@ -61,12 +61,10 @@ apiRouter.post("/query", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
   const result = await listArtifacts({
     folder: typeof body.folder === "string" ? body.folder : null,
-    kinds: parseKinds(typeof body.kind === "string" ? body.kind : undefined),
+    kinds: parseKinds(body.kinds),
     has_tag: parseStringArray(body.has_tag, "has_tag"),
     not_tag: parseStringArray(body.not_tag, "not_tag"),
     text: typeof body.text === "string" ? body.text : null,
-    path_contains: typeof body.path_contains === "string" ? body.path_contains : null,
-    label_contains: typeof body.label_contains === "string" ? body.label_contains : null,
     limit: parseNum(body.limit, "limit"),
     offset: parseNum(body.offset, "offset"),
   });

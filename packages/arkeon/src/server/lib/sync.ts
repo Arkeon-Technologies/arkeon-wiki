@@ -180,13 +180,13 @@ async function syncText(
             stat_fingerprint = ${fingerprint},
             properties = ${propsJson},
             kind = 'text',
-            updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
+            updated_at = datetime('now')
         WHERE path = ${relativePath}
       `;
     } else {
       await tx`
         INSERT INTO artifacts (path, kind, label, source_hash, stat_fingerprint, properties, updated_at)
-        VALUES (${relativePath}, 'text', ${label}, ${hash}, ${fingerprint}, ${propsJson}, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+        VALUES (${relativePath}, 'text', ${label}, ${hash}, ${fingerprint}, ${propsJson}, datetime('now'))
       `;
     }
 
@@ -250,7 +250,7 @@ async function syncAsset(
           stat_fingerprint = ${fingerprint},
           properties = ${propsJson},
           kind = 'asset',
-          updated_at = strftime('%Y-%m-%d %H:%M:%f', 'now')
+          updated_at = datetime('now')
       WHERE path = ${relativePath}
     `;
     return { action: "updated", kind: "asset", label, linksExtracted: 0 };
@@ -258,7 +258,7 @@ async function syncAsset(
 
   await sql`
     INSERT INTO artifacts (path, kind, label, source_hash, stat_fingerprint, properties, updated_at)
-    VALUES (${relativePath}, 'asset', ${label}, ${hash}, ${fingerprint}, ${propsJson}, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+    VALUES (${relativePath}, 'asset', ${label}, ${hash}, ${fingerprint}, ${propsJson}, datetime('now'))
   `;
   return { action: "created", kind: "asset", label, linksExtracted: 0 };
 }
