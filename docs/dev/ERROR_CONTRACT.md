@@ -8,7 +8,7 @@ Consistent JSON error shape for all API endpoints.
 {
   "error": {
     "code": "not_found",
-    "message": "Entity not found",
+    "message": "artifact not found",
     "details": {},
     "request_id": "..."
   }
@@ -32,7 +32,7 @@ Consistent JSON error shape for all API endpoints.
 |--------|------|------|
 | `400` | `validation_error` | Invalid request body or constraint violation |
 | `400` | `invalid_reference` | FK references a nonexistent record |
-| `404` | `not_found` | Entity or space not found |
+| `404` | `not_found` | Artifact not found |
 | `409` | `conflict` | Unique constraint violation |
 | `500` | `internal_error` | Unexpected error |
-| `503` | `service_unavailable` | Database unavailable |
+| `503` | `not_ready` | Watcher not started / database unavailable |
