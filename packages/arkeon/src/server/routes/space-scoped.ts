@@ -18,7 +18,7 @@ import { Hono } from "hono";
 import type { AppBindings } from "../types.js";
 import { ApiError } from "../lib/errors.js";
 import { createSql } from "../lib/sql.js";
-import { safeResolve } from "../lib/file-edits.js";
+import { safeResolve } from "../lib/path.js";
 import {
   getEntity,
   listEntities,
@@ -133,61 +133,6 @@ spaceScopedRouter.get("/:space/sources/scan", async (c) => {
   const watchDir = await spaceWatchDir(space);
   const result = scanSources(watchDir);
   return c.json({ space, watch_dir: watchDir, ...result });
-});
-
-// ── /:space/recent ────────────────────────────────────────────────
-
-spaceScopedRouter.get("/:space/recent", async (c) => {
-  const space = c.req.param("space");
-  await spaceWatchDir(space);
-
-  const limit = Math.min(
-    Math.max(parseNumQuery(c.req.query("limit"), "limit") ?? 50, 1),
-    500,
-  );
-  const offset = Math.max(parseNumQuery(c.req.query("offset"), "offset") ?? 0, 0);
-  const since = c.req.query("since");
-  const role = c.req.query("role");
-
-  const sql = createSql();
-  // Dynamic AND-chain workaround: branch on the (since, role) combinations
-  // since the tagged-template helper doesn't compose them.
-  let rows;
-  if (since && role) {
-    rows = await sql`
-      SELECT entity_path, by_role, edit_kind, edit_note, content_hash, at
-      FROM entity_edits
-      WHERE space_name = ${space} AND at >= ${since} AND by_role = ${role}
-      ORDER BY at DESC
-      LIMIT ${limit} OFFSET ${offset}
-    `;
-  } else if (since) {
-    rows = await sql`
-      SELECT entity_path, by_role, edit_kind, edit_note, content_hash, at
-      FROM entity_edits
-      WHERE space_name = ${space} AND at >= ${since}
-      ORDER BY at DESC
-      LIMIT ${limit} OFFSET ${offset}
-    `;
-  } else if (role) {
-    rows = await sql`
-      SELECT entity_path, by_role, edit_kind, edit_note, content_hash, at
-      FROM entity_edits
-      WHERE space_name = ${space} AND by_role = ${role}
-      ORDER BY at DESC
-      LIMIT ${limit} OFFSET ${offset}
-    `;
-  } else {
-    rows = await sql`
-      SELECT entity_path, by_role, edit_kind, edit_note, content_hash, at
-      FROM entity_edits
-      WHERE space_name = ${space}
-      ORDER BY at DESC
-      LIMIT ${limit} OFFSET ${offset}
-    `;
-  }
-
-  return c.json({ space, edits: rows });
 });
 
 // ── /:space/search ────────────────────────────────────────────────

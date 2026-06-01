@@ -104,29 +104,12 @@ describe("syncFile asset-mode", () => {
     expect(entity!.outbound).toEqual([]);
   });
 
-  it("does NOT write an entity_edits audit row for assets", async () => {
-    writeFileSync(join(workdir, "images/chart.png"), PNG_BYTES);
-    await syncFile(SPACE, "images/chart.png");
-
-    const sql = createSql();
-    const edits = await sql`
-      SELECT entity_path FROM entity_edits WHERE space_name = ${SPACE.name}
-    `;
-    expect(edits).toHaveLength(0);
-  });
-
-  it("text-mode source still gets a kind='text' row + entity_edits audit", async () => {
+  it("text-mode source gets a kind='text' row", async () => {
     writeFileSync(join(workdir, "sources/notes.txt"), "hello world");
     await syncFile(SPACE, "sources/notes.txt");
 
     const entity = await getEntity(SPACE.name, "sources/notes.txt");
     expect(entity!.kind).toBe("text");
-
-    const sql = createSql();
-    const edits = await sql`
-      SELECT entity_path FROM entity_edits WHERE space_name = ${SPACE.name}
-    `;
-    expect(edits).toHaveLength(1);
   });
 });
 

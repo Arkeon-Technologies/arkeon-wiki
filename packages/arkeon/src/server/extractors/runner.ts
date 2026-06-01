@@ -30,8 +30,6 @@ import {
 import { dirname, join } from "node:path";
 
 import { deleteEntityTag, getEntity, setEntityTag } from "../lib/entities.js";
-import { setEditContext, clearEditContext } from "../lib/edit-context.js";
-import { withPathLock } from "../lib/path-lock.js";
 import { removeByPath, syncFile, type Space } from "../lib/sync.js";
 
 import { requireAdaptersManifest } from "./adapters.js";
@@ -44,12 +42,23 @@ import {
 } from "./validate.js";
 
 /**
- * The "by_role" attribution stamped onto entity_edits rows produced by
- * the extractor's sidecar writes. Distinct from "human" (filesystem
- * edits) and the agent role names so the recent feed can filter to
- * "what the extractor produced lately".
+ * Per-binary serialization: if two events fire for the same path back to
+ * back, we don't want two subprocesses staging into the same assets dir.
+ * Queue them on a Map of in-flight Promises keyed by space::path.
  */
-const INGEST_BY_ROLE = "ingest";
+const inFlight = new Map<string, Promise<unknown>>();
+
+function withPathLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prior = inFlight.get(key) ?? Promise.resolve();
+  const next = prior.then(fn, fn);
+  inFlight.set(
+    key,
+    next.finally(() => {
+      if (inFlight.get(key) === next) inFlight.delete(key);
+    }),
+  );
+  return next;
+}
 
 /** Sidecar carries this tag set after a successful extraction. */
 const EXTRACTED_BY_TAG = "extracted_by";
@@ -203,22 +212,8 @@ async function runExtractionInner(
       }
     }
 
-    // Write sidecar with edit attribution so the entity_edits row
-    // records by_role='ingest' instead of the default 'human'. We use
-    // "resync" when the sidecar already existed (overwriting our own
-    // previous extraction) and "create" for the first run.
-    const sidecarPreexisted = existsSync(sidecarAbsPath);
     writeSidecarAtomic(sidecarAbsPath, result.html);
-    setEditContext(space.name, sidecarRelPath, {
-      role: INGEST_BY_ROLE,
-      edit_kind: sidecarPreexisted ? "resync" : "create",
-      note: `${handler.name} sidecar`,
-    });
-    try {
-      await syncFile(space, sidecarRelPath);
-    } finally {
-      clearEditContext(space.name, sidecarRelPath);
-    }
+    await syncFile(space, sidecarRelPath);
 
     // Tag the sidecar so re-extraction skips manual overrides and so
     // we can identify failed vs. successful sidecars later. Also clear
@@ -268,18 +263,8 @@ async function runExtractionInner(
     });
 
     try {
-      const sidecarPreexisted = existsSync(sidecarAbsPath);
       writeSidecarAtomic(sidecarAbsPath, stubHtml);
-      setEditContext(space.name, sidecarRelPath, {
-        role: INGEST_BY_ROLE,
-        edit_kind: sidecarPreexisted ? "resync" : "create",
-        note: `${handler.name} stub (failed)`,
-      });
-      try {
-        await syncFile(space, sidecarRelPath);
-      } finally {
-        clearEditContext(space.name, sidecarRelPath);
-      }
+      await syncFile(space, sidecarRelPath);
       await setEntityTag(
         space.name,
         sidecarRelPath,

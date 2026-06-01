@@ -312,9 +312,6 @@ describe("Phase 2 reader", () => {
     expect(redlinks.status).toBe(200);
     expect(redlinks.headers.get("content-type")).toMatch(/application\/json/);
 
-    const recent = await fetch(`${baseUrl}/${SPACE}/recent`);
-    expect(recent.status).toBe(200);
-
     const search = await fetch(`${baseUrl}/${SPACE}/search?q=chloroplast`);
     expect(search.status).toBe(200);
   });

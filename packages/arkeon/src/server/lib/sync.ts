@@ -24,7 +24,6 @@ import { join, basename, extname } from "node:path";
 import { createHash } from "node:crypto";
 
 import { createSql, withTransaction, type SqlClient } from "./sql.js";
-import { getEditContext, type EditKind } from "./edit-context.js";
 import { classifyFile } from "./fs-watcher.js";
 import { parseHtmlMeta } from "./html-meta.js";
 import { extractHtmlLinks } from "./html-links.js";
@@ -159,8 +158,6 @@ export async function syncFile(space: Space, relativePath: string): Promise<Sync
   const result = isWikiPath(relativePath)
     ? await syncWiki(space, relativePath, content, hash, fingerprint, existing[0] ?? null)
     : await syncSource(space, relativePath, content, hash, fingerprint, existing[0] ?? null);
-
-  await recordEntityEdit(space.name, relativePath, hash);
 
   return result;
 }
@@ -362,37 +359,11 @@ async function syncAsset(
   return { action: "created", type: "file", kind: "asset", label, linksExtracted: 0 };
 }
 
-async function recordEntityEdit(
-  spaceName: string,
-  relativePath: string,
-  hash: string,
-): Promise<void> {
-  const ctx = getEditContext(spaceName, relativePath);
-  const byRole = ctx?.role ?? "human";
-  const editKind: EditKind = ctx?.edit_kind ?? "resync";
-  const note = ctx?.note ?? null;
-  const sql = createSql();
-  // PK is (space_name, entity_path, at). `at` defaults to strftime('%f')
-  // millisecond precision (see 001-foundation.sql), so realistic
-  // workflows don't collide. OR IGNORE is the last-line defence for
-  // the pathological case of two writes in the same millisecond — the
-  // file state is correct regardless; we'd just lose attribution on
-  // the second one.
-  await sql.query(
-    `INSERT OR IGNORE INTO entity_edits
-     (space_name, entity_path, by_role, edit_kind, edit_note, content_hash)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [spaceName, relativePath, byRole, editKind, note, hash],
-  );
-}
-
 /**
  * Remove an entity (and cascade its outbound relationships) when the
  * file disappears from disk. Inbound edges (rows where this path is
  * `target_path`) survive intact — they become red links, since
- * `target_path` has no FK and isn't cascaded. Audit history under
- * this path survives too — the `entity_edits` table is intentionally
- * not FK'd.
+ * `target_path` has no FK and isn't cascaded.
  *
  * Returns whether the row existed before deletion.
  */
@@ -403,19 +374,7 @@ export async function removeByPath(space: Space, relativePath: string): Promise<
     WHERE space_name = ${space.name} AND source_path = ${relativePath}
     RETURNING source_hash
   `;
-  if (rows.length === 0) return false;
-
-  // Audit row for the deletion. We don't know the post-delete content
-  // hash (the file is gone), so content_hash stays NULL.
-  const ctx = getEditContext(space.name, relativePath);
-  const byRole = ctx?.role ?? "human";
-  await sql.query(
-    `INSERT OR IGNORE INTO entity_edits
-     (space_name, entity_path, by_role, edit_kind, edit_note)
-     VALUES (?, ?, ?, 'delete', ?)`,
-    [space.name, relativePath, byRole, ctx?.note ?? null],
-  );
-  return true;
+  return rows.length > 0;
 }
 
 /**

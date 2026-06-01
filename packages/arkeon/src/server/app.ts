@@ -11,7 +11,6 @@ import { createSql } from "./lib/sql.js";
 import { LLMS_TXT } from "./lib/llms-txt.js";
 import { spacesRouter } from "./routes/spaces.js";
 import { spaceScopedRouter } from "./routes/space-scoped.js";
-import { inboxRouter } from "./routes/inbox.js";
 import { readerRouter } from "./routes/reader.js";
 
 export function createApp() {
@@ -40,10 +39,6 @@ export function createApp() {
 
   app.route("/spaces", spacesRouter);
   app.route("/", spaceScopedRouter);
-  // Inbox/source-write endpoints sit before the reader so the reader's
-  // `/:space/*` GET fallback never shadows them (it wouldn't anyway —
-  // distinct methods — but mounting order keeps the intent explicit).
-  app.route("/", inboxRouter);
   // The reader is mounted last because its `/:space/*` fallback should
   // only match URLs no other route has claimed.
   app.route("/", readerRouter);

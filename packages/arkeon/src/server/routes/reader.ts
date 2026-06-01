@@ -30,7 +30,7 @@ import { extname } from "node:path";
 import type { AppBindings } from "../types.js";
 import { ApiError } from "../lib/errors.js";
 import { createSql } from "../lib/sql.js";
-import { safeResolve } from "../lib/file-edits.js";
+import { safeResolve } from "../lib/path.js";
 import { shouldIgnorePath } from "../lib/fs-watcher.js";
 import { loadSpacesMap } from "../lib/spaces.js";
 import {

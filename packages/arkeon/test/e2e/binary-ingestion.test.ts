@@ -36,7 +36,6 @@ import { runMigrations } from "../../src/schema/migrate.js";
 import { writeAdaptersManifest } from "../../src/server/extractors/adapters.js";
 import { runExtraction } from "../../src/server/extractors/runner.js";
 import type { AdaptersManifest } from "../../src/server/extractors/types.js";
-import { applyEdit } from "../../src/server/lib/file-edits.js";
 import { closeDb, createSql, initDb } from "../../src/server/lib/sql.js";
 import {
   getEntity,
@@ -267,59 +266,6 @@ describeIfPython("runExtraction(pdf) with real PyMuPDF", () => {
       relativePath: "sources/old.pdf",
     });
     expect(outcome!.status).toBe("skipped");
-  });
-});
-
-describeIfPython("applyEdit dispatches runExtraction for ingestable assets", () => {
-  /**
-   * Regression guard for the lock-down PR: when `applyEdit` lands a
-   * PDF via the HTTP `/sources/from-url` endpoint or the agent's
-   * `add_source` tool, it must fire the extractor itself — the
-   * fs-watcher's redundant event sees `action: 'unchanged'` (we
-   * already synced) and skips its own dispatch. Without the dispatch
-   * from inside applyEdit, the PDF lands on disk but the sidecar
-   * never appears, so the editor never reads the paper.
-   *
-   * This test asserts the sidecar materialises after applyEdit
-   * returns, using the same fire-and-forget pattern the watcher uses.
-   */
-  it("fires extraction so the sidecar appears after a Buffer create", async () => {
-    const pdfPath = join(SPACE.watch_dir, "sources/dispatched.pdf");
-    buildMinimalPdf(pdfPath);
-    const pdfBytes = readFileSync(pdfPath);
-    // applyEdit() creates the file (write + sync). The fire-and-forget
-    // runExtraction lives inside the create branch; we delete the
-    // pre-built file first so applyEdit does the writing itself —
-    // exactly the path the HTTP endpoint takes.
-    rmSync(pdfPath);
-
-    await applyEdit(
-      SPACE,
-      { kind: "create", path: "sources/dispatched.pdf", content: pdfBytes },
-      { role: "api", edit_kind: "create" },
-    );
-
-    // Wait for the fire-and-forget extraction to produce the sidecar.
-    // PyMuPDF on a minimal one-page PDF completes in <2s typically;
-    // 15s is a generous CI ceiling.
-    const sidecarAbs = join(SPACE.watch_dir, "sources/dispatched.pdf.html");
-    const deadline = Date.now() + 15_000;
-    while (Date.now() < deadline && !existsSync(sidecarAbs)) {
-      await new Promise((r) => setTimeout(r, 100));
-    }
-    expect(existsSync(sidecarAbs)).toBe(true);
-
-    // Sidecar got indexed as kind='text' and carries the handler tag —
-    // proves the full pipeline (write → sync → extract → sync sidecar)
-    // ran, not just a stub failure.
-    const sidecar = await getEntity(SPACE.name, "sources/dispatched.pdf.html");
-    expect(sidecar).not.toBeNull();
-    expect(sidecar!.kind).toBe("text");
-    const tags =
-      typeof sidecar!.tags === "string"
-        ? JSON.parse(sidecar!.tags)
-        : sidecar!.tags;
-    expect(tags.extracted_by).toBe("pymupdf");
   });
 });
 

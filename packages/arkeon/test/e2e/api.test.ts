@@ -151,15 +151,6 @@ describe("Phase 1 API shape", () => {
     expect(chloroplast!.linked_from).toContain("wiki/photosynthesis.html");
   });
 
-  it("GET /:space/recent surfaces the entity_edits feed", async () => {
-    const res = await fetch(`${baseUrl}/${SPACE}/recent?limit=10`);
-    const body = (await res.json()) as { space: string; edits: Array<{ entity_path: string; by_role: string }> };
-    expect(body.space).toBe(SPACE);
-    expect(body.edits.length).toBeGreaterThan(0);
-    // Watcher-driven syncs attribute to "human" (no agent edit-context registered).
-    expect(body.edits.every((e) => e.by_role === "human")).toBe(true);
-  });
-
   it("GET /:space/search ripgreps wiki bodies", async () => {
     const res = await fetch(`${baseUrl}/${SPACE}/search?q=chloroplast`);
     const body = (await res.json()) as {
