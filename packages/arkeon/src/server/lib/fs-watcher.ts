@@ -207,7 +207,7 @@ const DEBOUNCE_MS = 500;
 export function shouldIgnorePath(relativePath: string): boolean {
   const parts = relativePath.split("/");
   for (const part of parts) {
-    // .sidecars/ is the v1 sidecar landing zone — sidecars must be
+    // .sidecars/ is the sidecar landing zone — sidecars must be
     // indexed (kind='text') so they feed FTS5. Every other dot-prefixed
     // path is skipped (.git, .arkeon, .env, dotfiles in general).
     if (part === ".sidecars") continue;

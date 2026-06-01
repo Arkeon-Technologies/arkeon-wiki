@@ -116,7 +116,7 @@ async function runExtractionInner(
 ): Promise<ExtractionOutcome> {
   const { watchedRoot, relativePath } = opts;
   const absPath = join(watchedRoot, relativePath);
-  // v1 sidecars live in .sidecars/<mirrored-path>.html so they don't
+  // Sidecars live in .sidecars/<mirrored-path>.html so they don't
   // clutter the source tree alongside the binaries.
   const sidecarRelPath = `.sidecars/${relativePath}.html`;
   const sidecarAbsPath = join(watchedRoot, sidecarRelPath);

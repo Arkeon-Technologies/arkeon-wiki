@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The v1 HTTP API surface — six commands.
+ * The substrate HTTP API surface — six commands.
  *
  *   POST /query        { folder?, kinds?, has_tag?[], not_tag?[], text?, limit?, offset? }
  *   POST /tag          { path, key, value? }

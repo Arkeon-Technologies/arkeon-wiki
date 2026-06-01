@@ -17,7 +17,7 @@
  * process, which is wasteful and bounds the maximum sidecar size by
  * memory pressure. Writing direct to disk takes that off the table.
  *
- * No escalation chain in v1 — when text extraction is sparse, the
+ * No escalation chain today — when text extraction is sparse, the
  * page-render PNG is addressable from the sidecar (it lives in
  * .sidecars/<file>.assets/) so callers can read it directly. That's
  * the OCR-by-vision path.

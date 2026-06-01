@@ -233,7 +233,7 @@ async function runInstallDeps(opts: InstallDepsCliOptions): Promise<void> {
 
 function venvPython(venvDir: string): string {
   // Cross-platform: venvs put the executable in `bin/` (POSIX) or
-  // `Scripts/` (Windows). We only support macOS + Linux in v0.
+  // `Scripts/` (Windows). We only support macOS + Linux today.
   return process.platform === "win32"
     ? join(venvDir, "Scripts", "python.exe")
     : join(venvDir, "bin", "python");

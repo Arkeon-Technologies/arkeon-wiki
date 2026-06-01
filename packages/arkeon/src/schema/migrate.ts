@@ -37,12 +37,13 @@ export async function runMigrations(opts: MigrateOptions): Promise<void> {
 
   const db = initDb(opts.dbPath);
 
-  // v0 → v1 detector. v0 shipped `entities`/`relationships`/`spaces`/
-  // `entity_edits`; v1 ships `artifacts`/`tags`/`links`/`fts_artifacts`.
-  // If the DB has the v0 shape, the migration ledger says
-  // `001-foundation.sql` is already applied (but the v1 file is a
-  // totally different schema), so we'd skip it and start INSERTing
-  // into tables that don't exist. Fail loud with an actionable hint.
+  // Legacy-schema detector. The old schema shipped `entities`/
+  // `relationships`/`spaces`/`entity_edits`; the substrate ships
+  // `artifacts`/`tags`/`links`/`fts_artifacts`. If the DB has the
+  // legacy shape, the migration ledger says `001-foundation.sql` is
+  // already applied (but the current file is a totally different
+  // schema), so we'd skip it and start INSERTing into tables that
+  // don't exist. Fail loud with an actionable hint.
   const tables = new Set(
     (db.prepare(
       "SELECT name FROM sqlite_master WHERE type='table'",
@@ -50,7 +51,7 @@ export async function runMigrations(opts: MigrateOptions): Promise<void> {
   );
   if (tables.has("entities") && !tables.has("artifacts")) {
     throw new Error(
-      `v0 schema detected at ${opts.dbPath}. v1 is a destructive reset — ` +
+      `Legacy schema detected at ${opts.dbPath}. The substrate is a destructive reset — ` +
         `the DB is a pure index of filesystem state and rebuilds in seconds. ` +
         `Run: rm "${opts.dbPath}" && arkeon-wiki up`,
     );

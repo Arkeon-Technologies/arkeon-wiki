@@ -20,7 +20,7 @@ Every file the watcher sees lands in the `artifacts` table keyed by its path rel
 - HTML files: `<title>` + `<meta>` tags go into `properties`; `<a class="wikilink">` anchors become graph edges with optional `data-*` citation metadata captured in `links.attrs` JSON.
 - Markdown: `[[X]]` and `[[X|Display]]` wikilinks resolve by shortest-unique-basename match against the index.
 - Text files (code, configs, logs, ...): indexed for FTS5 search; no link extraction.
-- Binaries (PDFs in v1): indexed as `kind='asset'` so links resolve. An HTML sidecar lands at `.sidecars/<mirrored-path>.html` (run `arkeon-wiki install-deps` once to bootstrap the PyMuPDF venv).
+- Binaries (PDFs today): indexed as `kind='asset'` so links resolve. An HTML sidecar lands at `.sidecars/<mirrored-path>.html` (run `arkeon-wiki install-deps` once to bootstrap the PyMuPDF venv).
 
 The filesystem is the source of truth. SQLite is the index. Delete a file → its row goes. Edit a file → re-sync. No manual commands.
 

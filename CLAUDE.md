@@ -1,4 +1,4 @@
-# arkeon-wiki (v1)
+# arkeon-wiki
 
 Filesystem-first **substrate** for agent harnesses. Point the daemon at one directory; it watches files, indexes them into SQLite, and exposes a small JSON API. External harnesses (Hermes, OpenClaw, Claude Code, custom) own the agent loop. Arkeon is just the substrate.
 
@@ -10,7 +10,7 @@ Filesystem-first **substrate** for agent harnesses. Point the daemon at one dire
 2. You add/edit/delete files anywhere under the watched root — the watcher syncs to SQLite automatically.
 3. HTML files use `<title>` + `<meta>` tags for metadata. `<a class="wikilink" href="./X">` anchors become link rows with optional `data-*` citation metadata.
 4. Markdown `[[X]]` syntax also produces link rows (shortest-unique-basename resolution).
-5. Binary files (PDFs in v1) auto-extract to HTML sidecars under `.sidecars/<mirrored-path>.html`.
+5. Binary files (PDFs today) auto-extract to HTML sidecars under `.sidecars/<mirrored-path>.html`.
 
 The filesystem is the source of truth. SQLite is the index. There is no write API — drop a file in the watched root and the watcher indexes it.
 
@@ -22,7 +22,7 @@ One npm workspace, published as `arkeon-wiki` on npm.
   - `src/index.ts` — CLI entry (commander).
   - `src/cli/commands/local/` — daemon lifecycle (up, down, start, stop, status, ls, logs, install, uninstall, install-deps).
   - `src/cli/lib/` — instances registry, paths, service install helpers.
-  - `src/server/app.ts` — Hono app with the v1 routes.
+  - `src/server/app.ts` — Hono app with the substrate routes.
   - `src/server/server.ts` — API startup, watcher wiring.
   - `src/server/routes/` — `space-scoped.ts` (the six commands), `reader.ts` (directory browser).
   - `src/server/lib/` — sync, entities, fs-watcher, html-links, md-links, reader, path, html-meta, sql.
@@ -137,7 +137,7 @@ E2e tests spin up the API in-process against a temp watched root.
 
 - `~/.arkeon-wiki/` — default instance home (DB, pidfile, log).
 - `~/.arkeon-wiki/<name>/` — named instance home.
-- `~/.arkeon-wiki/.env` — user-global env file (write API keys here if needed; the substrate itself has no auth in v0).
+- `~/.arkeon-wiki/.env` — user-global env file (write API keys here if needed; the substrate itself has no auth).
 - `~/.arkeon-wiki/python/` — managed Python venv bootstrapped by `install-deps`.
 - `~/.arkeon-wiki/adapters.json` — versioned manifest of resolved extractor dependencies.
 
@@ -145,11 +145,11 @@ Override the state dir with `ARKEON_WIKI_HOME` env var or `--data-dir`. Override
 
 ## Bind posture
 
-The API binds to `127.0.0.1` by default — loopback only. Override with `ARKEON_WIKI_HOST=0.0.0.0` to expose cross-host. There is no auth in v0; deferred until customer demand.
+The API binds to `127.0.0.1` by default — loopback only. Override with `ARKEON_WIKI_HOST=0.0.0.0` to expose cross-host. There is no auth yet; deferred until customer demand.
 
 ## Schema migrations
 
-`src/schema/001-foundation.sql` is the v1 reset point. The DB is a pure index of filesystem state; if anything corrupts, `rm ~/.arkeon-wiki/data/arke.db && arkeon-wiki up` rebuilds the index from disk in seconds.
+`src/schema/001-foundation.sql` is the substrate reset point. The DB is a pure index of filesystem state; if anything corrupts, `rm ~/.arkeon-wiki/data/arke.db && arkeon-wiki up` rebuilds the index from disk in seconds.
 
 `json_extract` / `json_each` and FTS5 require SQLite 3.38+. better-sqlite3 bundles SQLite, so this is satisfied at the application level.
 
@@ -158,6 +158,6 @@ The API binds to `127.0.0.1` by default — loopback only. Override with `ARKEON
 - **Agent runtime** — external harnesses own the loop. Arkeon doesn't ship agents.
 - **Write API** — no `POST /inbox`, no `PUT /sources/*`. Writes go through the filesystem.
 - **Auth** — deferred until a customer shape demands it.
-- **DOCX / EML extractors** — only PDF in v1; the handler interface is in place for more.
+- **DOCX / EML extractors** — only PDF today; the handler interface is in place for more.
 - **Quote integrity validation** (`data-quote` exists in target).
 - **Rename handling** for backlinks (rename = redlinks on the new path until the inbound articles get updated).

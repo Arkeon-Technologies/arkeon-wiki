@@ -17,7 +17,7 @@
  * Resolution rules:
  *   - External URLs (any scheme) → dropped.
  *   - Fragments (`#section`) → dropped.
- *   - Server-absolute paths (`/foo/bar`) → dropped (v1 has one watched
+ *   - Server-absolute paths (`/foo/bar`) → dropped (single watched
  *     root; treat absolute paths as out-of-scope).
  *   - Relative paths → resolved against the article's directory.
  *   - Resolved paths that escape the watched root → dropped.

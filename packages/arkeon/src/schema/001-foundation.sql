@@ -1,11 +1,12 @@
 -- Copyright (c) 2026 Arkeon Technologies, Inc.
 -- SPDX-License-Identifier: Apache-2.0
 --
--- v1 foundation. Filesystem-first substrate: one watched root, path-keyed
+-- Substrate foundation. Filesystem-first: one watched root, path-keyed
 -- artifacts, agent-applied tags, link graph with data-* attribute capture,
 -- FTS5 over text-kind artifact contents.
 --
--- v1 is a destructive reset. Anyone with v0 state runs
+-- This is a destructive reset relative to the legacy schema. Anyone with
+-- pre-substrate state runs
 -- `rm ~/.arkeon-wiki/data/arke.db && arkeon-wiki up` — the DB is a pure
 -- index of filesystem state and rebuilds from disk in seconds.
 

@@ -6,7 +6,7 @@
  * Hand-maintained — update when routes or conventions change.
  */
 
-export const LLMS_TXT = `# arkeon-wiki v1
+export const LLMS_TXT = `# arkeon-wiki
 
 A filesystem-first substrate for agent harnesses. Point the daemon at
 ONE directory; it watches files, indexes them into SQLite, and exposes
@@ -60,7 +60,7 @@ data-cite-type="evidence" href="./paper.pdf.html">paper</a>\`. Every
 
 ## Sidecars
 
-Binary files (PDFs in v1; more handlers in future) auto-generate an
+Binary files (PDFs today; more handlers in future) auto-generate an
 HTML sidecar at \`.sidecars/<mirrored-path>.html\`. The sidecar is
 indexed as \`kind='text'\` and feeds FTS5. Links to the binary work
 because the binary itself is also indexed (as \`kind='asset'\`).
@@ -183,7 +183,7 @@ up automatically.
     watcher indexes it.
   - No \`POST /spaces\`. Spaces are just top-level subdirs.
   - No \`/recent\` audit feed. Use \`git log\` or filesystem mtimes.
-  - No authentication in v0; deferred until a customer shape demands
+  - No authentication yet; deferred until a customer shape demands
     it. The daemon binds to 127.0.0.1 by default — override with
     \`ARKEON_WIKI_HOST=0.0.0.0\` to expose cross-host.
 `;

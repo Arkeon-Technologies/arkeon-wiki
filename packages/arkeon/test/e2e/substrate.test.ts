@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * End-to-end smoke test for the v1 substrate surface.
+ * End-to-end smoke test for the substrate surface.
  *
  * Spins up the API in-process against a temp watched root, lets the
  * watcher reconcile, then exercises the six commands plus the reader.
@@ -22,7 +22,7 @@ let workdir: string;
 let app: ReturnType<typeof createApp>;
 
 beforeAll(async () => {
-  workdir = mkdtempSync(join(tmpdir(), "arkeon-v1-"));
+  workdir = mkdtempSync(join(tmpdir(), "arkeon-substrate-"));
   const dbPath = join(workdir, "arke.db");
   initDb(dbPath);
   await runMigrations({ dbPath });
@@ -52,7 +52,7 @@ afterAll(async () => {
   rmSync(workdir, { recursive: true, force: true });
 });
 
-describe("v1 substrate", () => {
+describe("substrate", () => {
   it("indexes artifacts with full relative paths", async () => {
     const sql = createSql();
     const rows = await sql`SELECT path, kind FROM artifacts ORDER BY path`;

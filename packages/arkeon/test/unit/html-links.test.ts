@@ -41,7 +41,7 @@ describe("resolveHref", () => {
     expect(resolveHref("//example.com/x", "wiki/foo.html")).toBeNull();
   });
 
-  it("drops server-absolute paths (single watched root in v1)", () => {
+  it("drops server-absolute paths (single watched root)", () => {
     expect(resolveHref("/other-space/wiki/foo.html", "wiki/foo.html")).toBeNull();
   });
 

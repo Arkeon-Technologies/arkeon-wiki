@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Query primitives over the v1 schema (artifacts / tags / links).
+ * Query primitives over the substrate schema (artifacts / tags / links).
  *
  * Exposed via the six-command HTTP layer in routes/space-scoped.ts.
  * `listArtifacts` powers POST /query; `setTag` / `deleteTag` /
