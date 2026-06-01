@@ -23,6 +23,8 @@ export interface QueryOptions {
   has_tag?: string[] | null;
   /** Tag keys (or "key:value" strings) that must NOT be present. */
   not_tag?: string[] | null;
+  /** FTS5 match query over artifact body text. */
+  text?: string | null;
   /** Substring of the artifact path (case-insensitive). */
   path_contains?: string | null;
   /** Substring of the artifact label (case-insensitive). */
@@ -120,6 +122,10 @@ export async function listArtifacts(opts: QueryOptions): Promise<ListResult> {
         params.push(key, value);
       }
     }
+  }
+  if (opts.text) {
+    where.push("EXISTS (SELECT 1 FROM fts_artifacts f WHERE f.path = a.path AND f.text MATCH ?)");
+    params.push(opts.text);
   }
 
   const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
