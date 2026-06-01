@@ -29,8 +29,8 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { deleteEntityTag, getEntity, setEntityTag } from "../lib/entities.js";
-import { removeByPath, syncFile, type Space } from "../lib/sync.js";
+import { deleteTag, getArtifact, setTag } from "../lib/entities.js";
+import { removeByPath, syncFile } from "../lib/sync.js";
 
 import { requireAdaptersManifest } from "./adapters.js";
 import { handlerFor, INGESTABLE_EXTENSIONS } from "./index.js";
@@ -79,8 +79,8 @@ const EXTRACTED_BY_FAILED = "failed";
 const FAILED_FOR_BINARY_HASH_TAG = "failed_for_binary_hash";
 
 export interface RunExtractionOptions {
-  space: Space;
-  /** Space-relative path to the binary that landed on disk. */
+  watchedRoot: string;
+  /** Relative path to the binary that landed on disk. */
   relativePath: string;
 }
 
@@ -105,7 +105,7 @@ export async function runExtraction(
   const handler = handlerFor(opts.relativePath);
   if (!handler) return null;
 
-  return withPathLock(`extract::${opts.space.name}::${opts.relativePath}`, () =>
+  return withPathLock(`extract::${opts.relativePath}`, () =>
     runExtractionInner(opts, handler),
   );
 }
@@ -114,10 +114,10 @@ async function runExtractionInner(
   opts: RunExtractionOptions,
   handler: FileHandler,
 ): Promise<ExtractionOutcome> {
-  const { space, relativePath } = opts;
-  const absPath = join(space.watch_dir, relativePath);
+  const { watchedRoot, relativePath } = opts;
+  const absPath = join(watchedRoot, relativePath);
   const sidecarRelPath = `${relativePath}.html`;
-  const sidecarAbsPath = join(space.watch_dir, sidecarRelPath);
+  const sidecarAbsPath = join(watchedRoot, sidecarRelPath);
   // assetsRelDir is the dir basename only — that's what the script
   // embeds in <img src> paths (sidecar lives in the same parent dir).
   const assetsRelDir = `${baseName(relativePath)}.assets`;
@@ -131,7 +131,7 @@ async function runExtractionInner(
   // Re-extraction skip: if an existing sidecar was authored by hand
   // (no extracted_by tag) or explicitly tagged "manual", leave it
   // alone. Users can force re-extraction by deleting the sidecar.
-  const skipReason = await shouldSkipExisting(space, relativePath, sidecarRelPath);
+  const skipReason = await shouldSkipExisting(relativePath, sidecarRelPath);
   if (skipReason) {
     return { status: "skipped", reason: skipReason };
   }
@@ -164,7 +164,6 @@ async function runExtractionInner(
     const result = await handler.extract({
       absPath,
       relativePath,
-      spaceName: space.name,
       adapters,
       assetsDir: stagingDir,
       assetsRelDir,
@@ -184,7 +183,7 @@ async function runExtractionInner(
       // pointing at the prior extraction's files.
       for (const stale of readdirSync(assetsAbsDir)) {
         try {
-          await removeByPath(space, `${assetsSpaceRelDir}/${stale}`);
+          await removeByPath(`${assetsSpaceRelDir}/${stale}`);
         } catch {
           /* ignore — best-effort cleanup */
         }
@@ -203,7 +202,7 @@ async function runExtractionInner(
     for (const assetName of readdirSync(assetsAbsDir)) {
       const assetSpaceRelPath = `${assetsSpaceRelDir}/${assetName}`;
       try {
-        await syncFile(space, assetSpaceRelPath);
+        await syncFile(watchedRoot, assetSpaceRelPath);
       } catch (err) {
         log(
           "warn",
@@ -213,19 +212,11 @@ async function runExtractionInner(
     }
 
     writeSidecarAtomic(sidecarAbsPath, result.html);
-    await syncFile(space, sidecarRelPath);
+    await syncFile(watchedRoot, sidecarRelPath);
 
-    // Tag the sidecar so re-extraction skips manual overrides and so
-    // we can identify failed vs. successful sidecars later. Also clear
-    // any stale failed-hash tag from a previous failure so a future
-    // failure can't accidentally read it as fresh.
-    await setEntityTag(
-      space.name,
-      sidecarRelPath,
-      EXTRACTED_BY_TAG,
-      result.extractedBy,
-    );
-    await deleteEntityTag(space.name, sidecarRelPath, FAILED_FOR_BINARY_HASH_TAG);
+    // Tag the sidecar so re-extraction skips manual overrides.
+    await setTag(sidecarRelPath, EXTRACTED_BY_TAG, result.extractedBy);
+    await deleteTag(sidecarRelPath, FAILED_FOR_BINARY_HASH_TAG);
 
     const assets = readdirSync(assetsAbsDir);
     log(
@@ -264,25 +255,11 @@ async function runExtractionInner(
 
     try {
       writeSidecarAtomic(sidecarAbsPath, stubHtml);
-      await syncFile(space, sidecarRelPath);
-      await setEntityTag(
-        space.name,
-        sidecarRelPath,
-        EXTRACTED_BY_TAG,
-        EXTRACTED_BY_FAILED,
-      );
-      // Stamp the binary's current hash so future watcher events on
-      // the same content skip the retry loop. The binary entity was
-      // synced before this extractor fired (kind='asset' path), so
-      // its source_hash is fresh.
-      const binary = await getEntity(space.name, relativePath);
+      await syncFile(watchedRoot, sidecarRelPath);
+      await setTag(sidecarRelPath, EXTRACTED_BY_TAG, EXTRACTED_BY_FAILED);
+      const binary = await getArtifact(relativePath);
       if (binary?.source_hash) {
-        await setEntityTag(
-          space.name,
-          sidecarRelPath,
-          FAILED_FOR_BINARY_HASH_TAG,
-          binary.source_hash,
-        );
+        await setTag(sidecarRelPath, FAILED_FOR_BINARY_HASH_TAG, binary.source_hash);
       }
     } catch (stubErr) {
       console.error(
@@ -312,55 +289,33 @@ async function runExtractionInner(
  *   the content changed or we want a fresh run).
  */
 async function shouldSkipExisting(
-  space: Space,
   binaryRelPath: string,
   sidecarRelPath: string,
 ): Promise<string | null> {
-  const entity = await getEntity(space.name, sidecarRelPath);
+  const entity = await getArtifact(sidecarRelPath);
   if (!entity) return null;
 
-  const tags = parseTagsBag(entity.tags);
-  const extractedBy = tags[EXTRACTED_BY_TAG];
+  const extractedBy = entity.tags[EXTRACTED_BY_TAG];
 
   if (extractedBy === undefined || extractedBy === null) {
     return "sidecar exists without extracted_by tag (treated as manual)";
   }
-  const extractedByStr =
-    typeof extractedBy === "string" ? extractedBy.toLowerCase() : null;
+  const extractedByStr = extractedBy.toLowerCase();
   if (extractedByStr === "manual") {
     return "sidecar tagged extracted_by=manual";
   }
   if (extractedByStr === EXTRACTED_BY_FAILED) {
-    // Failed sidecar — only skip if we failed on the binary's CURRENT
-    // content. If the user touched / edited / replaced the binary, the
-    // hashes differ and we retry.
-    const failedFor = tags[FAILED_FOR_BINARY_HASH_TAG];
+    const failedFor = entity.tags[FAILED_FOR_BINARY_HASH_TAG];
     if (typeof failedFor !== "string" || failedFor.length === 0) {
-      // Old failed sidecar from before we started stamping the hash —
-      // fall through and retry once, which will re-stamp it.
       return null;
     }
-    const binary = await getEntity(space.name, binaryRelPath);
+    const binary = await getArtifact(binaryRelPath);
     if (binary && binary.source_hash === failedFor) {
       return "sidecar previously failed on this content (extracted_by=failed)";
     }
-    // Hash differs → content changed → retry.
     return null;
   }
   return null;
-}
-
-function parseTagsBag(
-  tags: Record<string, unknown> | string,
-): Record<string, unknown> {
-  if (typeof tags === "string") {
-    try {
-      return JSON.parse(tags) as Record<string, unknown>;
-    } catch {
-      return {};
-    }
-  }
-  return tags ?? {};
 }
 
 function baseName(relativePath: string): string {

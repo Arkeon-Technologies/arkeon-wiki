@@ -40,6 +40,7 @@ import { runMigrations } from "../../../schema/index.js";
 interface StartOptions {
   name?: string;
   port?: string;
+  watchDir?: string;
 }
 
 export function registerStartCommand(program: Command): void {
@@ -51,6 +52,7 @@ export function registerStartCommand(program: Command): void {
       "Named instance — isolates state under ~/.arkeon-wiki/<name>/ and derives a unique port from the name",
     )
     .option("--port <port>", `API port (default: ${DEFAULT_API_PORT}, or derived from --name)`)
+    .option("--watch-dir <path>", "Directory to watch (default: ARKEON_WIKI_WATCH_DIR env or cwd)")
     .action(async (options: StartOptions) => {
       await runStart(options);
     });
@@ -60,6 +62,8 @@ async function runStart(options: StartOptions): Promise<void> {
   const named = options.name ? applyName(options.name) : null;
   const apiPort = Number(options.port ?? named?.port ?? DEFAULT_API_PORT);
   const instanceName = options.name ?? DEFAULT_INSTANCE_NAME;
+  const watchedRoot =
+    options.watchDir ?? process.env.ARKEON_WIKI_WATCH_DIR ?? process.cwd();
 
   const existingPid = readPidfile();
   if (existingPid && isProcessAlive(existingPid)) {
@@ -90,6 +94,7 @@ async function runStart(options: StartOptions): Promise<void> {
   }
   console.log(`              state dir: ${arkeonDir()}`);
   console.log(`              database:  ${db}`);
+  console.log(`              watching:  ${watchedRoot}`);
 
   // --- Shutdown handler ---
   let api: { stop: () => Promise<void> } | null = null;
@@ -139,6 +144,7 @@ async function runStart(options: StartOptions): Promise<void> {
   api = await startApi({
     port: apiPort,
     dbPath: db,
+    watchedRoot,
   });
 
   writePidfile(process.pid);

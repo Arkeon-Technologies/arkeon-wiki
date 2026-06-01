@@ -1,130 +1,100 @@
 -- Copyright (c) 2026 Arkeon Technologies, Inc.
 -- SPDX-License-Identifier: Apache-2.0
 --
--- v0 foundation. Path-keyed knowledge graph, no ULIDs except for
--- conversations (which have no on-disk file to derive identity from).
+-- v1 foundation. Filesystem-first substrate: one watched root, path-keyed
+-- artifacts, agent-applied tags, link graph with data-* attribute capture,
+-- FTS5 over text-kind artifact contents.
 --
--- Six tables, no migration history: this is the v0 reset point.
--- Anyone with in-flight state does `rm ~/.arkeon-wiki/data/arke.db`.
+-- v1 is a destructive reset. Anyone with v0 state runs
+-- `rm ~/.arkeon-wiki/data/arke.db && arkeon-wiki up` — the DB is a pure
+-- index of filesystem state and rebuilds from disk in seconds.
 
 -- ─────────────────────────────────────────────────────────────────────
--- 1. spaces — daemon-level: each space is one watched directory.
--- Name is the URL-visible identity; watch_dir is the local mapping.
+-- artifacts — every file the watcher indexes from a single watched root.
+--   path: forward-slash relative path from the watched root, including
+--         the top-level "space" segment (e.g. `iarpa/sources/doc.pdf`).
+--         Single-column PK; no `space_name` column.
+--   kind: 'text' (HTML wikis, MD, source, sidecar HTMLs — all feed FTS5)
+--       | 'asset' (PDFs, images, video, archives — addressable but
+--                  outside the search index).
+--   label: derived from <title> for HTML; basename otherwise.
+--   source_hash: SHA-256 of file bytes. Same meaning for text and asset.
+--   stat_fingerprint: cheap "mtime_ms-size_bytes" cache. When unchanged
+--                     across reads, the sync path can skip the content
+--                     hash entirely.
+--   properties: JSON bag of `<meta name="X" content="Y">` for HTML;
+--               `{file_type, size_bytes}` for assets.
 -- ─────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS spaces (
-  name TEXT PRIMARY KEY,
-  watch_dir TEXT NOT NULL UNIQUE,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- ─────────────────────────────────────────────────────────────────────
--- 2. entities — every file the watcher indexes. Path is the identity.
---   type: 'wiki' (HTML article under wiki/, authored by the writer)
---       | 'file' (everything else — sources, notes, images, anything)
---   label: <title> for wikis, basename for sources.
---   properties: JSON map of <meta name="..." content="..."> tags.
--- ─────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS entities (
-  space_name TEXT NOT NULL REFERENCES spaces(name) ON DELETE CASCADE,
-  source_path TEXT NOT NULL,
-  type TEXT NOT NULL CHECK (type IN ('wiki', 'file')),
+CREATE TABLE IF NOT EXISTS artifacts (
+  path TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('text', 'asset')),
   label TEXT,
   source_hash TEXT NOT NULL,
+  stat_fingerprint TEXT,
   properties TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  PRIMARY KEY (space_name, source_path)
-);
-
--- ─────────────────────────────────────────────────────────────────────
--- 3. relationships — every <a href> the link extractor resolved.
--- No FK on target_path: a row whose target has no matching entity is
--- a red link. Resolution is a LEFT JOIN at query time.
--- ─────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS relationships (
-  space_name TEXT NOT NULL,
-  source_path TEXT NOT NULL,
-  target_path TEXT NOT NULL,
-  link_text TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  PRIMARY KEY (space_name, source_path, target_path),
-  FOREIGN KEY (space_name, source_path)
-    REFERENCES entities(space_name, source_path) ON DELETE CASCADE
-);
-
--- ─────────────────────────────────────────────────────────────────────
--- 4. entity_edits — audit log. Not FK'd to entities so history survives
--- entity deletion (useful for the recent-edits feed). by_role='human'
--- when fs-watcher syncs a file the agent didn't write.
--- ─────────────────────────────────────────────────────────────────────
--- `at` carries millisecond precision (strftime '%f') so two edits to the
--- same path within a second don't collide on the composite PK. ISO-8601
--- TEXT sorts chronologically alongside the simpler datetime('now') used
--- elsewhere — just with finer resolution where it matters.
-CREATE TABLE IF NOT EXISTS entity_edits (
-  space_name TEXT NOT NULL,
-  entity_path TEXT NOT NULL,
-  by_role TEXT NOT NULL,
-  edit_kind TEXT NOT NULL,
-  edit_note TEXT,
-  content_hash TEXT,
-  at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-  PRIMARY KEY (space_name, entity_path, at)
-);
-
--- ─────────────────────────────────────────────────────────────────────
--- 5. conversations — chat sessions. The one v0 table where ID is the
--- right model: conversations have no on-disk analog. Phase 3 wires the
--- routes; Phase 1 lays the schema so Phase 3 is purely additive.
--- article_path nullable: null = general chat, not anchored to an article.
--- ─────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS conversations (
-  id TEXT PRIMARY KEY,
-  space_name TEXT NOT NULL REFERENCES spaces(name) ON DELETE CASCADE,
-  article_path TEXT,
-  title TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- ─────────────────────────────────────────────────────────────────────
--- 6. conversation_messages — content stores the full AI SDK message
--- shape (text + tool_calls + tool_results) as JSON for replay.
+-- tags — agent-applied bookkeeping. Set via POST /tag, cleared via
+-- POST /untag, queried via GET /tags?path=... and as a filter on
+-- POST /query (has_tag / not_tag arrays).
+--
+-- Convention is `key:value` strings throughout (e.g.
+-- `processed-by:editor`, `status:feedback`, `replies_to:<artifact>`).
+-- "No tag" means "unprocessed" — workers query for artifacts missing
+-- their `processed-by:X` tag.
 -- ─────────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS conversation_messages (
-  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  seq INTEGER NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool')),
-  content TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS tags (
+  path TEXT NOT NULL REFERENCES artifacts(path) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  value TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  PRIMARY KEY (conversation_id, seq)
+  PRIMARY KEY (path, key)
+);
+
+-- ─────────────────────────────────────────────────────────────────────
+-- links — every `<a class="wikilink">` (HTML) or `[[X]]` (Markdown) the
+-- extractor resolved. A row whose `target_path` has no matching
+-- artifacts entry is a redlink — surfaced via GET /redlinks.
+--
+-- attrs: JSON map of `data-*` attributes from the anchor (data-quote,
+-- data-page, data-cite-type, …). Captured verbatim with the `data-`
+-- prefix stripped from keys.
+-- ─────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS links (
+  source_path TEXT NOT NULL REFERENCES artifacts(path) ON DELETE CASCADE,
+  target_path TEXT NOT NULL,
+  link_text TEXT,
+  attrs TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (source_path, target_path)
+);
+
+-- ─────────────────────────────────────────────────────────────────────
+-- fts_artifacts — FTS5 over text-kind artifact contents. Populated by
+-- syncFile at indexing time. UNINDEXED on path keeps it a lookup
+-- column, not a tokenized search column.
+--
+-- POST /query with `text` runs `MATCH ?` and joins back to artifacts.
+-- ─────────────────────────────────────────────────────────────────────
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_artifacts USING fts5(
+  path UNINDEXED,
+  text,
+  tokenize = 'porter unicode61'
 );
 
 -- ─────────────────────────────────────────────────────────────────────
 -- Indexes
 -- ─────────────────────────────────────────────────────────────────────
 
--- Hot path for the red-link aggregation: GROUP BY target_path.
--- Also covers inbound counts on entity listing.
-CREATE INDEX IF NOT EXISTS idx_relationships_target
-  ON relationships(space_name, target_path);
+-- Redlink aggregation: GROUP BY target_path.
+CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_path);
 
--- Recent-edits feed and "unprocessed sources" sort.
-CREATE INDEX IF NOT EXISTS idx_entities_updated
-  ON entities(space_name, updated_at);
+-- query?has_tag / not_tag composition.
+CREATE INDEX IF NOT EXISTS idx_tags_key ON tags(key);
+CREATE INDEX IF NOT EXISTS idx_tags_key_value ON tags(key, value);
 
--- Entity-by-type filter on listing (e.g. type='file' for unprocessed sources).
-CREATE INDEX IF NOT EXISTS idx_entities_type
-  ON entities(space_name, type);
-
--- Recent-edits feed across the whole space.
-CREATE INDEX IF NOT EXISTS idx_entity_edits_at
-  ON entity_edits(space_name, at);
-
--- Per-entity history lookup ("show me edits to this path").
-CREATE INDEX IF NOT EXISTS idx_entity_edits_entity_at
-  ON entity_edits(space_name, entity_path, at DESC);
-
--- Conversation list per space, newest first.
-CREATE INDEX IF NOT EXISTS idx_conversations_space_updated
-  ON conversations(space_name, updated_at DESC);
+-- kind filter on listing.
+CREATE INDEX IF NOT EXISTS idx_artifacts_kind ON artifacts(kind);

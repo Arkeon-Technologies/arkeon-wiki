@@ -21,7 +21,7 @@ import {
   isIngestable,
   runExtraction,
 } from "../extractors/runner.js";
-import { syncFile, syncDirectory, removeByPath, type Space } from "./sync.js";
+import { syncFile, syncDirectory, removeByPath } from "./sync.js";
 
 // Directories to skip during walk + watch.
 const IGNORE_DIRS = new Set([".arkeon", ".git", "node_modules", ".claude", "__pycache__", ".venv"]);
@@ -216,7 +216,8 @@ export function sniffIsText(absPath: string): boolean {
   }
 }
 
-const watchers = new Map<string, FSWatcher>();
+let activeWatcher: FSWatcher | null = null;
+let activeWatchedRoot: string | null = null;
 const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 const DEBOUNCE_MS = 500;
@@ -334,42 +335,34 @@ export function walkEligibleFiles(root: string, prefix = ""): string[] {
 }
 
 /**
- * Start watching a space directory.
+ * Start watching the daemon's single root.
  *
  * First runs a full reconciliation (walk + syncDirectory), then starts
  * a live watcher for incremental changes.
  */
-export async function startWatching(space: Space): Promise<void> {
-  if (watchers.has(space.name)) {
-    console.log(`[watcher] Already watching space ${space.name}`);
+export async function startWatching(watchedRoot: string): Promise<void> {
+  if (activeWatcher) {
+    console.log(`[watcher] Already watching ${activeWatchedRoot}`);
     return;
   }
 
-  if (!existsSync(space.watch_dir)) {
-    console.warn(`[watcher] Directory not found: ${space.watch_dir} — skipping space ${space.name}`);
+  if (!existsSync(watchedRoot)) {
+    console.warn(`[watcher] Directory not found: ${watchedRoot}`);
     return;
   }
 
-  console.log(`[watcher] Reconciling space "${space.name}" (${space.watch_dir})`);
-  // Sweep any staging dirs left behind by a daemon crash mid-extraction.
-  // Best-effort; only nukes dirs untouched for >5 min so a slow in-flight
-  // extraction from a parallel process (shouldn't exist, but defensive)
-  // is safe.
-  cleanStaleStaging(space.watch_dir);
-  const files = walkEligibleFiles(space.watch_dir);
-  const summary = await syncDirectory(space, files);
+  console.log(`[watcher] Reconciling ${watchedRoot}`);
+  cleanStaleStaging(watchedRoot);
+  const files = walkEligibleFiles(watchedRoot);
+  const summary = await syncDirectory(watchedRoot, files);
   console.log(
     `[watcher] Reconciled: ${summary.created} created, ${summary.updated} updated, ` +
       `${summary.unchanged} unchanged, ${summary.removed} removed`,
   );
 
-  // After the initial sync, fire the extractor on every asset that has a
-  // registered handler. Re-extraction skip rules inside runExtraction
-  // mean already-processed sidecars short-circuit; this is just the
-  // bootstrap pass to cover assets that landed while the daemon was off.
   for (const relPath of files) {
     if (isIngestable(relPath)) {
-      runExtraction({ space, relativePath: relPath }).catch((err) => {
+      runExtraction({ watchedRoot, relativePath: relPath }).catch((err) => {
         console.error(
           `[ingest] bootstrap extraction failed for ${relPath}:`,
           (err as Error).message,
@@ -379,17 +372,13 @@ export async function startWatching(space: Space): Promise<void> {
   }
 
   try {
-    const watcher = watch(space.watch_dir, { recursive: true }, (_eventType, filename) => {
+    const watcher = watch(watchedRoot, { recursive: true }, (_eventType, filename) => {
       if (!filename) return;
 
       const relativePath = filename.replace(/\\/g, "/");
-      // Cheap pre-filter: drops hidden / ignored paths and known-binary
-      // extensions without I/O. The content sniff for unknown extensions
-      // happens inside handleFileEvent before syncFile, so deletes (where
-      // sniffing isn't possible) still flow through.
       if (!isPathPotentiallyEligible(relativePath)) return;
 
-      const absPath = join(space.watch_dir, relativePath);
+      const absPath = join(watchedRoot, relativePath);
       const existing = debounceTimers.get(absPath);
       if (existing) clearTimeout(existing);
 
@@ -397,58 +386,44 @@ export async function startWatching(space: Space): Promise<void> {
         absPath,
         setTimeout(() => {
           debounceTimers.delete(absPath);
-          handleFileEvent(space, relativePath);
+          handleFileEvent(watchedRoot, relativePath);
         }, DEBOUNCE_MS),
       );
     });
 
     watcher.on("error", (err) => {
-      console.error(`[watcher] Error in space "${space.name}":`, err.message);
+      console.error(`[watcher] Error in ${watchedRoot}:`, err.message);
     });
 
-    watchers.set(space.name, watcher);
-    console.log(`[watcher] Watching space "${space.name}" (${files.length} files)`);
+    activeWatcher = watcher;
+    activeWatchedRoot = watchedRoot;
+    console.log(`[watcher] Watching ${watchedRoot} (${files.length} files)`);
   } catch (err) {
-    console.error(`[watcher] Failed to start watching space "${space.name}":`, (err as Error).message);
+    console.error(`[watcher] Failed to start watching ${watchedRoot}:`, (err as Error).message);
   }
 }
 
-async function handleFileEvent(space: Space, relativePath: string): Promise<void> {
-  const absPath = join(space.watch_dir, relativePath);
+async function handleFileEvent(watchedRoot: string, relativePath: string): Promise<void> {
+  const absPath = join(watchedRoot, relativePath);
 
   if (existsSync(absPath)) {
-    // Skip events for directories. fs.watch with recursive:true emits
-    // rename events on both files AND the directories they sit in;
-    // syncFile would readFileSync the dir and throw EISDIR. (The
-    // directory's contained files generate their own events that we
-    // do process.)
     try {
       if (statSync(absPath).isDirectory()) return;
     } catch {
-      // race between event + delete — fall through, removeByPath
-      // path below will no-op
       return;
     }
-    // Full eligibility (may sniff content). A file that passes the
-    // path-only pre-filter but turns out to be binary on inspection
-    // gets dropped here — not indexed.
     if (!isEligibleFile(relativePath, absPath)) return;
     try {
-      const result = await syncFile(space, relativePath);
+      const result = await syncFile(watchedRoot, relativePath);
       if (result.action !== "unchanged") {
         console.log(`[watcher] ${result.action}: ${result.label} (${relativePath})`);
       }
-      // Asset with a registered extractor handler (PDF, future DOCX, etc.):
-      // fire-and-forget the extraction pipeline. The per-binary path lock
-      // inside runExtraction coalesces rapid edits; the sidecar's atomic
-      // write triggers a subsequent watcher event that syncs it as
-      // kind='text'.
       if (
         result.action !== "unchanged" &&
         result.kind === "asset" &&
         isIngestable(relativePath)
       ) {
-        runExtraction({ space, relativePath }).catch((err) => {
+        runExtraction({ watchedRoot, relativePath }).catch((err) => {
           console.error(
             `[ingest] extraction failed for ${relativePath}:`,
             (err as Error).message,
@@ -460,7 +435,7 @@ async function handleFileEvent(space: Space, relativePath: string): Promise<void
     }
   } else {
     try {
-      const removed = await removeByPath(space, relativePath);
+      const removed = await removeByPath(relativePath);
       if (removed) {
         console.log(`[watcher] removed: ${relativePath}`);
       }
@@ -470,18 +445,11 @@ async function handleFileEvent(space: Space, relativePath: string): Promise<void
   }
 }
 
-export async function stopWatching(spaceName: string): Promise<void> {
-  const watcher = watchers.get(spaceName);
-  if (watcher) {
-    watcher.close();
-    watchers.delete(spaceName);
-  }
-}
-
-export async function stopAllWatchers(): Promise<void> {
-  for (const [name, watcher] of watchers) {
-    watcher.close();
-    watchers.delete(name);
+export async function stopWatching(): Promise<void> {
+  if (activeWatcher) {
+    activeWatcher.close();
+    activeWatcher = null;
+    activeWatchedRoot = null;
   }
   for (const timer of debounceTimers.values()) {
     clearTimeout(timer);
@@ -489,14 +457,6 @@ export async function stopAllWatchers(): Promise<void> {
   debounceTimers.clear();
 }
 
-export async function startAllWatchers(): Promise<void> {
-  const { createSql } = await import("./sql.js");
-  const sql = createSql();
-  const spaces = await sql`
-    SELECT name, watch_dir FROM spaces WHERE watch_dir IS NOT NULL
-  `;
-
-  for (const space of spaces) {
-    await startWatching(space as unknown as Space);
-  }
+export function getWatchedRoot(): string | null {
+  return activeWatchedRoot;
 }

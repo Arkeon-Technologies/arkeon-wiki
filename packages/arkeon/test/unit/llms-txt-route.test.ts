@@ -50,17 +50,4 @@ describe("/llms.txt + /help routes", () => {
     expect(await res.text()).toBe(LLMS_TXT);
   });
 
-  it("POST /spaces rejects a space called 'help' so the route can't be shadowed", async () => {
-    const res = await app.fetch(
-      new Request("http://test/spaces", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "help", watch_dir: workdir }),
-      }),
-    );
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error: { code: string; message: string } };
-    expect(body.error.code).toBe("validation_error");
-    expect(body.error.message).toContain("reserved");
-  });
 });

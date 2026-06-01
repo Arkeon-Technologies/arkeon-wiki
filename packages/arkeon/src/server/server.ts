@@ -12,25 +12,15 @@ import { serve } from "@hono/node-server";
 import type { AddressInfo } from "node:net";
 
 import { createApp } from "./app.js";
-import { startAllWatchers, stopAllWatchers } from "./lib/fs-watcher.js";
+import { startWatching, stopWatching } from "./lib/fs-watcher.js";
 import { initDb, closeDb } from "./lib/sql.js";
 
 export interface ArkeonApiConfig {
   port?: number;
   dbPath?: string;
-  /**
-   * Interface to bind to. Defaults to `127.0.0.1` (loopback only) so a
-   * daemon on a multi-tenant host or a workstation on an untrusted LAN
-   * isn't reachable from elsewhere. Override with `ARKEON_WIKI_HOST`
-   * (e.g. `0.0.0.0` to listen on all interfaces, `::` for IPv6 wildcard,
-   * or a specific bind address) when an operator deliberately wants the
-   * daemon to be reachable cross-host.
-   *
-   * The daemon has no auth — anything that can reach the port can write
-   * to the corpus AND (since /sources/from-url) trigger arbitrary
-   * outbound HTTP(S) GETs from the daemon's network position. Loopback
-   * is the only safe default.
-   */
+  /** Absolute path to the single directory to watch. */
+  watchedRoot?: string;
+  /** Bind hostname. Defaults to 127.0.0.1 (loopback). */
   hostname?: string;
 }
 
@@ -70,13 +60,13 @@ export async function startApi(config: ArkeonApiConfig = {}): Promise<ArkeonApi>
 
   const address = server.address() as AddressInfo;
 
-  // Start file watchers for all registered spaces
-  await startAllWatchers();
+  const watchedRoot = config.watchedRoot ?? process.env.ARKEON_WIKI_WATCH_DIR ?? process.cwd();
+  await startWatching(watchedRoot);
 
   async function stop(opts: { drainTimeoutMs?: number } = {}): Promise<void> {
     const DRAIN_TIMEOUT_MS = opts.drainTimeoutMs ?? 10_000;
 
-    await stopAllWatchers();
+    await stopWatching();
     closeDb();
 
     const drainPromise = new Promise<void>((resolve, reject) =>

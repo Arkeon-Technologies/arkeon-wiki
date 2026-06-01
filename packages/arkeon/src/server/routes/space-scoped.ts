@@ -2,212 +2,127 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Space-scoped routes, mounted at `/:space/...`.
+ * The v1 HTTP API surface — six commands.
  *
- *   GET    /:space/entities                  filterable listing
- *   GET    /:space/entities/*                single entity by path (rest of URL)
- *   GET    /:space/redlinks                  red-link queue
- *   GET    /:space/recent                    entity_edits feed
- *   GET    /:space/search?q=...              keyword search
- *   GET    /:space/sources/scan              file inventory by extension
+ *   POST /query        { folder?, kinds?, has_tag?[], not_tag?[], text?, limit?, offset? }
+ *   POST /tag          { path, key, value? }
+ *   POST /untag        { path, key }
+ *   GET  /tags?path=...
+ *   GET  /backlinks?path=...
+ *   GET  /redlinks?folder=...
+ *
+ * Phase 5 polishes shapes; Phase 3+4 wires the basic implementations
+ * against the new artifacts/tags/links schema.
  */
 
-import { existsSync, readFileSync } from "node:fs";
 import { Hono } from "hono";
 
 import type { AppBindings } from "../types.js";
 import { ApiError } from "../lib/errors.js";
-import { createSql } from "../lib/sql.js";
-import { safeResolve } from "../lib/path.js";
 import {
-  getEntity,
-  listEntities,
-  listRedLinks,
-  parseEntityKinds,
-  parseEntityTypes,
+  deleteTag,
+  getArtifact,
+  getBacklinks,
+  listArtifacts,
+  listRedlinks,
+  parseKinds,
+  setTag,
 } from "../lib/entities.js";
-import {
-  MAX_QUERY_PATTERNS,
-  searchKeyword,
-  type KeywordSearchResult,
-} from "../lib/search.js";
-import { scanSources } from "../lib/sources-scan.js";
 
-export const spaceScopedRouter = new Hono<AppBindings>();
+export const apiRouter = new Hono<AppBindings>();
 
-async function spaceWatchDir(spaceName: string): Promise<string> {
-  const sql = createSql();
-  const rows = await sql`SELECT watch_dir FROM spaces WHERE name = ${spaceName}`;
-  if (rows.length === 0) {
-    throw new ApiError(404, "not_found", `Space '${spaceName}' not found`);
+function parseStringArray(raw: unknown, name: string): string[] | null {
+  if (raw == null) return null;
+  if (!Array.isArray(raw)) {
+    throw new ApiError(400, "validation_error", `${name} must be a string array`);
   }
-  return rows[0].watch_dir as string;
+  return raw.map((v, i) => {
+    if (typeof v !== "string") {
+      throw new ApiError(400, "validation_error", `${name}[${i}] must be a string`);
+    }
+    return v;
+  });
 }
 
-// ── /:space/entities ──────────────────────────────────────────────
-
-spaceScopedRouter.get("/:space/entities", async (c) => {
-  const space = c.req.param("space");
-  await spaceWatchDir(space); // 404 if missing
-
-  const result = await listEntities({
-    space_name: space,
-    types: parseEntityTypes(c.req.query("type")),
-    kinds: parseEntityKinds(c.req.query("kind")),
-    label_contains: c.req.query("label_contains"),
-    path_contains: c.req.query("path_contains"),
-    inbound_min: parseNumQuery(c.req.query("inbound_min"), "inbound_min"),
-    inbound_max: parseNumQuery(c.req.query("inbound_max"), "inbound_max"),
-    outbound_min: parseNumQuery(c.req.query("outbound_min"), "outbound_min"),
-    outbound_max: parseNumQuery(c.req.query("outbound_max"), "outbound_max"),
-    updated_since: c.req.query("updated_since"),
-    edited_by_role: c.req.query("edited_by_role"),
-    has_tag: c.req.query("has_tag"),
-    not_has_tag: c.req.query("not_has_tag"),
-    tag_equals: parseTagEquals(c.req.query("tag_equals")),
-    tag_current: c.req.query("tag_current"),
-    tag_outdated: c.req.query("tag_outdated"),
-    sort: c.req.query("sort"),
-    include_counts: (c.req.query("include") ?? "").split(",").includes("counts"),
-    limit: parseNumQuery(c.req.query("limit"), "limit"),
-    offset: parseNumQuery(c.req.query("offset"), "offset"),
-  });
-  return c.json(result);
-});
-
-// ── /:space/entities/* — single entity by path ────────────────────
-//
-// The path is everything after `/entities/` (e.g. `/demo/entities/wiki/foo.html`
-// → entity at `wiki/foo.html` in space `demo`). `?include=content` reads
-// the file body from disk.
-spaceScopedRouter.get("/:space/entities/*", async (c) => {
-  const space = c.req.param("space");
-  const watchDir = await spaceWatchDir(space);
-
-  // Strip `/:space/entities/` from the URL to get the entity path.
-  const url = new URL(c.req.url);
-  const prefix = `/${space}/entities/`;
-  const idx = url.pathname.indexOf(prefix);
-  const sourcePath = idx >= 0 ? url.pathname.slice(idx + prefix.length) : "";
-  if (!sourcePath) {
-    throw new ApiError(400, "validation_error", "missing entity path");
-  }
-  const decoded = decodeURIComponent(sourcePath);
-
-  const entity = await getEntity(space, decoded);
-  if (!entity) {
-    throw new ApiError(404, "not_found", `entity not found: ${decoded}`);
-  }
-
-  const result: Record<string, unknown> = { ...entity };
-  if ((c.req.query("include") ?? "").split(",").includes("content")) {
-    const abs = safeResolve(watchDir, decoded);
-    result.content = existsSync(abs) ? readFileSync(abs, "utf-8") : null;
-  }
-  return c.json(result);
-});
-
-// ── /:space/redlinks ──────────────────────────────────────────────
-
-spaceScopedRouter.get("/:space/redlinks", async (c) => {
-  const space = c.req.param("space");
-  await spaceWatchDir(space);
-
-  const result = await listRedLinks({
-    space_name: space,
-    limit: parseNumQuery(c.req.query("limit"), "limit"),
-    offset: parseNumQuery(c.req.query("offset"), "offset"),
-  });
-  return c.json(result);
-});
-
-// ── /:space/sources/scan ──────────────────────────────────────────
-// File inventory by extension. Partitions every file in the watch
-// directory into supported (the watcher indexes it) vs unsupported
-// (silently ignored) — the operator's signal to convert binary
-// sources to text before letting the agents loose. Cheap synchronous
-// walk; not paginated.
-
-spaceScopedRouter.get("/:space/sources/scan", async (c) => {
-  const space = c.req.param("space");
-  const watchDir = await spaceWatchDir(space);
-  const result = scanSources(watchDir);
-  return c.json({ space, watch_dir: watchDir, ...result });
-});
-
-// ── /:space/search ────────────────────────────────────────────────
-
-interface SearchResponse {
-  query: string | string[];
-  keyword: KeywordSearchResult;
-}
-
-spaceScopedRouter.get("/:space/search", async (c) => {
-  const space = c.req.param("space");
-  await spaceWatchDir(space);
-
-  const queries = c.req.queries("q");
-  if (!queries || queries.length === 0) {
-    throw new ApiError(400, "validation_error", "q is required");
-  }
-  if (queries.length > MAX_QUERY_PATTERNS) {
-    throw new ApiError(
-      400,
-      "validation_error",
-      `too many q parameters (${queries.length}); max is ${MAX_QUERY_PATTERNS}`,
-    );
-  }
-  const queryForKeyword = queries.length === 1 ? queries[0]! : queries;
-  const types = parseEntityTypes(c.req.query("type"));
-
-  const limit = parseNumQuery(c.req.query("limit"), "limit");
-  const maxSnippetsPerFile = parseNumQuery(c.req.query("snippets"), "snippets");
-  const regex = c.req.query("regex") === "true";
-
-  const keyword = await searchKeyword({
-    query: queryForKeyword,
-    spaceName: space,
-    types,
-    limit,
-    maxSnippetsPerFile,
-    regex,
-  });
-
-  const response: SearchResponse = { query: queryForKeyword, keyword };
-  return c.json(response);
-});
-
-// ── helpers ───────────────────────────────────────────────────────
-
-function parseNumQuery(raw: string | undefined, name: string): number | undefined {
-  if (raw === undefined) return undefined;
-  const n = Number(raw);
+function parseNum(raw: unknown, name: string): number | null {
+  if (raw == null) return null;
+  const n = typeof raw === "number" ? raw : Number(raw);
   if (!Number.isFinite(n)) {
-    throw new ApiError(
-      400,
-      "validation_error",
-      `Invalid number for "${name}": "${raw}"`,
-    );
+    throw new ApiError(400, "validation_error", `${name} must be a finite number`);
   }
   return n;
 }
 
-/**
- * Parse `?tag_equals=key:value` into the typed shape `listEntities`
- * expects. Splits on the FIRST colon so values may contain colons; keys
- * must not (the conventional dotted-namespace form is colon-free).
- */
-function parseTagEquals(
-  raw: string | undefined,
-): { key: string; value: string } | undefined {
-  if (raw === undefined || raw === "") return undefined;
-  const idx = raw.indexOf(":");
-  if (idx <= 0) {
-    throw new ApiError(
-      400,
-      "validation_error",
-      `Invalid tag_equals: expected "key:value", got "${raw}"`,
-    );
+function requireString(raw: unknown, name: string): string {
+  if (typeof raw !== "string" || raw.length === 0) {
+    throw new ApiError(400, "validation_error", `${name} is required`);
   }
-  return { key: raw.slice(0, idx), value: raw.slice(idx + 1) };
+  return raw;
 }
+
+apiRouter.post("/query", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const result = await listArtifacts({
+    folder: typeof body.folder === "string" ? body.folder : null,
+    kinds: parseKinds(typeof body.kind === "string" ? body.kind : undefined),
+    has_tag: parseStringArray(body.has_tag, "has_tag"),
+    not_tag: parseStringArray(body.not_tag, "not_tag"),
+    path_contains: typeof body.path_contains === "string" ? body.path_contains : null,
+    label_contains: typeof body.label_contains === "string" ? body.label_contains : null,
+    limit: parseNum(body.limit, "limit"),
+    offset: parseNum(body.offset, "offset"),
+  });
+  return c.json(result);
+});
+
+apiRouter.post("/tag", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const path = requireString(body.path, "path");
+  const key = requireString(body.key, "key");
+  const value = typeof body.value === "string" ? body.value : "";
+  const artifact = await getArtifact(path);
+  if (!artifact) {
+    throw new ApiError(404, "not_found", `artifact not found: ${path}`);
+  }
+  await setTag(path, key, value);
+  return c.json({ ok: true });
+});
+
+apiRouter.post("/untag", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const path = requireString(body.path, "path");
+  const key = requireString(body.key, "key");
+  const removed = await deleteTag(path, key);
+  return c.json({ ok: removed });
+});
+
+apiRouter.get("/tags", async (c) => {
+  const path = c.req.query("path");
+  if (!path) {
+    throw new ApiError(400, "validation_error", "path is required");
+  }
+  const artifact = await getArtifact(path);
+  if (!artifact) {
+    throw new ApiError(404, "not_found", `artifact not found: ${path}`);
+  }
+  return c.json({ path, tags: artifact.tags });
+});
+
+apiRouter.get("/backlinks", async (c) => {
+  const path = c.req.query("path");
+  if (!path) {
+    throw new ApiError(400, "validation_error", "path is required");
+  }
+  const backlinks = await getBacklinks(path);
+  return c.json({ path, backlinks });
+});
+
+apiRouter.get("/redlinks", async (c) => {
+  const folder = c.req.query("folder") ?? null;
+  const result = await listRedlinks({
+    folder,
+    limit: c.req.query("limit") ? Number(c.req.query("limit")) : null,
+    offset: c.req.query("offset") ? Number(c.req.query("offset")) : null,
+  });
+  return c.json(result);
+});

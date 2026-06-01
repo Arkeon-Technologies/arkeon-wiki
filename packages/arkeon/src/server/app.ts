@@ -9,8 +9,7 @@ import { ApiError, errorBody } from "./lib/errors.js";
 import { mapDatabaseError } from "./lib/db-errors.js";
 import { createSql } from "./lib/sql.js";
 import { LLMS_TXT } from "./lib/llms-txt.js";
-import { spacesRouter } from "./routes/spaces.js";
-import { spaceScopedRouter } from "./routes/space-scoped.js";
+import { apiRouter } from "./routes/space-scoped.js";
 import { readerRouter } from "./routes/reader.js";
 
 export function createApp() {
@@ -37,10 +36,9 @@ export function createApp() {
     c.body(LLMS_TXT, 200, { "content-type": "text/plain; charset=utf-8" }),
   );
 
-  app.route("/spaces", spacesRouter);
-  app.route("/", spaceScopedRouter);
-  // The reader is mounted last because its `/:space/*` fallback should
-  // only match URLs no other route has claimed.
+  app.route("/", apiRouter);
+  // The reader is mounted last because its catch-all should only match
+  // URLs no other route has claimed.
   app.route("/", readerRouter);
 
   app.notFound((c) => {

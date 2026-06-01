@@ -35,6 +35,7 @@ interface UpOptions {
   name?: string;
   port?: string;
   timeout?: string;
+  watchDir?: string;
 }
 
 export function registerUpCommand(program: Command): void {
@@ -47,6 +48,7 @@ export function registerUpCommand(program: Command): void {
     )
     .option("--port <port>", `API port (default: ${DEFAULT_API_PORT}, or derived from --name)`)
     .option("--timeout <seconds>", "How long to wait for /health before giving up", "60")
+    .option("--watch-dir <path>", "Directory to watch (default: ARKEON_WIKI_WATCH_DIR env or cwd)")
     .action(async (options: UpOptions) => {
       try {
         await runUp(options);
@@ -129,6 +131,7 @@ async function runUp(options: UpOptions): Promise<void> {
     "start",
     ...(options.name ? ["--name", options.name] : []),
     ...(options.port ? ["--port", options.port] : []),
+    ...(options.watchDir ? ["--watch-dir", options.watchDir] : []),
   ];
   const logFd = openSync(logPath, "a");
   const child = spawn(entry.cmd, childArgs, {
