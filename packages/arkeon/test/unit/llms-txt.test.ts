@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Drift guard for the hand-written API guide at /llms.txt and /help.
- * If you add or rename a route, update src/server/lib/llms-txt.ts so
- * these strings are still present.
+ * Drift guard for /llms.txt + /help. When you change a route shape,
+ * update src/server/lib/llms-txt.ts so these strings stay present.
  */
 
 import { describe, it, expect } from "vitest";
@@ -12,33 +11,24 @@ import { describe, it, expect } from "vitest";
 import { LLMS_TXT } from "../../src/server/lib/llms-txt.js";
 
 const REQUIRED_ROUTES = [
-  "GET  /health",
-  "GET  /ready",
-  "GET  /llms.txt",
-  "GET  /help",
-  "GET  /spaces",
-  "POST /spaces",
-  "GET  /{space}/entities",
-  "GET  /{space}/entities/{path}",
-  "GET  /{space}/redlinks",
-  "GET  /{space}/recent",
-  "GET  /{space}/search",
-  "GET  /{space}/sources/scan",
-  "POST /{space}/inbox",
-  "POST /{space}/sources/from-url",
-  "PUT /{space}/sources/{path}",
-  "POST /{space}/agents/{role}/run",
+  "POST /query",
+  "POST /tag",
+  "POST /untag",
+  "GET /tags",
+  "GET /backlinks",
+  "GET /redlinks",
+  "GET /<path>",
 ];
 
 const REQUIRED_CONCEPTS = [
-  "Space",
-  "Entity",
-  "Red link",
-  "Plan wiki",
-  "Properties vs tags",
+  "artifacts",
+  "tags",
+  "links",
+  "fts_artifacts",
+  "wikilink",
+  ".sidecars/",
+  "data-*",
 ];
-
-const REQUIRED_AGENT_ROLES = ["editor", "proposer", "writer", "connector"];
 
 describe("llms.txt", () => {
   for (const route of REQUIRED_ROUTES) {
@@ -53,13 +43,7 @@ describe("llms.txt", () => {
     });
   }
 
-  for (const role of REQUIRED_AGENT_ROLES) {
-    it(`mentions agent role "${role}"`, () => {
-      expect(LLMS_TXT).toContain(role);
-    });
-  }
-
-  it("is plain ASCII-ish text, not HTML", () => {
+  it("is plain text, not HTML", () => {
     expect(LLMS_TXT.startsWith("# arkeon-wiki")).toBe(true);
     expect(LLMS_TXT).not.toContain("<html>");
     expect(LLMS_TXT).not.toContain("<!DOCTYPE");
