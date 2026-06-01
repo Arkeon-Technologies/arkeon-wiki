@@ -3,9 +3,9 @@
 
 /**
  * Locate a bundled extractor helper script (Python or otherwise)
- * across dev + tarball layouts. Mirrors the schema/agent-templates
- * locator pattern: try the dev path next to the source first, then
- * the bundled `dist/extractor-scripts/` directory the build copies.
+ * across dev + tarball layouts. Mirrors the schema locator pattern:
+ * try the dev path next to the source first, then the bundled
+ * `dist/extractor-scripts/` directory the build copies.
  */
 
 import { existsSync } from "node:fs";

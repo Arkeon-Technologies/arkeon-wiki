@@ -4,13 +4,13 @@
 /**
  * Filesystem watcher.
  *
- * Watches registered space directories for changes and keeps the
- * SQLite mirror in sync. node:fs.watch with the recursive option
- * (FSEvents on macOS, ReadDirectoryChangesW on Windows) covers the
- * platforms we care about.
+ * Watches the single root directory the daemon was started against
+ * and keeps the SQLite index in sync. node:fs.watch with the recursive
+ * option (FSEvents on macOS, ReadDirectoryChangesW on Windows) covers
+ * the platforms we care about.
  *
- * The watcher's only job is keeping the index live. Agents are
- * cron-paced — they query entities directly on each tick.
+ * The watcher's only job is keeping the index live. External harnesses
+ * poll the API on whatever schedule they own.
  */
 
 import { watch, type FSWatcher, existsSync, readdirSync, openSync, readSync, closeSync, statSync } from "node:fs";
@@ -26,10 +26,11 @@ import { syncFile, syncDirectory, removeByPath } from "./sync.js";
 // Directories to skip during walk + watch.
 const IGNORE_DIRS = new Set([".arkeon", ".git", "node_modules", ".claude", "__pycache__", ".venv"]);
 
-// Eligibility model (PR: asset indexing):
+// Eligibility model:
 //
 //   Most files get indexed. The rule is:
-//     - Hidden / ignore-dir paths → skip (never indexed).
+//     - Hidden / ignore-dir paths → skip (.sidecars/ is the one
+//       dot-prefixed exception we walk into).
 //     - SKIP_EXTENSIONS (secrets, junk, well-known scratch formats) → skip.
 //     - Everything else → indexed. Classified as kind='text' or
 //       kind='asset' by `classifyFile()`:
@@ -37,12 +38,12 @@ const IGNORE_DIRS = new Set([".arkeon", ".git", "node_modules", ".claude", "__py
 //         · ASSET_EXTENSIONS allowlist → fast-path asset.
 //         · Unknown extension → sniff first SNIFF_BYTES; text iff no NUL.
 //
-// `kind='text'` files enter the agent queues (editor / proposer /
-// connector) and have their content parsed (wikis extract <a href> edges,
-// sources record file_type). `kind='asset'` files get an entity row with
-// metadata only — no parsing, no link extraction. They exist in the index
-// so links to them resolve (no red link on an `<img src>` or
-// `<a href="report.pdf">`), but they never become work for the agents.
+// `kind='text'` files feed FTS5 (POST /query with `text`) and have
+// their content parsed (HTML extracts `<a class="wikilink">` edges,
+// Markdown extracts `[[X]]`). `kind='asset'` files get an artifact
+// row with metadata only — no parsing, no link extraction, no FTS5
+// entry. They exist so links to binaries resolve as real edges
+// instead of redlinks.
 
 // Things we refuse to index at all, regardless of content. Two reasons
 // for an extension to be here:
@@ -128,7 +129,7 @@ export const TEXT_EXTENSIONS = new Set([
   ".editorconfig",
   // Logs / output
   ".log",
-  // Source code (agents can read code-as-source)
+  // Source code (callers can read code-as-source)
   ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
   ".py", ".rb", ".go", ".rs", ".java", ".kt", ".swift",
   ".c", ".cc", ".cpp", ".h", ".hpp", ".m", ".mm",
@@ -223,13 +224,12 @@ const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const DEBOUNCE_MS = 500;
 
 /**
- * True if any path segment is hidden (`.`-prefixed) or matches a
- * well-known ignore directory (`.git`, `node_modules`, `.arkeon`, etc.).
+ * True if any path segment is hidden (`.`-prefixed, except .sidecars)
+ * or matches a well-known ignore directory (`.git`, `node_modules`).
  *
  * Exported so the reader routes can return 404 for the same set the
- * watcher refuses to index — keeping one rule in one place. Without
- * this, a user could navigate to `/{space}/.arkeon/state.json` or
- * `/{space}/.git/config` and the static-file fallback would serve it.
+ * watcher refuses to index. Without this, a user could navigate to
+ * `/.git/config` and the file-serve fallback would serve it.
  */
 export function shouldIgnorePath(relativePath: string): boolean {
   const parts = relativePath.split("/");

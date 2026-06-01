@@ -75,10 +75,10 @@ export function systemdUnitPath(unit: string, home: string = homedir()): string 
  *     don't fail if absent. Two of them so both `~/.arkeon-wiki/.env`
  *     (user-global) and `<home>/.env` (per-instance) work.
  *   - Secrets (OPENAI_API_KEY etc.) deliberately do NOT live here —
- *     they go in `~/.arkeon-wiki/.env` via env-snapshot.ts, the
- *     agent runtime loads them at startup. Unit files are 0644 by
- *     default and live in a directory other users can traverse; keys
- *     belong in the 0600 env file.
+ *     they go in `~/.arkeon-wiki/.env` via env-snapshot.ts. The daemon
+ *     itself doesn't need API keys; co-located harnesses read from
+ *     the same file. Unit files are 0644 by default and live in a
+ *     directory other users can traverse; keys belong in the 0600 env file.
  */
 export function renderSystemdUnit(opts: InstallOptions): string {
   const { name, home, paths } = opts;

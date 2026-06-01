@@ -5,9 +5,8 @@
  * HTML validation + wrapping helpers for extractor output.
  *
  * `validateExtractedHtml` is the structural gate the runner applies
- * before treating subprocess stdout as a real sidecar. Catches garbage
- * output before it lands on disk as a "sidecar" the editor would later
- * try to read.
+ * before treating subprocess output as a real sidecar. Catches garbage
+ * output before it lands on disk and pollutes the FTS5 index.
  */
 
 export class InvalidExtractedHtmlError extends Error {
@@ -18,10 +17,9 @@ export class InvalidExtractedHtmlError extends Error {
 }
 
 /**
- * Validate that the extractor produced a recognizable HTML document.
- * Mirrors the contract of `wiki/**` files: must start with `<!DOCTYPE>`
- * or `<html>` (case-insensitive, leading whitespace allowed), and the
- * body must contain non-whitespace content.
+ * Validate that the extractor produced a recognizable HTML document:
+ * starts with `<!DOCTYPE>` or `<html>` (case-insensitive, leading
+ * whitespace allowed), and the body has non-whitespace content.
  *
  * Throws `InvalidExtractedHtmlError` on miss — the runner catches and
  * writes a stub sidecar with the validation failure inline.
@@ -75,8 +73,8 @@ ${opts.body}
 }
 
 /**
- * Build a "stub" sidecar when extraction fails. Visible to the editor
- * (still a real HTML source it'll read on the queue), with the error
+ * Build a "stub" sidecar when extraction fails. Indexes as ordinary
+ * text so callers see something rather than nothing, with the error
  * inline as a `<pre>` so it's obvious why no extraction happened.
  */
 export function buildStubSidecar(opts: {

@@ -83,7 +83,7 @@ export interface ExtractResult {
    * already-processed sidecars vs. manual ones.
    */
   extractedBy: string;
-  /** Soft issues from the extractor — go into agent-trace + logs. */
+  /** Soft issues from the extractor — go into the daemon log. */
   warnings?: string[];
 }
 

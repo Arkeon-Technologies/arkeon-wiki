@@ -4,16 +4,16 @@
 /**
  * Extractor orchestration: stage assets in a tmp dir, invoke the
  * handler, validate output, atomically swap into place, write the
- * sidecar, sync it through the normal pipeline, and tag the result so
- * re-extraction skips already-processed sidecars.
+ * sidecar at .sidecars/<mirrored>.html, sync it through the normal
+ * pipeline, and tag the result so re-extraction skips already-
+ * processed sidecars.
  *
- * Failure paths produce a stub sidecar with the error inline — the
- * editor still sees a real source rather than nothing, and the failure
- * is visible at the next read.
+ * Failure paths produce a stub sidecar with the error inline so
+ * something is visible at the next read.
  *
- * Per-binary serialization: the extractor pipeline runs under
- * `withPathLock(spaceName::relPath)` so rapid edits coalesce and we
- * never have two subprocesses staging into the same assets dir.
+ * Per-binary serialization: rapid edits to the same path queue
+ * behind each other via a small in-process Map, so we never have
+ * two subprocesses staging into the same assets dir.
  */
 
 import { randomBytes } from "node:crypto";

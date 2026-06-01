@@ -1,9 +1,8 @@
 # arkeon-wiki
 
-Filesystem-first knowledge graph. See the [root README](../../README.md) for details.
+Filesystem-first substrate for agent harnesses. See the [root README](../../README.md) for details.
 
 ```bash
 npm install -g arkeon-wiki
-arkeon-wiki up
-arkeon-wiki init
+arkeon-wiki up --watch-dir ~/work/corpus
 ```

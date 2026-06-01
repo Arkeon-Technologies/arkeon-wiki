@@ -4,10 +4,9 @@
 /**
  * Query primitives over the v1 schema (artifacts / tags / links).
  *
- * The full surface lands in Phase 5 as a flat six-command HTTP layer.
- * Right now it's a thin shim that the existing /:space/entities,
- * /:space/redlinks, /:space/entities/* routes call into. Phase 5
- * trims the filter surface to (folder, has_tag, not_tag, text).
+ * Exposed via the six-command HTTP layer in routes/space-scoped.ts.
+ * `listArtifacts` powers POST /query; `setTag` / `deleteTag` /
+ * `getArtifact` / `getBacklinks` back the other five.
  */
 
 import { ApiError } from "./errors.js";

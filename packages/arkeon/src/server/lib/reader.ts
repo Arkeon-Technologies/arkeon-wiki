@@ -2,18 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Pure rendering primitives for the v1 directory-browser reader.
+ * Pure rendering primitives for the directory-browser reader.
  *
- * Three functions:
  *   - `rewriteWikilinks` — for served HTML, walk `<a class="wikilink">`
  *     anchors, resolve hrefs against the artifact index, and add
  *     `redlink` to the class list for unresolved targets.
  *   - `renderDirectoryListing` — `GET /<path>/` shows a directory's
  *     files and subdirs.
  *   - `renderNotFound` — 404 page.
- *
- * Phase 7 polishes the chrome and adds breadcrumb navigation. For now
- * the rewriter pass is minimal — full design lands with Phase 7.
  */
 
 import { parse } from "node-html-parser";

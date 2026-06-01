@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Parse an HTML wiki's `<title>` and `<meta name="..." content="...">`
- * tags into the entity label + properties map. Uses a real HTML parser
+ * Parse an HTML document's `<title>` and `<meta name="..." content="...">`
+ * tags into the artifact label + properties map. Uses a real HTML parser
  * (`node-html-parser`) rather than regex so attribute-quoting edge cases
  * (apostrophes inside double-quoted values, etc.) work correctly.
  *

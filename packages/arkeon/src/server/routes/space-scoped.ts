@@ -10,9 +10,6 @@
  *   GET  /tags?path=...
  *   GET  /backlinks?path=...
  *   GET  /redlinks?folder=...
- *
- * Phase 5 polishes shapes; Phase 3+4 wires the basic implementations
- * against the new artifacts/tags/links schema.
  */
 
 import { Hono } from "hono";
