@@ -84,6 +84,46 @@ describe("substrate", () => {
     expect(article!.properties.short_description).toBe("On India.");
   });
 
+  it("GET /stats returns corpus size breakdown", async () => {
+    const res = await app.fetch(new Request("http://test/stats"));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      artifacts: { total: number; text: number; asset: number };
+      links: number;
+      redlinks: number;
+      tag_keys: number;
+    };
+    expect(body.artifacts.total).toBeGreaterThan(0);
+    expect(body.artifacts.total).toBe(body.artifacts.text + body.artifacts.asset);
+    expect(body.links).toBeGreaterThan(0);
+    expect(body.redlinks).toBeGreaterThan(0); // missing-target from setup
+    expect(body.tag_keys).toBeGreaterThanOrEqual(0);
+  });
+
+  it("POST /query honors order_by + order", async () => {
+    const asc = await app.fetch(
+      new Request("http://test/query", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ order_by: "path", order: "asc", limit: 5 }),
+      }),
+    );
+    const body = (await asc.json()) as { artifacts: Array<{ path: string }> };
+    const paths = body.artifacts.map((a) => a.path);
+    expect(paths).toEqual([...paths].sort());
+  });
+
+  it("POST /query rejects unknown order_by", async () => {
+    const res = await app.fetch(
+      new Request("http://test/query", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ order_by: "bogus" }),
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
   it("captures wikilink data-* attributes in links.attrs", async () => {
     const sql = createSql();
     const rows = await sql`

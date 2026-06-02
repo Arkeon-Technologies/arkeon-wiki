@@ -14,6 +14,9 @@ import { createSql } from "./sql.js";
 
 export type ArtifactKind = "text" | "asset";
 
+export type QueryOrderBy = "updated_at" | "created_at" | "path";
+export type QueryOrder = "asc" | "desc";
+
 export interface QueryOptions {
   /** Restrict to artifacts whose path starts with this prefix (no trailing slash). */
   folder?: string | null;
@@ -24,9 +27,19 @@ export interface QueryOptions {
   not_tag?: string[] | null;
   /** FTS5 match query over artifact body text. */
   text?: string | null;
+  /** Sort column. Default: `updated_at`. */
+  order_by?: QueryOrderBy | null;
+  /** Sort direction. Default: `desc` for time columns, `asc` for path. */
+  order?: QueryOrder | null;
   limit?: number | null;
   offset?: number | null;
 }
+
+const ORDER_BY_COLUMN: Record<QueryOrderBy, string> = {
+  updated_at: "a.updated_at",
+  created_at: "a.created_at",
+  path: "a.path",
+};
 
 export interface ArtifactRow {
   path: string;
@@ -137,12 +150,16 @@ export async function listArtifacts(opts: QueryOptions): Promise<ListResult> {
   )) as { n: number }[];
   const total = Number(totalRow[0]?.n ?? 0);
 
+  const orderBy = opts.order_by ?? "updated_at";
+  const orderCol = ORDER_BY_COLUMN[orderBy];
+  const orderDir =
+    (opts.order ?? (orderBy === "path" ? "asc" : "desc")) === "asc" ? "ASC" : "DESC";
   const rows = (await sql.query(
     `SELECT a.path, a.kind, a.label, a.source_hash, a.properties,
             a.created_at, a.updated_at
      FROM artifacts a
      ${whereSql}
-     ORDER BY a.updated_at DESC, a.path ASC
+     ORDER BY ${orderCol} ${orderDir}, a.path ASC
      LIMIT ? OFFSET ?`,
     [...params, limit, offset],
   )) as Array<{
@@ -259,7 +276,14 @@ export interface BacklinkRow {
   source_path: string;
   link_text: string | null;
   attrs: Record<string, string>;
-  created_at: string;
+  /**
+   * Per-row last-sync timestamp — when sync.ts (re-)inserted this
+   * specific anchor row. NOT "first time this anchor existed":
+   * outbound links get DELETE+INSERTed wholesale on every source
+   * re-extraction, so all of an article's backlinks share a
+   * synced_at after any change to that article.
+   */
+  synced_at: string;
 }
 
 export interface BacklinksResult {
@@ -282,17 +306,17 @@ export async function getBacklinks(path: string): Promise<BacklinksResult> {
     [path],
   )) as { x: number }[];
   const rows = (await sql.query(
-    `SELECT source_path, link_text, attrs, created_at
+    `SELECT source_path, link_text, attrs, synced_at
      FROM links
      WHERE target_path = ?
-     ORDER BY created_at ASC`,
+     ORDER BY synced_at ASC`,
     [path],
-  )) as Array<{ source_path: string; link_text: string | null; attrs: string; created_at: string }>;
+  )) as Array<{ source_path: string; link_text: string | null; attrs: string; synced_at: string }>;
   const backlinks: BacklinkRow[] = rows.map((r) => ({
     source_path: r.source_path,
     link_text: r.link_text,
     attrs: parseJsonObject(r.attrs) as Record<string, string>,
-    created_at: r.created_at,
+    synced_at: r.synced_at,
   }));
   return {
     exists: existsRows.length > 0,
@@ -376,6 +400,52 @@ export async function deleteTag(path: string, key: string): Promise<boolean> {
     [path, key],
   );
   return rows.length > 0;
+}
+
+export interface CorpusStats {
+  artifacts: { total: number; text: number; asset: number };
+  /** Total link rows (one per anchor). */
+  links: number;
+  /** Distinct unresolved targets (the redlink queue size). */
+  redlinks: number;
+  /** Distinct tag keys in use. */
+  tag_keys: number;
+}
+
+export async function getStats(): Promise<CorpusStats> {
+  const sql = createSql();
+  const artifactsByKind = (await sql.query(
+    `SELECT kind, COUNT(*) AS n FROM artifacts GROUP BY kind`,
+    [],
+  )) as { kind: ArtifactKind; n: number }[];
+  let textN = 0;
+  let assetN = 0;
+  for (const r of artifactsByKind) {
+    if (r.kind === "text") textN = Number(r.n);
+    else if (r.kind === "asset") assetN = Number(r.n);
+  }
+  const [{ n: linksN }] = (await sql.query(
+    `SELECT COUNT(*) AS n FROM links`,
+    [],
+  )) as { n: number }[];
+  const [{ n: redlinksN }] = (await sql.query(
+    `SELECT COUNT(*) AS n FROM (
+       SELECT DISTINCT l.target_path FROM links l
+       LEFT JOIN artifacts a ON a.path = l.target_path
+       WHERE a.path IS NULL
+     )`,
+    [],
+  )) as { n: number }[];
+  const [{ n: tagKeysN }] = (await sql.query(
+    `SELECT COUNT(DISTINCT key) AS n FROM tags`,
+    [],
+  )) as { n: number }[];
+  return {
+    artifacts: { total: textN + assetN, text: textN, asset: assetN },
+    links: Number(linksN),
+    redlinks: Number(redlinksN),
+    tag_keys: Number(tagKeysN),
+  };
 }
 
 /**

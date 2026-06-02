@@ -88,6 +88,17 @@ because the binary itself is also indexed (as \`kind='asset'\`).
 Re-run \`arkeon-wiki install-deps\` once per machine to bootstrap the
 Python venv used by the PDF extractor.
 
+**Tag the sidecar, not the binary.** Worker \`processed-by-<name>\`
+tags belong on the SIDECAR (\`.sidecars/X.html\`), not the binary
+asset. Asset artifacts are \`kind='asset'\`, invisible to any
+\`kinds: ["text"]\` query — tagging them does nothing the next tick
+will notice. Tag the sidecar instead and your worker's gate query
+will exclude the entry correctly.
+
+The asset's \`properties.sidecar_path\` carries the convention path,
+so harnesses can dereference \`asset.properties.sidecar_path\` to
+get the right target without hard-coding the convention.
+
 ## API surface — six commands
 
 All POST bodies are JSON; all GET params are URL-encoded.
@@ -101,10 +112,16 @@ All POST bodies are JSON; all GET params are URL-encoded.
   "has_tag": ["status:feedback"],
   "not_tag": ["processed-by-editor"],
   "text": "shannon entropy",
+  "order_by": "updated_at",
+  "order": "desc",
   "limit": 50,
   "offset": 0
 }
 \`\`\`
+
+\`order_by\` is one of \`updated_at\` (default), \`created_at\`,
+or \`path\`. \`order\` is \`asc\` | \`desc\` — defaults to \`desc\`
+for time columns and \`asc\` for \`path\`.
 
 All filters are optional and AND-composed. \`has_tag\` / \`not_tag\`
 entries may be:
@@ -202,7 +219,7 @@ re-entrancy / cleanup scripts).
       "source_path": "iarpa/article.html",
       "link_text": "paper",
       "attrs": { "quote": "...", "page": "3" },
-      "created_at": "..."
+      "synced_at": "..."
     }
   ]
 }
@@ -216,6 +233,13 @@ redlink targets alike. \`exists: false\` means the path isn't in
 One row per anchor, not per (source, target) pair: an article that
 cites the same source twice with different \`data-quote\` /
 \`data-page\` values appears twice in \`backlinks\`.
+
+\`synced_at\` is per-row last-sync time, NOT first-anchor-creation
+history: outbound links get DELETE+INSERTed wholesale on every
+source re-extraction, so all of an article's backlinks share a
+\`synced_at\` after any change to that article. Use the source
+artifact's \`updated_at\` if you need "when did the source last
+change."
 
 \`/redlinks\` is the aggregated complement: rather than answering
 "who links to ONE specific path" (this endpoint), it answers
@@ -235,6 +259,21 @@ discovery loop building a work queue uses \`/redlinks\`.
 \`\`\`
 
 The work-to-be-written queue.
+
+### GET /stats
+
+\`\`\`json
+{
+  "artifacts": { "total": 1234, "text": 1180, "asset": 54 },
+  "links": 4321,
+  "redlinks": 17,
+  "tag_keys": 8
+}
+\`\`\`
+
+Constant-time corpus size snapshot. Useful for dashboards or for
+discovery-loop sanity checks ("did the watcher actually pick up
+my new files?") without paginating through \`/query\`.
 
 ## Reader (catch-all)
 

@@ -37,7 +37,7 @@ Four tables in SQLite:
   - `kind='text'` for HTML / MD / source text / binary sidecar HTMLs.
   - `kind='asset'` for binaries — linkable, but outside FTS5.
 - `tags (path, key, value, PK(path, key))` — agent-applied bookkeeping. `(path, key)` is PK, so each artifact carries at most one value per key. Two conventions: **worker gates** use one key per worker (`processed-by-editor`, `processed-by-writer`) so multiple workers coexist; **content labels** use `key:value` strings (`status:feedback`, `topic:us-china`) where the value carries meaning.
-- `links (source_path, target_path, link_text, attrs JSON)` — every `<a class="wikilink">` or `[[X]]` the extractor resolved. `attrs` is JSON of `data-*` citation metadata.
+- `links (id PK, source_path, target_path, link_text, attrs JSON, synced_at)` — every `<a class="wikilink">` or `[[X]]` the extractor resolved. `attrs` is JSON of `data-*` citation metadata. `synced_at` is per-row last-sync timestamp (not first-anchor-creation: rows get DELETE+INSERTed on every source re-extraction).
 - `fts_artifacts (path UNINDEXED, text)` — FTS5 over text-kind artifact contents. Populated by `syncFile`.
 
 No `space_name` column; no spaces table. Top-level subdirectories of the watched root are conventionally "spaces" (e.g. `iarpa/`, `chartbook/`) but the daemon treats them as path prefixes only.
@@ -96,7 +96,9 @@ External harnesses do the agent loop. Pattern per worker:
 
 ## Sidecars
 
-Binary files generate HTML sidecars at `.sidecars/<mirrored-path>.html`. The sidecar is indexed as `kind='text'` and feeds FTS5. The binary itself is also indexed (as `kind='asset'`) so wikilinks to it resolve.
+Binary files generate HTML sidecars at `.sidecars/<mirrored-path>.html`. The sidecar is indexed as `kind='text'` and feeds FTS5. The binary itself is also indexed (as `kind='asset'`) so wikilinks to it resolve. The asset's `properties.sidecar_path` carries the convention path so harnesses can dereference it without hard-coding `.sidecars/`.
+
+**Tag the sidecar, not the binary.** Worker `processed-by-<name>` tags belong on the sidecar (the `kind='text'` row), not the asset. Asset artifacts are invisible to any `kinds: ["text"]` query — tagging them does nothing the next tick will notice. Use `asset.properties.sidecar_path` to find the right target.
 
 PDF extraction uses PyMuPDF via a managed Python venv. Run `arkeon-wiki install-deps` once per machine to bootstrap.
 

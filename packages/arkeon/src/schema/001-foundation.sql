@@ -68,6 +68,14 @@ CREATE TABLE IF NOT EXISTS tags (
 -- attrs: JSON map of `data-*` attributes from the anchor (data-quote,
 -- data-page, data-cite-type, …). Captured verbatim with the `data-`
 -- prefix stripped from keys.
+--
+-- synced_at: the moment this row was last (re-)inserted. NOT
+-- "first time this anchor existed" — sync.ts deletes and re-inserts
+-- the full outbound set on every source re-extraction, so all of
+-- an article's links share a synced_at after any change to the
+-- article. Use the article's artifacts.updated_at if you need
+-- "when did the source last change"; this column tracks the per-row
+-- re-stamp.
 -- ─────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS links (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,7 +83,7 @@ CREATE TABLE IF NOT EXISTS links (
   target_path TEXT NOT NULL,
   link_text TEXT,
   attrs TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  synced_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- ─────────────────────────────────────────────────────────────────────

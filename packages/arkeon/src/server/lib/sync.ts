@@ -64,6 +64,22 @@ function isMarkdownPath(relativePath: string): boolean {
 }
 
 /**
+ * Sidecars at `.sidecars/<mirrored>.html` get their label from the
+ * underlying binary's basename (without the binary extension) instead
+ * of the embedded `<title>`. Keeps asset.label and sidecar.label
+ * matching — asset `paper.pdf` → label "paper"; sidecar
+ * `.sidecars/iarpa/sources/paper.pdf.html` → label "paper" too.
+ * Returns null when the path isn't a sidecar.
+ */
+function sidecarLabel(relativePath: string): string | null {
+  if (!relativePath.startsWith(".sidecars/")) return null;
+  if (!relativePath.endsWith(".html")) return null;
+  const inner = relativePath.slice(".sidecars/".length, -".html".length);
+  if (!inner) return null;
+  return basename(inner, extname(inner));
+}
+
+/**
  * Sync a single file from disk into the database.
  *
  * @param watchedRoot - Absolute path to the root the daemon is watching.
@@ -149,7 +165,13 @@ async function syncText(
 
   if (isHtmlPath(relativePath)) {
     const meta = parseHtmlMeta(content);
+    // Sidecars: always derive label from the binary's basename so
+    // asset.label and sidecar.label match (paper.pdf → "paper" on
+    // both rows). The embedded <title> is for human display, not
+    // the DB label column.
+    const sidecarLbl = sidecarLabel(relativePath);
     label =
+      sidecarLbl ??
       meta.title ??
       (meta.properties.label as string | undefined) ??
       basename(relativePath, extname(relativePath));
@@ -248,9 +270,14 @@ async function syncAsset(
     return { action: "unchanged", kind: "asset", label, linksExtracted: 0 };
   }
 
-  const properties = {
+  const properties: Record<string, unknown> = {
     file_type: extname(relativePath).slice(1).toLowerCase() || "unknown",
     size_bytes: stats.size,
+    // Address of the searchable HTML sidecar a future extractor pass
+    // will produce. The convention is fixed (.sidecars/<mirrored>.html);
+    // the file may not exist yet (no handler registered, or extraction
+    // pending) — harnesses dereference and check.
+    sidecar_path: `.sidecars/${relativePath}.html`,
   };
   const propsJson = JSON.stringify(properties);
 

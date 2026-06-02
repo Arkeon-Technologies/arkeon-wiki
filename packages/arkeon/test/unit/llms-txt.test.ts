@@ -17,6 +17,7 @@ const REQUIRED_ROUTES = [
   "GET /tags",
   "GET /backlinks",
   "GET /redlinks",
+  "GET /stats",
   "GET /<path>",
 ];
 
@@ -33,6 +34,9 @@ const REQUIRED_CONCEPTS = [
   "exists",
   "existed",
   "STRIPPED",
+  "sidecar_path",
+  "order_by",
+  "Tag the sidecar",
 ];
 
 describe("llms.txt", () => {

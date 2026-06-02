@@ -20,10 +20,13 @@ import {
   deleteTag,
   getArtifact,
   getBacklinks,
+  getStats,
   listArtifacts,
   listRedlinks,
   parseKinds,
   setTag,
+  type QueryOrder,
+  type QueryOrderBy,
 } from "../lib/entities.js";
 
 export const apiRouter = new Hono<AppBindings>();
@@ -57,6 +60,28 @@ function requireString(raw: unknown, name: string): string {
   return raw;
 }
 
+const ORDER_BY_VALUES: QueryOrderBy[] = ["updated_at", "created_at", "path"];
+
+function parseOrderBy(raw: unknown): QueryOrderBy | null {
+  if (raw == null) return null;
+  if (typeof raw !== "string" || !ORDER_BY_VALUES.includes(raw as QueryOrderBy)) {
+    throw new ApiError(
+      400,
+      "validation_error",
+      `order_by must be one of: ${ORDER_BY_VALUES.join(", ")}`,
+    );
+  }
+  return raw as QueryOrderBy;
+}
+
+function parseOrder(raw: unknown): QueryOrder | null {
+  if (raw == null) return null;
+  if (raw !== "asc" && raw !== "desc") {
+    throw new ApiError(400, "validation_error", `order must be "asc" or "desc"`);
+  }
+  return raw;
+}
+
 apiRouter.post("/query", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
   const result = await listArtifacts({
@@ -65,10 +90,17 @@ apiRouter.post("/query", async (c) => {
     has_tag: parseStringArray(body.has_tag, "has_tag"),
     not_tag: parseStringArray(body.not_tag, "not_tag"),
     text: typeof body.text === "string" ? body.text : null,
+    order_by: parseOrderBy(body.order_by),
+    order: parseOrder(body.order),
     limit: parseNum(body.limit, "limit"),
     offset: parseNum(body.offset, "offset"),
   });
   return c.json(result);
+});
+
+apiRouter.get("/stats", async (c) => {
+  const stats = await getStats();
+  return c.json(stats);
 });
 
 apiRouter.post("/tag", async (c) => {
