@@ -105,7 +105,7 @@ describe("substrate", () => {
     expect(paths).not.toContain("chartbook/about.html");
   });
 
-  it("POST /tag + GET /tags round trips", async () => {
+  it("POST /tag + GET /tags round trips; first call returns action=created", async () => {
     const tagRes = await app.fetch(
       new Request("http://test/tag", {
         method: "POST",
@@ -118,12 +118,80 @@ describe("substrate", () => {
       }),
     );
     expect(tagRes.status).toBe(200);
+    const created = (await tagRes.json()) as {
+      ok: boolean;
+      action: string;
+      previous_value: string | null;
+      value: string;
+    };
+    expect(created.ok).toBe(true);
+    expect(created.action).toBe("created");
+    expect(created.previous_value).toBeNull();
+    expect(created.value).toBe("editor");
 
     const tagsRes = await app.fetch(
       new Request("http://test/tags?path=iarpa/article.html"),
     );
     const body = (await tagsRes.json()) as { tags: Record<string, string> };
     expect(body.tags["processed-by"]).toBe("editor");
+  });
+
+  it("POST /tag re-tag with same value → action=unchanged", async () => {
+    // Relies on the prior "POST /tag" test having tagged with value="editor".
+    const res = await app.fetch(
+      new Request("http://test/tag", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: "iarpa/article.html",
+          key: "processed-by",
+          value: "editor",
+        }),
+      }),
+    );
+    const body = (await res.json()) as {
+      action: string;
+      previous_value: string | null;
+    };
+    expect(body.action).toBe("unchanged");
+    expect(body.previous_value).toBe("editor");
+  });
+
+  it("POST /tag re-tag with different value → action=updated + previous_value surfaces", async () => {
+    // Worker collision detection: B sees A's stomped value in
+    // previous_value, can log/decide what to do.
+    const res = await app.fetch(
+      new Request("http://test/tag", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: "iarpa/article.html",
+          key: "processed-by",
+          value: "writer",
+        }),
+      }),
+    );
+    const body = (await res.json()) as {
+      action: string;
+      previous_value: string | null;
+      value: string;
+    };
+    expect(body.action).toBe("updated");
+    expect(body.previous_value).toBe("editor");
+    expect(body.value).toBe("writer");
+
+    // Restore the original so downstream tests see "editor" as expected.
+    await app.fetch(
+      new Request("http://test/tag", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: "iarpa/article.html",
+          key: "processed-by",
+          value: "editor",
+        }),
+      }),
+    );
   });
 
   it("POST /query with not_tag excludes tagged artifacts (key-only)", async () => {
@@ -159,16 +227,54 @@ describe("substrate", () => {
     expect(paths).not.toContain("iarpa/article.html");
   });
 
-  it("GET /backlinks returns inbound link rows", async () => {
+  it("GET /backlinks returns inbound rows + exists + demand for a real artifact", async () => {
     const res = await app.fetch(
       new Request("http://test/backlinks?path=iarpa/sources/paper.md"),
     );
     const body = (await res.json()) as {
+      path: string;
+      exists: boolean;
+      demand: number;
       backlinks: Array<{ source_path: string; attrs: Record<string, string> }>;
     };
+    expect(body.exists).toBe(true);
+    expect(body.demand).toBe(body.backlinks.length);
     const first = body.backlinks.find((b) => b.source_path === "iarpa/article.html");
     expect(first).toBeDefined();
     expect(first!.attrs.quote).toBe("hello");
+  });
+
+  it("GET /backlinks surfaces inbound rows for unresolved redlink targets", async () => {
+    // missing-target is referenced by iarpa/sources/paper.md but is
+    // not itself in artifacts — should still return the inbound row
+    // with exists=false.
+    const res = await app.fetch(
+      new Request("http://test/backlinks?path=missing-target"),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      path: string;
+      exists: boolean;
+      demand: number;
+      backlinks: Array<{ source_path: string }>;
+    };
+    expect(body.exists).toBe(false);
+    expect(body.demand).toBeGreaterThan(0);
+    expect(body.backlinks.some((b) => b.source_path === "iarpa/sources/paper.md")).toBe(true);
+  });
+
+  it("GET /backlinks on a completely unknown path: exists=false, demand=0", async () => {
+    const res = await app.fetch(
+      new Request("http://test/backlinks?path=never-cited-by-anyone"),
+    );
+    const body = (await res.json()) as {
+      exists: boolean;
+      demand: number;
+      backlinks: unknown[];
+    };
+    expect(body.exists).toBe(false);
+    expect(body.demand).toBe(0);
+    expect(body.backlinks).toEqual([]);
   });
 
   it("GET /redlinks lists unresolved targets with intact linked_from paths", async () => {

@@ -126,11 +126,32 @@ tags, created_at, updated_at }\`.
 
 ### POST /tag
 
+Request:
 \`\`\`json
 { "path": "iarpa/sources/paper.pdf", "key": "processed-by-editor", "value": "abc123" }
 \`\`\`
 
+Response:
+\`\`\`json
+{
+  "ok": true,
+  "path": "iarpa/sources/paper.pdf",
+  "key": "processed-by-editor",
+  "value": "abc123",
+  "previous_value": null,
+  "action": "created"
+}
+\`\`\`
+
 UPSERT. \`value\` is optional (defaults to empty string). Idempotent.
+
+\`action\` is one of:
+  - \`"created"\` — key didn't exist; \`previous_value\` is null.
+  - \`"updated"\` — key existed with a different value; \`previous_value\`
+    carries it. Useful for collision detection: if worker A tags and
+    worker B sees a foreign \`previous_value\`, B knows it stomped A.
+  - \`"unchanged"\` — key existed with the same value; no write happened.
+
 One key per worker — see the "tags" section above for why
 \`processed-by-<worker>\` keys coexist but a shared \`processed-by\`
 key with worker-name values does not.
@@ -153,7 +174,9 @@ Returns \`{ "ok": true | false }\`.
 
 \`\`\`json
 {
-  "path": "...",
+  "path": "iarpa/sources/paper.pdf",
+  "exists": true,
+  "demand": 2,
   "backlinks": [
     {
       "source_path": "iarpa/article.html",
@@ -165,9 +188,20 @@ Returns \`{ "ok": true | false }\`.
 }
 \`\`\`
 
+Works uniformly for any \`path\` — resolved artifacts and unresolved
+redlink targets alike. \`exists: false\` means the path isn't in
+\`artifacts\` (it's a redlink target); \`exists: true\` means it is.
+\`demand\` is the anchor count, matching \`/redlinks\` semantics.
+
 One row per anchor, not per (source, target) pair: an article that
 cites the same source twice with different \`data-quote\` /
 \`data-page\` values appears twice in \`backlinks\`.
+
+\`/redlinks\` is the aggregated complement: rather than answering
+"who links to ONE specific path" (this endpoint), it answers
+"what unresolved targets exist in folder F, sorted by demand?"
+A worker harness inspecting one artifact uses this endpoint; a
+discovery loop building a work queue uses \`/redlinks\`.
 
 ### GET /redlinks?folder=...&limit=&offset=
 

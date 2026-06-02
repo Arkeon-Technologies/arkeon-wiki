@@ -73,10 +73,10 @@ URL structure mirrors disk structure. The same article opens identically under `
 All POST bodies are JSON; all GET params are URL-encoded.
 
 - `POST /query` — `{folder?, kinds?, has_tag?[], not_tag?[], text?, limit?, offset?}`. AND-composed. `has_tag` / `not_tag` entries are `"key"` (presence) or `"key:value"` (key+value match). `text` runs FTS5 MATCH.
-- `POST /tag` — `{path, key, value?}`. UPSERT. Idempotent.
+- `POST /tag` — `{path, key, value?}`. UPSERT. Returns `{ok, path, key, value, previous_value, action}` where `action` is `created` / `updated` / `unchanged`. Workers detect collisions by inspecting `previous_value`.
 - `POST /untag` — `{path, key}`. Returns `{ok: bool}`.
 - `GET /tags?path=...` — `{path, tags: Record<key,value>}`.
-- `GET /backlinks?path=...` — inbound link rows with `attrs` JSON.
+- `GET /backlinks?path=...` — inbound link rows with `attrs` JSON. Returns `{path, exists, demand, backlinks: [...]}` and works uniformly whether `path` is a real artifact or a redlink target; `exists` tells you which. One row per anchor (multi-citation preserved). For "what unresolved targets exist?" use `/redlinks` — the aggregated complement.
 - `GET /redlinks?folder=&limit=&offset=` — unresolved targets, ranked by demand. The work-to-be-written queue.
 
 ## Trigger model

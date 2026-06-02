@@ -80,8 +80,8 @@ apiRouter.post("/tag", async (c) => {
   if (!artifact) {
     throw new ApiError(404, "not_found", `artifact not found: ${path}`);
   }
-  await setTag(path, key, value);
-  return c.json({ ok: true });
+  const { previous_value, action } = await setTag(path, key, value);
+  return c.json({ ok: true, path, key, value, previous_value, action });
 });
 
 apiRouter.post("/untag", async (c) => {
@@ -109,8 +109,11 @@ apiRouter.get("/backlinks", async (c) => {
   if (!path) {
     throw new ApiError(400, "validation_error", "path is required");
   }
-  const backlinks = await getBacklinks(path);
-  return c.json({ path, backlinks });
+  // Works uniformly for resolved artifacts and redlink targets.
+  // `exists` distinguishes the two; demand always reflects the
+  // anchor count.
+  const result = await getBacklinks(path);
+  return c.json({ path, ...result });
 });
 
 apiRouter.get("/redlinks", async (c) => {

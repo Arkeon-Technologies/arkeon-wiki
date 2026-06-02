@@ -260,8 +260,25 @@ export interface BacklinkRow {
   created_at: string;
 }
 
-export async function getBacklinks(path: string): Promise<BacklinkRow[]> {
+export interface BacklinksResult {
+  /** Whether `path` resolves to a real artifact (false → redlink target). */
+  exists: boolean;
+  /** Anchor count, matching the demand field in /redlinks. */
+  demand: number;
+  backlinks: BacklinkRow[];
+}
+
+/**
+ * Inbound link rows pointing at `path`. Works uniformly whether
+ * `path` resolves to a real artifact or is an unresolved redlink
+ * target — the difference shows up in the `exists` field.
+ */
+export async function getBacklinks(path: string): Promise<BacklinksResult> {
   const sql = createSql();
+  const existsRows = (await sql.query(
+    `SELECT 1 AS x FROM artifacts WHERE path = ? LIMIT 1`,
+    [path],
+  )) as { x: number }[];
   const rows = (await sql.query(
     `SELECT source_path, link_text, attrs, created_at
      FROM links
@@ -269,12 +286,17 @@ export async function getBacklinks(path: string): Promise<BacklinkRow[]> {
      ORDER BY created_at ASC`,
     [path],
   )) as Array<{ source_path: string; link_text: string | null; attrs: string; created_at: string }>;
-  return rows.map((r) => ({
+  const backlinks: BacklinkRow[] = rows.map((r) => ({
     source_path: r.source_path,
     link_text: r.link_text,
     attrs: parseJsonObject(r.attrs) as Record<string, string>,
     created_at: r.created_at,
   }));
+  return {
+    exists: existsRows.length > 0,
+    demand: backlinks.length,
+    backlinks,
+  };
 }
 
 export async function getArtifact(path: string): Promise<ArtifactRow | null> {
@@ -300,13 +322,47 @@ export async function getArtifact(path: string): Promise<ArtifactRow | null> {
   };
 }
 
-export async function setTag(path: string, key: string, value: string): Promise<void> {
+export type SetTagAction = "created" | "updated" | "unchanged";
+
+export interface SetTagResult {
+  /** Value present before this call; null if the key didn't exist yet. */
+  previous_value: string | null;
+  /**
+   *  - `"created"` — key didn't exist; row inserted.
+   *  - `"updated"` — key existed with a different value; row replaced.
+   *  - `"unchanged"` — key existed with the same value; no write needed.
+   *
+   * Workers can detect collisions by checking whether `previous_value`
+   * came from a different worker than themselves.
+   */
+  action: SetTagAction;
+}
+
+export async function setTag(
+  path: string,
+  key: string,
+  value: string,
+): Promise<SetTagResult> {
   const sql = createSql();
-  await sql.query(
-    `INSERT INTO tags (path, key, value) VALUES (?, ?, ?)
-     ON CONFLICT (path, key) DO UPDATE SET value = excluded.value`,
-    [path, key, value],
-  );
+  const existing = (await sql.query(
+    `SELECT value FROM tags WHERE path = ? AND key = ? LIMIT 1`,
+    [path, key],
+  )) as { value: string }[];
+  const previous_value = existing.length > 0 ? existing[0].value : null;
+  const action: SetTagAction =
+    previous_value === null
+      ? "created"
+      : previous_value === value
+        ? "unchanged"
+        : "updated";
+  if (action !== "unchanged") {
+    await sql.query(
+      `INSERT INTO tags (path, key, value) VALUES (?, ?, ?)
+       ON CONFLICT (path, key) DO UPDATE SET value = excluded.value`,
+      [path, key, value],
+    );
+  }
+  return { previous_value, action };
 }
 
 export async function deleteTag(path: string, key: string): Promise<boolean> {

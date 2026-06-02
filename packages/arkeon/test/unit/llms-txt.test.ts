@@ -29,6 +29,8 @@ const REQUIRED_CONCEPTS = [
   ".sidecars/",
   "data-*",
   "processed-by-",
+  "previous_value",
+  "exists",
 ];
 
 describe("llms.txt", () => {
