@@ -28,6 +28,7 @@ const REQUIRED_CONCEPTS = [
   "wikilink",
   ".sidecars/",
   "data-*",
+  "processed-by-",
 ];
 
 describe("llms.txt", () => {

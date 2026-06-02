@@ -13,6 +13,8 @@ import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { join, basename, extname } from "node:path";
 import { createHash } from "node:crypto";
 
+import { posix } from "node:path";
+
 import { createSql, withTransaction } from "./sql.js";
 import { classifyFile } from "./fs-watcher.js";
 import { parseHtmlMeta } from "./html-meta.js";
@@ -122,7 +124,16 @@ export async function syncFile(
   }
 
   // (4) Real content change.
-  return syncText(relativePath, content, hash, fingerprint, existing[0] ?? null);
+  const result = await syncText(relativePath, content, hash, fingerprint, existing[0] ?? null);
+
+  // A new text artifact may have just resolved one or more previously-
+  // stuck markdown redlinks (their [[X]] target slug matches the new
+  // file's basename). Run the resolver after every create so live
+  // watcher writes converge, not just the initial reconcile.
+  if (result.action === "created") {
+    await reresolveMarkdownRedlinks();
+  }
+  return result;
 }
 
 async function syncText(
@@ -190,12 +201,13 @@ async function syncText(
       `;
     }
 
-    // Rebuild outbound edges.
+    // Rebuild outbound edges. One row per anchor — an article that cites
+    // the same source twice with different data-* attrs gets two rows.
     await tx`DELETE FROM links WHERE source_path = ${relativePath}`;
     for (const link of resolvedLinks) {
       const attrsJson = JSON.stringify(link.attrs);
       await tx.query(
-        `INSERT OR IGNORE INTO links (source_path, target_path, link_text, attrs)
+        `INSERT INTO links (source_path, target_path, link_text, attrs)
          VALUES (?, ?, ?, ?)`,
         [relativePath, link.target, link.text, attrsJson],
       );
@@ -311,5 +323,53 @@ export async function syncDirectory(
     }
   }
 
+  // Second pass: re-resolve markdown redlinks whose target slug now
+  // matches an artifact basename. Necessary because syncFile resolves
+  // [[X]] against the index as it stood when the source was synced —
+  // if A.md was processed before B.md was indexed, A's link to [[B]]
+  // got persisted as a literal "B" redlink and would never converge
+  // without this sweep.
+  await reresolveMarkdownRedlinks();
+
   return summary;
+}
+
+/**
+ * Walk every unresolved slug-form redlink and re-resolve against the
+ * current artifact index. Called after `syncDirectory` (reconcile case)
+ * and after every `syncFile` create (live watcher case) so markdown
+ * link resolution converges regardless of file-arrival order.
+ */
+export async function reresolveMarkdownRedlinks(): Promise<void> {
+  const sql = createSql();
+  const rows = (await sql`
+    SELECT DISTINCT l.target_path
+    FROM links l
+    LEFT JOIN artifacts a ON a.path = l.target_path
+    WHERE a.path IS NULL AND l.target_path NOT LIKE '%/%'
+  `) as { target_path: string }[];
+  if (rows.length === 0) return;
+
+  const allRows = (await sql`SELECT path FROM artifacts`) as { path: string }[];
+  // Index artifacts by both basename and basename-without-extension
+  // so [[paper]] resolves to paper.pdf.html and [[paper.pdf.html]] also
+  // resolves. Ambiguous basenames (>1 match) are skipped — the user can
+  // disambiguate with [[folder/X]].
+  const byBase: Record<string, string[]> = {};
+  for (const r of allRows) {
+    const b = posix.basename(r.path).toLowerCase();
+    const s = b.replace(/\.[^.]+$/, "");
+    (byBase[b] ??= []).push(r.path);
+    if (s !== b) (byBase[s] ??= []).push(r.path);
+  }
+
+  for (const row of rows) {
+    const slug = row.target_path.toLowerCase();
+    const candidates = byBase[slug];
+    if (!candidates || candidates.length !== 1) continue;
+    await sql.query(
+      `UPDATE links SET target_path = ? WHERE target_path = ?`,
+      [candidates[0], row.target_path],
+    );
+  }
 }

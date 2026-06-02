@@ -60,17 +60,22 @@ CREATE TABLE IF NOT EXISTS tags (
 -- extractor resolved. A row whose `target_path` has no matching
 -- artifacts entry is a redlink — surfaced via GET /redlinks.
 --
+-- One row per anchor, not per (source, target) pair: an article that
+-- cites the same source twice with different `data-quote` / `data-page`
+-- values gets two rows. The surrogate `id` PK lets the same (source,
+-- target) pair appear multiple times.
+--
 -- attrs: JSON map of `data-*` attributes from the anchor (data-quote,
 -- data-page, data-cite-type, …). Captured verbatim with the `data-`
 -- prefix stripped from keys.
 -- ─────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   source_path TEXT NOT NULL REFERENCES artifacts(path) ON DELETE CASCADE,
   target_path TEXT NOT NULL,
   link_text TEXT,
   attrs TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  PRIMARY KEY (source_path, target_path)
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- ─────────────────────────────────────────────────────────────────────
@@ -92,6 +97,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts_artifacts USING fts5(
 
 -- Redlink aggregation: GROUP BY target_path.
 CREATE INDEX IF NOT EXISTS idx_links_target ON links(target_path);
+
+-- Outbound-edge lookup: DELETE FROM links WHERE source_path = ?
+-- on every text artifact re-sync needs this to be fast.
+CREATE INDEX IF NOT EXISTS idx_links_source ON links(source_path);
 
 -- query?has_tag / not_tag composition.
 CREATE INDEX IF NOT EXISTS idx_tags_key ON tags(key);

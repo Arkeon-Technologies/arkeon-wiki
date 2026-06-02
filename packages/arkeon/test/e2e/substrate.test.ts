@@ -282,4 +282,89 @@ describe("substrate", () => {
     // The wikilink anchor SHOULD gain the redlink class.
     expect(text).toMatch(/<a class="wikilink redlink" href="\.\/nope-wiki">/);
   });
+
+  it("preserves multiple wikilinks from one article to the same target", async () => {
+    // Regression guard: the v0 (source_path, target_path) PK + INSERT OR
+    // IGNORE silently dropped the second anchor — defeating the whole
+    // point of `data-*` citation metadata. Each anchor must round-trip
+    // through /backlinks with its own link_text and attrs.
+    const fname = "iarpa/multi-cite.html";
+    writeFileSync(
+      join(workdir, fname),
+      `<!doctype html><html><head><title>Multi-cite</title></head><body>
+         <a class="wikilink" href="./sources/paper.md" data-quote="first" data-page="3">first cite</a>
+         <a class="wikilink" href="./sources/paper.md" data-quote="second" data-page="7">second cite</a>
+       </body></html>`,
+    );
+    const sql = createSql();
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      const rows = await sql`SELECT 1 FROM artifacts WHERE path = ${fname}`;
+      if (rows.length > 0) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    const res = await app.fetch(
+      new Request("http://test/backlinks?path=iarpa/sources/paper.md"),
+    );
+    const body = (await res.json()) as {
+      backlinks: Array<{
+        source_path: string;
+        link_text: string;
+        attrs: Record<string, string>;
+      }>;
+    };
+    const fromMulti = body.backlinks.filter((b) => b.source_path === fname);
+    expect(fromMulti.length).toBe(2);
+    const quotes = fromMulti.map((b) => b.attrs.quote).sort();
+    expect(quotes).toEqual(["first", "second"]);
+    const pages = fromMulti.map((b) => b.attrs.page).sort();
+    expect(pages).toEqual(["3", "7"]);
+  });
+
+  it("converges markdown [[X]] redlinks once the target artifact lands", async () => {
+    // Regression guard: linking [[stale-target]] from a file that's
+    // synced BEFORE its target should still resolve to the target's
+    // real path once the target lands. Tests both reconcile-time
+    // (covered by setup) and the live-watcher post-create case.
+
+    // The link source has to be in place before the target arrives.
+    // Use distinct names to avoid collision with other tests.
+    const linker = "iarpa/staleness-source.md";
+    writeFileSync(
+      join(workdir, linker),
+      `Pointing at [[late-arrival]] before the target exists.\n`,
+    );
+    const sql = createSql();
+    let deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      const rows = await sql`SELECT 1 FROM artifacts WHERE path = ${linker}`;
+      if (rows.length > 0) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    // Confirm the link starts out as a redlink (literal slug).
+    let linkRows = (await sql`
+      SELECT target_path FROM links WHERE source_path = ${linker}
+    `) as { target_path: string }[];
+    expect(linkRows.map((r) => r.target_path)).toContain("late-arrival");
+
+    // Now drop the target. The post-create resolver should rewrite
+    // the link row to point at the full path.
+    const target = "iarpa/late-arrival.md";
+    writeFileSync(join(workdir, target), `# Late arrival\n`);
+    deadline = Date.now() + 3000;
+    let converged = false;
+    while (Date.now() < deadline) {
+      linkRows = (await sql`
+        SELECT target_path FROM links WHERE source_path = ${linker}
+      `) as { target_path: string }[];
+      if (linkRows.some((r) => r.target_path === target)) {
+        converged = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(converged).toBe(true);
+  });
 });

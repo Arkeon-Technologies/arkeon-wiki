@@ -36,7 +36,7 @@ Four tables in SQLite:
 - `artifacts (path PK, kind, label, source_hash, stat_fingerprint, properties, created_at, updated_at)`
   - `kind='text'` for HTML / MD / source text / binary sidecar HTMLs.
   - `kind='asset'` for binaries — linkable, but outside FTS5.
-- `tags (path, key, value, PK(path, key))` — agent-applied bookkeeping. Convention: `key:value` strings throughout.
+- `tags (path, key, value, PK(path, key))` — agent-applied bookkeeping. `(path, key)` is PK, so each artifact carries at most one value per key. Two conventions: **worker gates** use one key per worker (`processed-by-editor`, `processed-by-writer`) so multiple workers coexist; **content labels** use `key:value` strings (`status:feedback`, `topic:us-china`) where the value carries meaning.
 - `links (source_path, target_path, link_text, attrs JSON)` — every `<a class="wikilink">` or `[[X]]` the extractor resolved. `attrs` is JSON of `data-*` citation metadata.
 - `fts_artifacts (path UNINDEXED, text)` — FTS5 over text-kind artifact contents. Populated by `syncFile`.
 
@@ -83,12 +83,14 @@ All POST bodies are JSON; all GET params are URL-encoded.
 
 External harnesses do the agent loop. Pattern per worker:
 
-1. `POST /query` with `not_tag: ["processed-by:<worker-name>"]` and whatever `folder` / `has_tag` filters fit the worker.
+1. `POST /query` with `not_tag: ["processed-by-<worker-name>"]` and whatever `kinds` / `has_tag` filters fit the worker.
 2. Read each artifact via filesystem.
 3. Write outputs via filesystem (drops in the watched root → watcher indexes).
-4. `POST /tag` with `processed-by:<worker-name>` so the same artifact isn't re-picked next tick.
+4. `POST /tag` with `{ key: "processed-by-<worker-name>", value: <hash-or-ts> }` so the same artifact isn't re-picked next tick.
 
-"No tag = unprocessed" — new files surface naturally because they lack the worker's `processed-by` tag.
+"No tag = unprocessed" — new files surface naturally because they lack the worker's `processed-by-*` tag.
+
+**Don't reach for `folder` when scoping a worker.** PDF/Word sidecars live at `.sidecars/<mirrored>.html`, OUTSIDE the source folder. A `folder: "iarpa/sources"` query misses every binary's sidecar. Use the tag gate alone — `kinds: ["text"], not_tag: ["processed-by-<worker>"]` covers both source files and sidecars.
 
 ## Sidecars
 
