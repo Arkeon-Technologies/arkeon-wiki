@@ -53,9 +53,8 @@ export interface AdaptersManifest {
 export interface ExtractContext {
   /** Absolute path to the binary on disk. */
   absPath: string;
-  /** Path relative to the space's watch_dir, e.g. "sources/paper.pdf". */
+  /** Path relative to the watched root, e.g. "sources/paper.pdf". */
   relativePath: string;
-  spaceName: string;
   /** Resolved adapters from `~/.arkeon-wiki/adapters.json`. */
   adapters: AdaptersManifest;
   /**
@@ -84,7 +83,7 @@ export interface ExtractResult {
    * already-processed sidecars vs. manual ones.
    */
   extractedBy: string;
-  /** Soft issues from the extractor — go into agent-trace + logs. */
+  /** Soft issues from the extractor — go into the daemon log. */
   warnings?: string[];
 }
 

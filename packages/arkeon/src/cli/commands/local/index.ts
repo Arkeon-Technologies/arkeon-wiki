@@ -8,7 +8,6 @@ import { registerInstallCommand } from "./install.js";
 import { registerInstallDepsCommand } from "./install-deps.js";
 import { registerLogsCommand } from "./logs.js";
 import { registerLsCommand } from "./ls.js";
-import { registerMcpCommand } from "./mcp.js";
 import { registerStartCommand } from "./start.js";
 import { registerStatusCommand } from "./status.js";
 import { registerStopCommand } from "./stop.js";
@@ -26,5 +25,4 @@ export function registerLocalCommands(program: Command): void {
   registerInstallCommand(program);
   registerInstallDepsCommand(program);
   registerUninstallCommand(program);
-  registerMcpCommand(program);
 }

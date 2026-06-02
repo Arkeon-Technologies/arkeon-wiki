@@ -4,35 +4,33 @@
 /**
  * Filesystem watcher.
  *
- * Watches registered space directories for changes and keeps the
- * SQLite mirror in sync. node:fs.watch with the recursive option
- * (FSEvents on macOS, ReadDirectoryChangesW on Windows) covers the
- * platforms we care about.
+ * Watches the single root directory the daemon was started against
+ * and keeps the SQLite index in sync. node:fs.watch with the recursive
+ * option (FSEvents on macOS, ReadDirectoryChangesW on Windows) covers
+ * the platforms we care about.
  *
- * The watcher's only job is keeping the index live. Agents are
- * cron-paced — they query entities directly on each tick.
+ * The watcher's only job is keeping the index live. External harnesses
+ * poll the API on whatever schedule they own.
  */
 
 import { watch, type FSWatcher, existsSync, readdirSync, openSync, readSync, closeSync, statSync } from "node:fs";
 import { join, extname, basename } from "node:path";
 
-import { startScheduler } from "../agents/scheduler.js";
 import {
   cleanStaleStaging,
   isIngestable,
   runExtraction,
 } from "../extractors/runner.js";
-import { syncFile, syncDirectory, removeByPath, type Space } from "./sync.js";
-
-type SchedulerHandle = Awaited<ReturnType<typeof startScheduler>>;
+import { syncFile, syncDirectory, removeByPath } from "./sync.js";
 
 // Directories to skip during walk + watch.
 const IGNORE_DIRS = new Set([".arkeon", ".git", "node_modules", ".claude", "__pycache__", ".venv"]);
 
-// Eligibility model (PR: asset indexing):
+// Eligibility model:
 //
 //   Most files get indexed. The rule is:
-//     - Hidden / ignore-dir paths → skip (never indexed).
+//     - Hidden / ignore-dir paths → skip (.sidecars/ is the one
+//       dot-prefixed exception we walk into).
 //     - SKIP_EXTENSIONS (secrets, junk, well-known scratch formats) → skip.
 //     - Everything else → indexed. Classified as kind='text' or
 //       kind='asset' by `classifyFile()`:
@@ -40,12 +38,12 @@ const IGNORE_DIRS = new Set([".arkeon", ".git", "node_modules", ".claude", "__py
 //         · ASSET_EXTENSIONS allowlist → fast-path asset.
 //         · Unknown extension → sniff first SNIFF_BYTES; text iff no NUL.
 //
-// `kind='text'` files enter the agent queues (editor / proposer /
-// connector) and have their content parsed (wikis extract <a href> edges,
-// sources record file_type). `kind='asset'` files get an entity row with
-// metadata only — no parsing, no link extraction. They exist in the index
-// so links to them resolve (no red link on an `<img src>` or
-// `<a href="report.pdf">`), but they never become work for the agents.
+// `kind='text'` files feed FTS5 (POST /query with `text`) and have
+// their content parsed (HTML extracts `<a class="wikilink">` edges,
+// Markdown extracts `[[X]]`). `kind='asset'` files get an artifact
+// row with metadata only — no parsing, no link extraction, no FTS5
+// entry. They exist so links to binaries resolve as real edges
+// instead of redlinks.
 
 // Things we refuse to index at all, regardless of content. Two reasons
 // for an extension to be here:
@@ -131,7 +129,7 @@ export const TEXT_EXTENSIONS = new Set([
   ".editorconfig",
   // Logs / output
   ".log",
-  // Source code (agents can read code-as-source)
+  // Source code (callers can read code-as-source)
   ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
   ".py", ".rb", ".go", ".rs", ".java", ".kt", ".swift",
   ".c", ".cc", ".cpp", ".h", ".hpp", ".m", ".mm",
@@ -140,33 +138,6 @@ export const TEXT_EXTENSIONS = new Set([
   ".css", ".scss", ".sass", ".less",
   ".lua", ".php", ".pl", ".r", ".jl", ".scala", ".clj", ".cljs", ".ex", ".exs", ".erl",
 ]);
-
-/**
- * Ripgrep `--type-add` glob built from TEXT_EXTENSIONS so search and
- * indexing always see the same set of files. Adding a new text extension
- * above automatically widens search to match — no second list to sync.
- *
- * Form: `*.{ext1,ext2,...}` (no leading dots, alphabetized for stable
- * diffs). Asset extensions are excluded by construction (they're not in
- * TEXT_EXTENSIONS), and ripgrep's built-in binary detection is the
- * second line of defense for anything that slips through (text-shaped
- * binaries like SVG would otherwise be searchable).
- *
- * Lives in this module — not search.ts — to avoid a circular import:
- * fs-watcher → scheduler → tools → search → fs-watcher would otherwise
- * read TEXT_EXTENSIONS before the const initializer finished.
- *
- * Known gap: extensionless text files (README, LICENSE) are indexed
- * as kind='text' but not searchable — ripgrep `--type` selects by
- * extension only. Tracked separately.
- */
-export const TEXT_EXTENSION_GLOB = (() => {
-  const exts = [...TEXT_EXTENSIONS]
-    .map((e) => e.slice(1)) // strip leading dot
-    .filter((e) => /^[a-z0-9_]+$/.test(e)) // drop anything brace-unsafe
-    .sort();
-  return `*.{${exts.join(",")}}`;
-})();
 
 const SNIFF_BYTES = 8192;
 
@@ -219,24 +190,27 @@ export function sniffIsText(absPath: string): boolean {
   }
 }
 
-const watchers = new Map<string, FSWatcher>();
-const schedulers = new Map<string, SchedulerHandle>();
+let activeWatcher: FSWatcher | null = null;
+let activeWatchedRoot: string | null = null;
 const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 const DEBOUNCE_MS = 500;
 
 /**
- * True if any path segment is hidden (`.`-prefixed) or matches a
- * well-known ignore directory (`.git`, `node_modules`, `.arkeon`, etc.).
+ * True if any path segment is hidden (`.`-prefixed, except .sidecars)
+ * or matches a well-known ignore directory (`.git`, `node_modules`).
  *
  * Exported so the reader routes can return 404 for the same set the
- * watcher refuses to index — keeping one rule in one place. Without
- * this, a user could navigate to `/{space}/.arkeon/state.json` or
- * `/{space}/.git/config` and the static-file fallback would serve it.
+ * watcher refuses to index. Without this, a user could navigate to
+ * `/.git/config` and the file-serve fallback would serve it.
  */
 export function shouldIgnorePath(relativePath: string): boolean {
   const parts = relativePath.split("/");
   for (const part of parts) {
+    // .sidecars/ is the sidecar landing zone — sidecars must be
+    // indexed (kind='text') so they feed FTS5. Every other dot-prefixed
+    // path is skipped (.git, .arkeon, .env, dotfiles in general).
+    if (part === ".sidecars") continue;
     if (part.startsWith(".") && part !== ".") return true;
     if (IGNORE_DIRS.has(part)) return true;
   }
@@ -319,7 +293,9 @@ export function walkEligibleFiles(root: string, prefix = ""): string[] {
   }
 
   for (const entry of entries) {
-    if (entry.name.startsWith(".") && entry.name !== ".") continue;
+    // .sidecars/ is the only dot-prefixed dir we walk into; everything
+    // else dotfile is skipped.
+    if (entry.name.startsWith(".") && entry.name !== ".sidecars") continue;
 
     const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
 
@@ -338,42 +314,34 @@ export function walkEligibleFiles(root: string, prefix = ""): string[] {
 }
 
 /**
- * Start watching a space directory.
+ * Start watching the daemon's single root.
  *
  * First runs a full reconciliation (walk + syncDirectory), then starts
  * a live watcher for incremental changes.
  */
-export async function startWatching(space: Space): Promise<void> {
-  if (watchers.has(space.name)) {
-    console.log(`[watcher] Already watching space ${space.name}`);
+export async function startWatching(watchedRoot: string): Promise<void> {
+  if (activeWatcher) {
+    console.log(`[watcher] Already watching ${activeWatchedRoot}`);
     return;
   }
 
-  if (!existsSync(space.watch_dir)) {
-    console.warn(`[watcher] Directory not found: ${space.watch_dir} — skipping space ${space.name}`);
+  if (!existsSync(watchedRoot)) {
+    console.warn(`[watcher] Directory not found: ${watchedRoot}`);
     return;
   }
 
-  console.log(`[watcher] Reconciling space "${space.name}" (${space.watch_dir})`);
-  // Sweep any staging dirs left behind by a daemon crash mid-extraction.
-  // Best-effort; only nukes dirs untouched for >5 min so a slow in-flight
-  // extraction from a parallel process (shouldn't exist, but defensive)
-  // is safe.
-  cleanStaleStaging(space.watch_dir);
-  const files = walkEligibleFiles(space.watch_dir);
-  const summary = await syncDirectory(space, files);
+  console.log(`[watcher] Reconciling ${watchedRoot}`);
+  cleanStaleStaging(watchedRoot);
+  const files = walkEligibleFiles(watchedRoot);
+  const summary = await syncDirectory(watchedRoot, files);
   console.log(
     `[watcher] Reconciled: ${summary.created} created, ${summary.updated} updated, ` +
       `${summary.unchanged} unchanged, ${summary.removed} removed`,
   );
 
-  // After the initial sync, fire the extractor on every asset that has a
-  // registered handler. Re-extraction skip rules inside runExtraction
-  // mean already-processed sidecars short-circuit; this is just the
-  // bootstrap pass to cover assets that landed while the daemon was off.
   for (const relPath of files) {
     if (isIngestable(relPath)) {
-      runExtraction({ space, relativePath: relPath }).catch((err) => {
+      runExtraction({ watchedRoot, relativePath: relPath }).catch((err) => {
         console.error(
           `[ingest] bootstrap extraction failed for ${relPath}:`,
           (err as Error).message,
@@ -383,27 +351,13 @@ export async function startWatching(space: Space): Promise<void> {
   }
 
   try {
-    const scheduler = await startScheduler({ space });
-    schedulers.set(space.name, scheduler);
-  } catch (err) {
-    console.error(
-      `[watcher] Failed to start agent scheduler for space "${space.name}":`,
-      (err as Error).message,
-    );
-  }
-
-  try {
-    const watcher = watch(space.watch_dir, { recursive: true }, (_eventType, filename) => {
+    const watcher = watch(watchedRoot, { recursive: true }, (_eventType, filename) => {
       if (!filename) return;
 
       const relativePath = filename.replace(/\\/g, "/");
-      // Cheap pre-filter: drops hidden / ignored paths and known-binary
-      // extensions without I/O. The content sniff for unknown extensions
-      // happens inside handleFileEvent before syncFile, so deletes (where
-      // sniffing isn't possible) still flow through.
       if (!isPathPotentiallyEligible(relativePath)) return;
 
-      const absPath = join(space.watch_dir, relativePath);
+      const absPath = join(watchedRoot, relativePath);
       const existing = debounceTimers.get(absPath);
       if (existing) clearTimeout(existing);
 
@@ -411,58 +365,44 @@ export async function startWatching(space: Space): Promise<void> {
         absPath,
         setTimeout(() => {
           debounceTimers.delete(absPath);
-          handleFileEvent(space, relativePath);
+          handleFileEvent(watchedRoot, relativePath);
         }, DEBOUNCE_MS),
       );
     });
 
     watcher.on("error", (err) => {
-      console.error(`[watcher] Error in space "${space.name}":`, err.message);
+      console.error(`[watcher] Error in ${watchedRoot}:`, err.message);
     });
 
-    watchers.set(space.name, watcher);
-    console.log(`[watcher] Watching space "${space.name}" (${files.length} files)`);
+    activeWatcher = watcher;
+    activeWatchedRoot = watchedRoot;
+    console.log(`[watcher] Watching ${watchedRoot} (${files.length} files)`);
   } catch (err) {
-    console.error(`[watcher] Failed to start watching space "${space.name}":`, (err as Error).message);
+    console.error(`[watcher] Failed to start watching ${watchedRoot}:`, (err as Error).message);
   }
 }
 
-async function handleFileEvent(space: Space, relativePath: string): Promise<void> {
-  const absPath = join(space.watch_dir, relativePath);
+async function handleFileEvent(watchedRoot: string, relativePath: string): Promise<void> {
+  const absPath = join(watchedRoot, relativePath);
 
   if (existsSync(absPath)) {
-    // Skip events for directories. fs.watch with recursive:true emits
-    // rename events on both files AND the directories they sit in;
-    // syncFile would readFileSync the dir and throw EISDIR. (The
-    // directory's contained files generate their own events that we
-    // do process.)
     try {
       if (statSync(absPath).isDirectory()) return;
     } catch {
-      // race between event + delete — fall through, removeByPath
-      // path below will no-op
       return;
     }
-    // Full eligibility (may sniff content). A file that passes the
-    // path-only pre-filter but turns out to be binary on inspection
-    // gets dropped here — not indexed.
     if (!isEligibleFile(relativePath, absPath)) return;
     try {
-      const result = await syncFile(space, relativePath);
+      const result = await syncFile(watchedRoot, relativePath);
       if (result.action !== "unchanged") {
         console.log(`[watcher] ${result.action}: ${result.label} (${relativePath})`);
       }
-      // Asset with a registered extractor handler (PDF, future DOCX, etc.):
-      // fire-and-forget the extraction pipeline. The per-binary path lock
-      // inside runExtraction coalesces rapid edits; the sidecar's atomic
-      // write triggers a subsequent watcher event that syncs it as
-      // kind='text'.
       if (
         result.action !== "unchanged" &&
         result.kind === "asset" &&
         isIngestable(relativePath)
       ) {
-        runExtraction({ space, relativePath }).catch((err) => {
+        runExtraction({ watchedRoot, relativePath }).catch((err) => {
           console.error(
             `[ingest] extraction failed for ${relativePath}:`,
             (err as Error).message,
@@ -474,7 +414,7 @@ async function handleFileEvent(space: Space, relativePath: string): Promise<void
     }
   } else {
     try {
-      const removed = await removeByPath(space, relativePath);
+      const removed = await removeByPath(relativePath);
       if (removed) {
         console.log(`[watcher] removed: ${relativePath}`);
       }
@@ -484,27 +424,11 @@ async function handleFileEvent(space: Space, relativePath: string): Promise<void
   }
 }
 
-export async function stopWatching(spaceName: string): Promise<void> {
-  const watcher = watchers.get(spaceName);
-  if (watcher) {
-    watcher.close();
-    watchers.delete(spaceName);
-  }
-  const scheduler = schedulers.get(spaceName);
-  if (scheduler) {
-    await scheduler.stop();
-    schedulers.delete(spaceName);
-  }
-}
-
-export async function stopAllWatchers(): Promise<void> {
-  for (const [name, watcher] of watchers) {
-    watcher.close();
-    watchers.delete(name);
-  }
-  for (const [name, scheduler] of schedulers) {
-    await scheduler.stop();
-    schedulers.delete(name);
+export async function stopWatching(): Promise<void> {
+  if (activeWatcher) {
+    activeWatcher.close();
+    activeWatcher = null;
+    activeWatchedRoot = null;
   }
   for (const timer of debounceTimers.values()) {
     clearTimeout(timer);
@@ -512,14 +436,6 @@ export async function stopAllWatchers(): Promise<void> {
   debounceTimers.clear();
 }
 
-export async function startAllWatchers(): Promise<void> {
-  const { createSql } = await import("./sql.js");
-  const sql = createSql();
-  const spaces = await sql`
-    SELECT name, watch_dir FROM spaces WHERE watch_dir IS NOT NULL
-  `;
-
-  for (const space of spaces) {
-    await startWatching(space as unknown as Space);
-  }
+export function getWatchedRoot(): string | null {
+  return activeWatchedRoot;
 }

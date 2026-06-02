@@ -94,7 +94,9 @@ def main(argv: list[str]) -> int:
         "<head>",
         f"  <title>{html.escape(binary_basename)}</title>",
         f'  <meta name="label" content="{html.escape(binary_basename)}">',
-        '  <meta name="extracted_by" content="pymupdf">',
+        # `extracted_by` lives in `tags`, not `properties` — the
+        # runner sets it via setTag after a successful extraction.
+        # Avoid duplicating the same fact across two channels.
         '  <meta name="extractor_kind" content="pdf">',
         "</head>",
         "<body>",

@@ -5,13 +5,13 @@
  * Manage ~/.arkeon-wiki/.env on behalf of `install`.
  *
  * The supervisor (launchd / systemd) does not inherit the user's shell
- * environment. Without a persisted .env file, the daemon would start
- * after reboot but agents couldn't authenticate (no OPENAI_API_KEY).
+ * environment. The daemon itself doesn't need env vars to run, but
+ * external harnesses co-located on the same machine often want to
+ * read API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, …) from a known
+ * persistent location. ~/.arkeon-wiki/.env is that location.
  *
- * The runtime already loads `~/.arkeon-wiki/.env` via
- * `server/agents/env-loader.ts:42` — we don't need to invent a loader.
- * Install's job is to ensure the file exists and contains the keys the
- * user expects, *without ever overwriting an existing value*.
+ * Install's job is to ensure the file exists and contains the keys
+ * the user expects, *without ever overwriting an existing value*.
  *
  * Idempotent and non-destructive:
  *
@@ -126,9 +126,8 @@ export function snapshotEnv(opts: SnapshotEnvOptions): SnapshotEnvResult {
       : "";
     appendFileSync(opts.envFilePath, `${prefix}${lines}\n`, "utf-8");
   } else if (apply && !existsSync(opts.envFilePath)) {
-    // Create an empty file so the env-loader's existsSync check
-    // doesn't keep returning false — purely cosmetic but matches the
-    // user's mental model of "the file is there".
+    // Create an empty file so existsSync probes return true — purely
+    // cosmetic but matches the user's mental model of "the file is there".
     ensureDir(opts.envFilePath);
     writeFileSync(opts.envFilePath, "", "utf-8");
   }

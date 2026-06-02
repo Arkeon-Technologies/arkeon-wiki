@@ -63,9 +63,9 @@ export function launchdPlistPath(label: string, home: string = homedir()): strin
  *   - `EnvironmentVariables.PATH` is set explicitly because launchd's
  *     default PATH is the bare minimum and won't find homebrew binaries.
  *   - Secrets (OPENAI_API_KEY etc.) deliberately do *not* live here.
- *     They go in ~/.arkeon-wiki/.env via env-snapshot.ts; the agent
- *     runtime loads them at startup. Plists are world-readable on
- *     multi-user Macs — we don't want keys there.
+ *     They go in ~/.arkeon-wiki/.env via env-snapshot.ts so co-located
+ *     harnesses can read them. Plists are world-readable on multi-user
+ *     Macs — we don't want keys there.
  */
 export function renderLaunchdPlist(opts: InstallOptions): string {
   const { name, home, paths } = opts;

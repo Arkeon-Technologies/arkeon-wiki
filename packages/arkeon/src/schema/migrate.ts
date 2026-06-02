@@ -37,6 +37,26 @@ export async function runMigrations(opts: MigrateOptions): Promise<void> {
 
   const db = initDb(opts.dbPath);
 
+  // Legacy-schema detector. The old schema shipped `entities`/
+  // `relationships`/`spaces`/`entity_edits`; the substrate ships
+  // `artifacts`/`tags`/`links`/`fts_artifacts`. If the DB has the
+  // legacy shape, the migration ledger says `001-foundation.sql` is
+  // already applied (but the current file is a totally different
+  // schema), so we'd skip it and start INSERTing into tables that
+  // don't exist. Fail loud with an actionable hint.
+  const tables = new Set(
+    (db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table'",
+    ).all() as { name: string }[]).map((r) => r.name),
+  );
+  if (tables.has("entities") && !tables.has("artifacts")) {
+    throw new Error(
+      `Legacy schema detected at ${opts.dbPath}. The substrate is a destructive reset — ` +
+        `the DB is a pure index of filesystem state and rebuilds in seconds. ` +
+        `Run: rm "${opts.dbPath}" && arkeon-wiki up`,
+    );
+  }
+
   // Bootstrap the migration ledger so subsequent runs can skip applied
   // files. Without this, every migration must be naturally idempotent
   // (CREATE TABLE IF NOT EXISTS); with it, non-idempotent recreates

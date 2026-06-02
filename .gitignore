@@ -36,7 +36,8 @@ data/
 .claude-worktrees/
 .worktrees/
 
-# Worktree-scoped arkeon state
+# Per-directory arkeon state (legacy v0 binding + dev scratch)
+.arkeon/
 .arkeon-state/
 
 # Local planning / scratch

@@ -4,16 +4,16 @@
 /**
  * Extractor orchestration: stage assets in a tmp dir, invoke the
  * handler, validate output, atomically swap into place, write the
- * sidecar, sync it through the normal pipeline, and tag the result so
- * re-extraction skips already-processed sidecars.
+ * sidecar at .sidecars/<mirrored>.html, sync it through the normal
+ * pipeline, and tag the result so re-extraction skips already-
+ * processed sidecars.
  *
- * Failure paths produce a stub sidecar with the error inline — the
- * editor still sees a real source rather than nothing, and the failure
- * is visible at the next read.
+ * Failure paths produce a stub sidecar with the error inline so
+ * something is visible at the next read.
  *
- * Per-binary serialization: the extractor pipeline runs under
- * `withPathLock(spaceName::relPath)` so rapid edits coalesce and we
- * never have two subprocesses staging into the same assets dir.
+ * Per-binary serialization: rapid edits to the same path queue
+ * behind each other via a small in-process Map, so we never have
+ * two subprocesses staging into the same assets dir.
  */
 
 import { randomBytes } from "node:crypto";
@@ -29,10 +29,8 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { deleteEntityTag, getEntity, setEntityTag } from "../lib/entities.js";
-import { setEditContext, clearEditContext } from "../lib/edit-context.js";
-import { withPathLock } from "../lib/path-lock.js";
-import { removeByPath, syncFile, type Space } from "../lib/sync.js";
+import { deleteTag, getArtifact, setTag } from "../lib/entities.js";
+import { removeByPath, syncFile } from "../lib/sync.js";
 
 import { requireAdaptersManifest } from "./adapters.js";
 import { handlerFor, INGESTABLE_EXTENSIONS } from "./index.js";
@@ -44,12 +42,23 @@ import {
 } from "./validate.js";
 
 /**
- * The "by_role" attribution stamped onto entity_edits rows produced by
- * the extractor's sidecar writes. Distinct from "human" (filesystem
- * edits) and the agent role names so the recent feed can filter to
- * "what the extractor produced lately".
+ * Per-binary serialization: if two events fire for the same path back to
+ * back, we don't want two subprocesses staging into the same assets dir.
+ * Queue them on a Map of in-flight Promises keyed by space::path.
  */
-const INGEST_BY_ROLE = "ingest";
+const inFlight = new Map<string, Promise<unknown>>();
+
+function withPathLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prior = inFlight.get(key) ?? Promise.resolve();
+  const next = prior.then(fn, fn);
+  inFlight.set(
+    key,
+    next.finally(() => {
+      if (inFlight.get(key) === next) inFlight.delete(key);
+    }),
+  );
+  return next;
+}
 
 /** Sidecar carries this tag set after a successful extraction. */
 const EXTRACTED_BY_TAG = "extracted_by";
@@ -70,8 +79,8 @@ const EXTRACTED_BY_FAILED = "failed";
 const FAILED_FOR_BINARY_HASH_TAG = "failed_for_binary_hash";
 
 export interface RunExtractionOptions {
-  space: Space;
-  /** Space-relative path to the binary that landed on disk. */
+  watchedRoot: string;
+  /** Relative path to the binary that landed on disk. */
   relativePath: string;
 }
 
@@ -96,7 +105,7 @@ export async function runExtraction(
   const handler = handlerFor(opts.relativePath);
   if (!handler) return null;
 
-  return withPathLock(`extract::${opts.space.name}::${opts.relativePath}`, () =>
+  return withPathLock(`extract::${opts.relativePath}`, () =>
     runExtractionInner(opts, handler),
   );
 }
@@ -105,24 +114,28 @@ async function runExtractionInner(
   opts: RunExtractionOptions,
   handler: FileHandler,
 ): Promise<ExtractionOutcome> {
-  const { space, relativePath } = opts;
-  const absPath = join(space.watch_dir, relativePath);
-  const sidecarRelPath = `${relativePath}.html`;
-  const sidecarAbsPath = join(space.watch_dir, sidecarRelPath);
-  // assetsRelDir is the dir basename only — that's what the script
-  // embeds in <img src> paths (sidecar lives in the same parent dir).
+  const { watchedRoot, relativePath } = opts;
+  const absPath = join(watchedRoot, relativePath);
+  // Sidecars live in .sidecars/<mirrored-path>.html so they don't
+  // clutter the source tree alongside the binaries.
+  const sidecarRelPath = `.sidecars/${relativePath}.html`;
+  const sidecarAbsPath = join(watchedRoot, sidecarRelPath);
+  // assetsRelDir is the dir basename only — that's what the extractor
+  // script embeds in <img src> paths (sidecar lives in the same parent dir).
   const assetsRelDir = `${baseName(relativePath)}.assets`;
-  const assetsAbsDir = join(dirname(absPath), assetsRelDir);
-  // assetsSpaceRelDir is the space-relative path used for syncFile —
-  // e.g. "sources/papers/paper.pdf.assets".
-  const binaryParentRel = dirname(relativePath);
+  // Assets directory mirrors the sidecar's location.
+  const sidecarAbsParent = dirname(sidecarAbsPath);
+  const assetsAbsDir = join(sidecarAbsParent, assetsRelDir);
+  // assetsSpaceRelDir is the watch-relative path used for syncFile —
+  // e.g. ".sidecars/sources/papers/paper.pdf.assets".
+  const sidecarParentRel = dirname(sidecarRelPath);
   const assetsSpaceRelDir =
-    binaryParentRel === "." ? assetsRelDir : `${binaryParentRel}/${assetsRelDir}`;
+    sidecarParentRel === "." ? assetsRelDir : `${sidecarParentRel}/${assetsRelDir}`;
 
   // Re-extraction skip: if an existing sidecar was authored by hand
   // (no extracted_by tag) or explicitly tagged "manual", leave it
   // alone. Users can force re-extraction by deleting the sidecar.
-  const skipReason = await shouldSkipExisting(space, relativePath, sidecarRelPath);
+  const skipReason = await shouldSkipExisting(relativePath, sidecarRelPath);
   if (skipReason) {
     return { status: "skipped", reason: skipReason };
   }
@@ -155,7 +168,6 @@ async function runExtractionInner(
     const result = await handler.extract({
       absPath,
       relativePath,
-      spaceName: space.name,
       adapters,
       assetsDir: stagingDir,
       assetsRelDir,
@@ -175,13 +187,15 @@ async function runExtractionInner(
       // pointing at the prior extraction's files.
       for (const stale of readdirSync(assetsAbsDir)) {
         try {
-          await removeByPath(space, `${assetsSpaceRelDir}/${stale}`);
+          await removeByPath(`${assetsSpaceRelDir}/${stale}`);
         } catch {
           /* ignore — best-effort cleanup */
         }
       }
       rmSync(assetsAbsDir, { recursive: true, force: true });
     }
+    // Ensure .sidecars/<dir>/ exists before the rename lands there.
+    mkdirSync(dirname(assetsAbsDir), { recursive: true });
     renameSync(stagingDir, assetsAbsDir);
     stagingDir = null;
 
@@ -194,7 +208,7 @@ async function runExtractionInner(
     for (const assetName of readdirSync(assetsAbsDir)) {
       const assetSpaceRelPath = `${assetsSpaceRelDir}/${assetName}`;
       try {
-        await syncFile(space, assetSpaceRelPath);
+        await syncFile(watchedRoot, assetSpaceRelPath);
       } catch (err) {
         log(
           "warn",
@@ -203,34 +217,12 @@ async function runExtractionInner(
       }
     }
 
-    // Write sidecar with edit attribution so the entity_edits row
-    // records by_role='ingest' instead of the default 'human'. We use
-    // "resync" when the sidecar already existed (overwriting our own
-    // previous extraction) and "create" for the first run.
-    const sidecarPreexisted = existsSync(sidecarAbsPath);
     writeSidecarAtomic(sidecarAbsPath, result.html);
-    setEditContext(space.name, sidecarRelPath, {
-      role: INGEST_BY_ROLE,
-      edit_kind: sidecarPreexisted ? "resync" : "create",
-      note: `${handler.name} sidecar`,
-    });
-    try {
-      await syncFile(space, sidecarRelPath);
-    } finally {
-      clearEditContext(space.name, sidecarRelPath);
-    }
+    await syncFile(watchedRoot, sidecarRelPath);
 
-    // Tag the sidecar so re-extraction skips manual overrides and so
-    // we can identify failed vs. successful sidecars later. Also clear
-    // any stale failed-hash tag from a previous failure so a future
-    // failure can't accidentally read it as fresh.
-    await setEntityTag(
-      space.name,
-      sidecarRelPath,
-      EXTRACTED_BY_TAG,
-      result.extractedBy,
-    );
-    await deleteEntityTag(space.name, sidecarRelPath, FAILED_FOR_BINARY_HASH_TAG);
+    // Tag the sidecar so re-extraction skips manual overrides.
+    await setTag(sidecarRelPath, EXTRACTED_BY_TAG, result.extractedBy);
+    await deleteTag(sidecarRelPath, FAILED_FOR_BINARY_HASH_TAG);
 
     const assets = readdirSync(assetsAbsDir);
     log(
@@ -268,36 +260,12 @@ async function runExtractionInner(
     });
 
     try {
-      const sidecarPreexisted = existsSync(sidecarAbsPath);
       writeSidecarAtomic(sidecarAbsPath, stubHtml);
-      setEditContext(space.name, sidecarRelPath, {
-        role: INGEST_BY_ROLE,
-        edit_kind: sidecarPreexisted ? "resync" : "create",
-        note: `${handler.name} stub (failed)`,
-      });
-      try {
-        await syncFile(space, sidecarRelPath);
-      } finally {
-        clearEditContext(space.name, sidecarRelPath);
-      }
-      await setEntityTag(
-        space.name,
-        sidecarRelPath,
-        EXTRACTED_BY_TAG,
-        EXTRACTED_BY_FAILED,
-      );
-      // Stamp the binary's current hash so future watcher events on
-      // the same content skip the retry loop. The binary entity was
-      // synced before this extractor fired (kind='asset' path), so
-      // its source_hash is fresh.
-      const binary = await getEntity(space.name, relativePath);
+      await syncFile(watchedRoot, sidecarRelPath);
+      await setTag(sidecarRelPath, EXTRACTED_BY_TAG, EXTRACTED_BY_FAILED);
+      const binary = await getArtifact(relativePath);
       if (binary?.source_hash) {
-        await setEntityTag(
-          space.name,
-          sidecarRelPath,
-          FAILED_FOR_BINARY_HASH_TAG,
-          binary.source_hash,
-        );
+        await setTag(sidecarRelPath, FAILED_FOR_BINARY_HASH_TAG, binary.source_hash);
       }
     } catch (stubErr) {
       console.error(
@@ -327,55 +295,33 @@ async function runExtractionInner(
  *   the content changed or we want a fresh run).
  */
 async function shouldSkipExisting(
-  space: Space,
   binaryRelPath: string,
   sidecarRelPath: string,
 ): Promise<string | null> {
-  const entity = await getEntity(space.name, sidecarRelPath);
+  const entity = await getArtifact(sidecarRelPath);
   if (!entity) return null;
 
-  const tags = parseTagsBag(entity.tags);
-  const extractedBy = tags[EXTRACTED_BY_TAG];
+  const extractedBy = entity.tags[EXTRACTED_BY_TAG];
 
   if (extractedBy === undefined || extractedBy === null) {
     return "sidecar exists without extracted_by tag (treated as manual)";
   }
-  const extractedByStr =
-    typeof extractedBy === "string" ? extractedBy.toLowerCase() : null;
+  const extractedByStr = extractedBy.toLowerCase();
   if (extractedByStr === "manual") {
     return "sidecar tagged extracted_by=manual";
   }
   if (extractedByStr === EXTRACTED_BY_FAILED) {
-    // Failed sidecar — only skip if we failed on the binary's CURRENT
-    // content. If the user touched / edited / replaced the binary, the
-    // hashes differ and we retry.
-    const failedFor = tags[FAILED_FOR_BINARY_HASH_TAG];
+    const failedFor = entity.tags[FAILED_FOR_BINARY_HASH_TAG];
     if (typeof failedFor !== "string" || failedFor.length === 0) {
-      // Old failed sidecar from before we started stamping the hash —
-      // fall through and retry once, which will re-stamp it.
       return null;
     }
-    const binary = await getEntity(space.name, binaryRelPath);
+    const binary = await getArtifact(binaryRelPath);
     if (binary && binary.source_hash === failedFor) {
       return "sidecar previously failed on this content (extracted_by=failed)";
     }
-    // Hash differs → content changed → retry.
     return null;
   }
   return null;
-}
-
-function parseTagsBag(
-  tags: Record<string, unknown> | string,
-): Record<string, unknown> {
-  if (typeof tags === "string") {
-    try {
-      return JSON.parse(tags) as Record<string, unknown>;
-    } catch {
-      return {};
-    }
-  }
-  return tags ?? {};
 }
 
 function baseName(relativePath: string): string {
@@ -395,15 +341,16 @@ function createStagingDir(binaryAbsPath: string): string {
 
 /**
  * Write `content` to `targetAbsPath` via tmp + rename so the watcher
- * never sees a half-written sidecar.
+ * never sees a half-written sidecar. Ensures the parent directory
+ * exists first (relevant for .sidecars/<mirrored>/).
  */
 function writeSidecarAtomic(targetAbsPath: string, content: string): void {
+  mkdirSync(dirname(targetAbsPath), { recursive: true });
   const tmpPath = `${targetAbsPath}.tmp.${randomBytes(4).toString("hex")}`;
   writeFileSync(tmpPath, content, "utf-8");
   try {
     renameSync(tmpPath, targetAbsPath);
   } catch (err) {
-    // Best-effort cleanup if rename failed (e.g. cross-device).
     try {
       unlinkSync(tmpPath);
     } catch {

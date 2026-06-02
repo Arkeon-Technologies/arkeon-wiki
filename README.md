@@ -1,177 +1,111 @@
-# Arkeon Wiki
+# arkeon-wiki
 
-A knowledge graph that lives in your filesystem. Point it at a directory, and it watches for changes, indexes files into SQLite, and builds a connected graph from `<a href>` links between HTML articles.
-
-**First-time setup → [SETUP.md](./SETUP.md)** is a 15-minute walkthrough that takes you from install to a corpus the agents are actively writing into.
+A filesystem-first substrate for agent harnesses. Point the daemon at one directory; it watches files, indexes them into SQLite, and exposes a small JSON API. External harnesses (Hermes, OpenClaw, Claude Code, anything else) own the agent loop. Arkeon is just the substrate.
 
 ## Quick start
 
-**1. Install and start**
-
 ```bash
 npm install -g arkeon-wiki
-arkeon-wiki up
+arkeon-wiki up --watch-dir ~/work/corpus
 ```
 
-This starts the daemon as a detached background process — it survives your terminal closing. Stop it with `arkeon-wiki down`. State (SQLite database, pidfile, log) lives in `~/.arkeon-wiki/`.
+The daemon detaches, watches `~/work/corpus` recursively, and serves the API on `http://localhost:8000`. Drop files into the directory — they get indexed. Stop with `arkeon-wiki down`.
 
-For a daemon that also survives reboot and restarts on crash, run `arkeon-wiki install` (macOS launchd or Linux systemd `--user`). See [§Persistent service](#persistent-service).
+For a daemon that survives reboot and restarts on crash, run `arkeon-wiki install` (macOS launchd or Linux systemd `--user`).
 
-**2. Register a directory**
+## What gets indexed
 
-```bash
-cd /path/to/my-knowledge-base
-arkeon-wiki init
+Every file the watcher sees lands in the `artifacts` table keyed by its path relative to the watched root (e.g. `iarpa/sources/paper.pdf`).
+
+- HTML files: `<title>` + `<meta>` tags go into `properties`; `<a class="wikilink">` anchors become graph edges with optional `data-*` citation metadata captured in `links.attrs` JSON.
+- Markdown: `[[X]]` and `[[X|Display]]` wikilinks resolve by shortest-unique-basename match against the index.
+- Text files (code, configs, logs, ...): indexed for FTS5 search; no link extraction.
+- Binaries (PDFs today): indexed as `kind='asset'` so links resolve. An HTML sidecar lands at `.sidecars/<mirrored-path>.html` (run `arkeon-wiki install-deps` once to bootstrap the PyMuPDF venv).
+
+The filesystem is the source of truth. SQLite is the index. Delete a file → its row goes. Edit a file → re-sync. No manual commands.
+
+## HTTP API — six commands
+
+Default base URL: `http://localhost:8000`. No auth (loopback bind). All POSTs are JSON.
+
+```
+POST /query        { folder?, kinds?, has_tag?[], not_tag?[], text?, limit?, offset? }
+POST /tag          { path, key, value? }
+POST /untag        { path, key }
+GET  /tags?path=...
+GET  /backlinks?path=...
+GET  /redlinks?folder=...&limit=&offset=
 ```
 
-This registers the directory as a space. The daemon immediately starts watching it for changes.
+Tag conventions: `key:value` strings throughout (e.g. `status:feedback`, `processed-by:editor`). Workers query for artifacts MISSING their `processed-by:<worker-name>` tag. "No tag = unprocessed."
 
-**3. Add wiki files**
+`POST /query` filters are AND-composed. `has_tag` / `not_tag` entries can be `"key"` (presence) or `"key:value"` (key+value match). `text` runs FTS5 MATCH against the artifact body.
 
-Create HTML articles under `wiki/`:
+Full reference at `GET /llms.txt` or `GET /help`.
 
-```html
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Claude Shannon</title>
-  <meta name="label" content="Claude Shannon">
-  <meta name="short_description" content="The mathematician who founded information theory.">
-</head>
-<body>
-  <h1>Claude Shannon</h1>
-  <p>Claude Shannon was the father of information theory.</p>
-  <p>He worked at <a href="bell-labs.html">Bell Labs</a>.</p>
-</body>
-</html>
-```
+## Reader
 
-The system automatically:
-- Detects new files and indexes them by `(space_name, source_path)` — no IDs
-- Extracts `<title>` + `<meta>` tags into searchable properties
-- Resolves `<a href>` links into relationship edges
-- Detects edits and re-syncs
-- Detects deletions and cleans up
+URL structure mirrors disk structure.
 
-No manual sync commands. Just save files.
+- `GET /` — directory listing of the watched root.
+- `GET /<path>/` — directory listing of any subfolder.
+- `GET /<path>` — serve the file. HTML files run through wikilink rewriting; unresolved `<a class="wikilink">` anchors gain a `redlink` class so CSS can style them.
 
-**4. Read in the browser**
-
-Open `http://localhost:8000/` to see the list of registered spaces. Click through to an article — the daemon serves the HTML straight off disk, injects a small back-link strip, and tags missing link targets in red so red links are obvious as you read.
-
-URL structure mirrors disk structure within a space (`wiki/foo.html` on disk → `http://localhost:8000/{space}/wiki/foo.html`). Relative hrefs in articles resolve the same way over HTTP and `file://`, so the writer's output stays portable — copy the directory, open the HTML, links work.
-
-**5. Query the graph**
-
-```bash
-# List wikis in your space
-curl "http://localhost:8000/{space}/entities?type=wiki"
-
-# Get one article with relationships
-curl "http://localhost:8000/{space}/entities/wiki/photosynthesis.html"
-
-# Find link targets that don't have an article yet ("red links")
-curl "http://localhost:8000/{space}/redlinks"
-
-# Keyword search via ripgrep
-curl "http://localhost:8000/{space}/search?q=shannon"
-```
-
-Or from the CLI: `arkeon-wiki search shannon`.
-
-## How it works
-
-The filesystem is the source of truth. SQLite is an index.
-
-- **Spaces** are directories registered with the daemon (keyed by name).
-- **Entities** are files on disk, identified by `(space_name, source_path)`. HTML files under `wiki/` are `type='wiki'`; anything else is `type='file'`.
-- **Relationships** are `<a href>` links resolved into edges. A link to a target without a matching entity is a **red link** — surfaced via `/{space}/redlinks` for the writer to fill in.
-- A file watcher detects changes in real-time; a reconciliation pass on startup catches anything missed.
+The same article opens identically under `file://` and `http://`.
 
 ## CLI
 
 ```bash
-arkeon-wiki up                 # start the daemon detached (SQLite + API)
-arkeon-wiki down               # stop it
-arkeon-wiki status             # check if running
-arkeon-wiki ls                 # list running instances
-arkeon-wiki logs [-f]          # print/tail the daemon log
-arkeon-wiki init [name]        # register current directory as a space
-arkeon-wiki search <query>     # keyword search (ripgrep, defaults to bound space)
-arkeon-wiki sources scan       # list files by extension (supported vs unsupported)
-arkeon-wiki agent run <role>   # fire one role on demand (writer/editor/proposer/custom)
-arkeon-wiki config init        # write .arkeon/agents.yaml from a template
-arkeon-wiki config show        # print merged effective agent config
-arkeon-wiki config validate    # schema-check the YAML
-arkeon-wiki start              # foreground (for use under pm2/launchd/etc.)
-arkeon-wiki install            # persistent service: starts at login, restarts on crash
-arkeon-wiki uninstall          # remove the service
+arkeon-wiki up [--watch-dir <path>]   # start the daemon detached
+arkeon-wiki down                      # stop it
+arkeon-wiki status                    # is it running?
+arkeon-wiki ls                        # list running instances
+arkeon-wiki logs [-f]                 # print/tail the daemon log
+arkeon-wiki start                     # foreground (for pm2/launchd/etc.)
+arkeon-wiki install                   # persistent service
+arkeon-wiki uninstall                 # remove the service
+arkeon-wiki install-deps              # bootstrap Python venv for PDF extraction
 ```
+
+`--name <name>` runs multiple instances side by side (different state dirs, different ports).
 
 ## Persistent service
 
-`arkeon-wiki up` runs as a detached child — survives your shell, but not a reboot. For a daemon that comes back automatically at login and restarts on crash, install it as a service:
+`arkeon-wiki up` runs detached — survives your shell, not reboot. For boot-time start + auto-restart on crash:
 
 ```bash
-arkeon-wiki install                  # default instance
-arkeon-wiki install --name dev-a     # a specific --name instance
-arkeon-wiki uninstall                # remove the service (leaves data dir intact)
+arkeon-wiki install                 # default instance
+arkeon-wiki install --name dev-a    # named instance
+arkeon-wiki uninstall               # remove the service (leaves data intact)
 ```
 
-**macOS** writes `~/Library/LaunchAgents/tech.arkeon.wiki[.<name>].plist` and bootstraps it into the user's launchd domain. No sudo. The plist's `KeepAlive: { SuccessfulExit: false, Crashed: true }` contract means `arkeon-wiki down` stays down (clean exit), but a crashed daemon comes back within ~10s.
+- **macOS**: writes `~/Library/LaunchAgents/tech.arkeon.wiki[.<name>].plist` and bootstraps into the user's launchd domain. No sudo.
+- **Linux**: writes `~/.config/systemd/user/arkeon-wiki[-<name>].service`, enables via `systemctl --user enable --now`, runs `loginctl enable-linger` (best-effort) so the service survives logout. Requires systemd 240+. On non-systemd Linux (Alpine, OpenRC) the install refuses with manual instructions instead of producing a broken unit.
 
-**Linux** writes `~/.config/systemd/user/arkeon-wiki[-<name>].service` and enables it via `systemctl --user enable --now`, plus `loginctl enable-linger $USER` so the service survives logout on headless servers (best-effort — fine on most distros; some require sudo via polkit). No sudo for the install itself. `Restart=on-failure` + `RestartSec=10` give the same "clean down stays down, crash → restart after 10s" semantics as the Mac path. On non-systemd Linux (Alpine, WSL1, OpenRC/runit) the install refuses with actionable manual instructions rather than writing a unit the system can't load.
-
-API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) live in `~/.arkeon-wiki/.env` (mode 0600), *not* in the plist/unit. `install` captures keys from your shell if they're set there but not in the file yet — it never overwrites existing values. Rotate keys by editing the file.
-
-When a service is installed, `up`/`down`/`status` coordinate with the supervisor automatically: `up` delegates to `launchctl kickstart` / `systemctl --user start` instead of spawning an orphan; `down` produces a clean exit the supervisor respects; `status` surfaces a `service` field with installed/running/pid.
-
-## Agents (LLM-powered)
-
-arkeon-wiki ships a three-role agent pipeline — `editor`, `proposer`, `writer` — that ingests sources, proposes the questions worth answering, and drafts the HTML articles. All three run on cron, serialized per-space. `arkeon-wiki init` lays down `.arkeon/agents.yaml` from the bundled `wiki` template (committed so the team shares it); secrets go in `~/.arkeon-wiki/.env` (per-user, machine-local).
-
-```bash
-echo "OPENAI_API_KEY=sk-..." > ~/.arkeon-wiki/.env             # one key for all spaces
-$EDITOR .arkeon/agents.yaml                                    # set provider/model/instructions
-arkeon-wiki config show                                        # confirm what'll run
-```
-
-`init` skips the template if `.arkeon/agents.yaml` already exists. To re-create one (or pick a different template later) run `arkeon-wiki config init --template <name>` (use `--force` to overwrite).
-
-Roles run on OpenAI, Anthropic, or any OpenAI-compatible backend (Ollama, LM Studio, OpenRouter, Groq, vLLM, …). Each role can use a different provider; secrets stay in `.env`, never YAML. Custom user-defined roles are first-class.
-
-### Opinionating your wiki
-
-A bare config will produce a generic wiki that takes every source seriously and writes articles on whatever it finds. To get an *opinionated* wiki — one with a point of view, a scope, a house style — set `instructions:` in `.arkeon/agents.yaml`. It's appended to every role's system prompt without disturbing the workflow, so it's the one knob you reach for first.
-
-```yaml
-defaults:
-  instructions: |
-    This wiki is about distributed systems, with a bias toward
-    primary-source engineering writeups (postmortems, design docs,
-    papers) over secondary commentary. Skip vendor blog posts.
-    Tone: skeptical, evidence-led, no marketing voice.
-    Audience: practitioners, not students — assume the reader knows
-    what consensus and replication are.
-```
-
-This is the most consequential setting in the file. The default article structure (`Question / Current answer / Evidence / Open threads`) is a soft convention baked into the bundled prompts — if it doesn't fit your domain, override the `writer` role's `system:` directly. Otherwise, treat `instructions:` as the place to spend your editorial judgment.
-
-Full setup guide: [docs/user/AGENT_RUNTIME.md](./docs/user/AGENT_RUNTIME.md).
+When a service is installed, `up` / `down` / `status` coordinate with the supervisor automatically.
 
 ## Configuration
 
-All state lives in `~/.arkeon-wiki/` (override with `ARKEON_WIKI_HOME` or `--data-dir`).
+All state lives in `~/.arkeon-wiki/`.
 
-| Config | Purpose |
-|--------|---------|
-| `ARKEON_WIKI_HOME` env var | Override state directory |
-| `--data-dir <path>` flag | Per-invocation override |
-| `--port <port>` flag | API port (default: 8000) |
-| `--name <name>` flag | Run a named instance side-by-side with others |
-| `~/.arkeon-wiki/.env` | Universal API keys (OpenAI, Anthropic, etc.) — auto-loaded |
-| `<repo>/.env` | Per-repo API key override. Gitignored by `init` (alongside `.arkeon/state.json`). |
-| `.arkeon/agents.yaml` | Per-repo agent config: providers, models, operator instructions, custom roles. Committed. See [AGENT_RUNTIME.md](./docs/user/AGENT_RUNTIME.md). |
+| Setting | Purpose |
+|---|---|
+| `--watch-dir <path>` / `ARKEON_WIKI_WATCH_DIR` | Directory the daemon indexes |
+| `ARKEON_WIKI_HOME` / `--data-dir` | Override the state directory (default `~/.arkeon-wiki/`) |
+| `--port <port>` | API port (default 8000, or derived from `--name`) |
+| `--name <name>` | Run a named instance side-by-side with others |
+| `ARKEON_WIKI_HOST` | Bind address (default `127.0.0.1` — loopback) |
+
+## Trigger pattern (for harnesses)
+
+External harnesses do the agent loop. Each worker tick:
+
+1. `POST /query` with `not_tag: ["processed-by:<worker-name>"]` and whatever folder/has_tag filters fit the worker.
+2. Read each artifact from the filesystem.
+3. Write outputs to the filesystem (the watcher indexes them).
+4. `POST /tag` with `processed-by:<worker-name>` to mark the artifact done.
+
+New content surfaces because `syncFile` indexes new artifacts without any `processed-by` tag — the worker's next tick picks them up automatically.
 
 ## Development
 
@@ -179,15 +113,15 @@ All state lives in `~/.arkeon-wiki/` (override with `ARKEON_WIKI_HOME` or `--dat
 git clone https://github.com/Arkeon-Technologies/arkeon-wiki
 cd arkeon-wiki
 npm install
-npx tsx packages/arkeon/src/index.ts start
+npx tsx packages/arkeon/src/index.ts start --watch-dir /tmp/test-corpus
 ```
 
 ### Testing
 
 ```bash
-npm run typecheck -w packages/arkeon    # type checking
-npm test -w packages/arkeon             # unit tests
-npm run test:e2e -w packages/arkeon     # e2e tests (spins up SQLite + API in-process)
+npm run typecheck -w packages/arkeon
+npm test -w packages/arkeon
+npm run test:e2e -w packages/arkeon
 ```
 
 ## License
