@@ -61,15 +61,23 @@ Three tables in SQLite, plus an FTS5 virtual table:
 
 HTML: \`<a class="wikilink" href="./topic-x">topic X</a>\`. Only
 anchors with \`wikilink\` in their class list become graph edges.
-Other \`<a>\` elements render as ordinary HTML.
+Other \`<a>\` elements render as ordinary HTML. Hrefs resolve
+relative to the source file's directory:
+\`./sources/x.pdf\` from \`iarpa/y.html\` → \`iarpa/sources/x.pdf\`.
 
 Markdown: \`[[X]]\` resolves by shortest-unique-basename match
 against the artifact index. \`[[folder/X]]\` works for
-disambiguation. \`[[X|Display]]\` carries an alias.
+disambiguation. \`[[X|Display]]\` carries an alias. If \`[[X]]\` is
+written before its target exists, the link row stays as the
+literal slug — but converges to the resolved path automatically as
+soon as the target lands (either during initial reconcile or via
+a live watcher event).
 
 Citation metadata: \`<a class="wikilink" data-quote="..." data-page="3"
 data-cite-type="evidence" href="./paper.pdf.html">paper</a>\`. Every
-\`data-*\` attribute lands in the link's \`attrs\` JSON.
+\`data-*\` attribute lands in the link's \`attrs\` JSON with the
+\`data-\` prefix STRIPPED — \`data-quote\` → \`attrs.quote\`,
+\`data-cite-type\` → \`attrs["cite-type"]\`.
 
 ## Sidecars
 
@@ -103,7 +111,10 @@ entries may be:
   - \`"key"\` — match by key presence (any value).
   - \`"key:value"\` — match key + value exactly.
 
-\`text\` runs FTS5 MATCH against artifact text content.
+\`text\` runs SQLite FTS5 MATCH against artifact text content.
+Space-separated tokens are AND'd by default (\`shannon entropy\`
+matches docs containing both terms); wrap in quotes for an exact
+phrase (\`"shannon entropy"\` matches the literal phrase only).
 
 **Folder note**: sidecar HTMLs for binaries live under
 \`.sidecars/<mirrored-path>.html\` — OUTSIDE the source folder. A
@@ -158,11 +169,20 @@ key with worker-name values does not.
 
 ### POST /untag
 
+Request:
 \`\`\`json
 { "path": "iarpa/sources/paper.pdf", "key": "processed-by-editor" }
 \`\`\`
 
-Returns \`{ "ok": true | false }\`.
+Response:
+\`\`\`json
+{ "ok": true, "path": "...", "key": "...", "existed": true | false }
+\`\`\`
+
+\`ok\` is always true — removing a non-existent tag is a no-op,
+not an error. \`existed\` distinguishes the two cases so a worker
+can detect whether something was actually cleared (useful for
+re-entrancy / cleanup scripts).
 
 ### GET /tags?path=...
 

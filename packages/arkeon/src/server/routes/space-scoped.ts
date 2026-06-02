@@ -88,8 +88,10 @@ apiRouter.post("/untag", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
   const path = requireString(body.path, "path");
   const key = requireString(body.key, "key");
-  const removed = await deleteTag(path, key);
-  return c.json({ ok: removed });
+  // `existed` distinguishes "no-op, tag wasn't set" from "tag was removed."
+  // `ok` is always true — a missing tag is not an error.
+  const existed = await deleteTag(path, key);
+  return c.json({ ok: true, path, key, existed });
 });
 
 apiRouter.get("/tags", async (c) => {

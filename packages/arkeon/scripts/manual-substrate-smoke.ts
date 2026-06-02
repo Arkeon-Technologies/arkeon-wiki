@@ -89,10 +89,12 @@ function section(title: string): void {
 // ─────────────────────────────────────────────────────────────────────
 
 function reset(): void {
-  if (!KEEP) {
-    rmSync(HOME, { recursive: true, force: true });
-    rmSync(CORPUS, { recursive: true, force: true });
-  }
+  // ALWAYS wipe at start so the smoke is reproducible — stale state
+  // from a prior KEEP=1 run otherwise pollutes the assertions
+  // (e.g. extra files in the corpus, leftover tags in the DB).
+  // KEEP only affects whether we wipe AFTER the run, for inspection.
+  rmSync(HOME, { recursive: true, force: true });
+  rmSync(CORPUS, { recursive: true, force: true });
   mkdirSync(HOME, { recursive: true });
   mkdirSync(join(CORPUS, "iarpa", "sources"), { recursive: true });
   mkdirSync(join(CORPUS, "chartbook"), { recursive: true });

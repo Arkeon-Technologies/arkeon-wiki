@@ -62,6 +62,28 @@ describe("substrate", () => {
     expect(byPath.get("chartbook/about.html")).toBe("text");
   });
 
+  it("POST /query surfaces artifact.properties parsed from <meta> tags", async () => {
+    // Regression guard: sql.ts:hydrateRow auto-parses `properties` from
+    // JSON-string to object. A redundant parseJsonObject in entities.ts
+    // used to stringify the already-parsed object via JSON.parse("[object
+    // Object]"), throw silently, and return {} — so /query always emitted
+    // properties: {} even when the row had real <meta> fields. Assert
+    // the value actually round-trips.
+    const res = await app.fetch(
+      new Request("http://test/query", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ folder: "iarpa/article.html" }),
+      }),
+    );
+    const body = (await res.json()) as {
+      artifacts: Array<{ path: string; properties: Record<string, unknown> }>;
+    };
+    const article = body.artifacts.find((a) => a.path === "iarpa/article.html");
+    expect(article).toBeDefined();
+    expect(article!.properties.short_description).toBe("On India.");
+  });
+
   it("captures wikilink data-* attributes in links.attrs", async () => {
     const sql = createSql();
     const rows = await sql`
@@ -328,7 +350,7 @@ describe("substrate", () => {
     expect(paths).toContain("iarpa/sources/paper.md");
   });
 
-  it("POST /untag removes a tag", async () => {
+  it("POST /untag removes a tag → existed=true", async () => {
     const res = await app.fetch(
       new Request("http://test/untag", {
         method: "POST",
@@ -337,11 +359,29 @@ describe("substrate", () => {
       }),
     );
     expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; existed: boolean };
+    expect(body.ok).toBe(true);
+    expect(body.existed).toBe(true);
+
     const tagsRes = await app.fetch(
       new Request("http://test/tags?path=iarpa/article.html"),
     );
-    const body = (await tagsRes.json()) as { tags: Record<string, string> };
-    expect(body.tags["processed-by"]).toBeUndefined();
+    const tags = (await tagsRes.json()) as { tags: Record<string, string> };
+    expect(tags.tags["processed-by"]).toBeUndefined();
+  });
+
+  it("POST /untag on a non-existent tag returns ok=true, existed=false (idempotent)", async () => {
+    const res = await app.fetch(
+      new Request("http://test/untag", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path: "iarpa/article.html", key: "never-set" }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; existed: boolean };
+    expect(body.ok).toBe(true);
+    expect(body.existed).toBe(false);
   });
 
   it("GET / serves a directory listing of the watched root", async () => {

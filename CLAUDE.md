@@ -48,7 +48,7 @@ No `space_name` column; no spaces table. Top-level subdirectories of the watched
 
 **Markdown**: `[[X]]` resolves by shortest-unique-basename match against the artifact index. `[[folder/X]]` works for disambiguation. `[[X|Display Name]]` carries an alias.
 
-**Citation metadata**: every `data-*` attribute on a wikilink lands in `links.attrs` JSON:
+**Citation metadata**: every `data-*` attribute on a wikilink lands in `links.attrs` JSON with the `data-` prefix STRIPPED (so `data-quote` → `attrs.quote`, `data-cite-type` → `attrs["cite-type"]`):
 
 ```html
 <a class="wikilink"
@@ -57,6 +57,8 @@ No `space_name` column; no spaces table. Top-level subdirectories of the watched
    data-page="3"
    data-cite-type="evidence">paper</a>
 ```
+
+Wikilink hrefs resolve relative to the source file's directory: `./sources/x.pdf` from `iarpa/y.html` → `iarpa/sources/x.pdf`. MD `[[X]]` redlinks converge automatically: if `[[X]]` is written before its target exists, the link row stays as the literal slug, then gets rewritten to the resolved path once the target lands (during initial reconcile or via a live watcher event).
 
 ## Reader
 
@@ -74,7 +76,7 @@ All POST bodies are JSON; all GET params are URL-encoded.
 
 - `POST /query` — `{folder?, kinds?, has_tag?[], not_tag?[], text?, limit?, offset?}`. AND-composed. `has_tag` / `not_tag` entries are `"key"` (presence) or `"key:value"` (key+value match). `text` runs FTS5 MATCH.
 - `POST /tag` — `{path, key, value?}`. UPSERT. Returns `{ok, path, key, value, previous_value, action}` where `action` is `created` / `updated` / `unchanged`. Workers detect collisions by inspecting `previous_value`.
-- `POST /untag` — `{path, key}`. Returns `{ok: bool}`.
+- `POST /untag` — `{path, key}`. Returns `{ok: true, path, key, existed}` where `existed` distinguishes a real deletion from a no-op (removing a non-existent tag is not an error).
 - `GET /tags?path=...` — `{path, tags: Record<key,value>}`.
 - `GET /backlinks?path=...` — inbound link rows with `attrs` JSON. Returns `{path, exists, demand, backlinks: [...]}` and works uniformly whether `path` is a real artifact or a redlink target; `exists` tells you which. One row per anchor (multi-citation preserved). For "what unresolved targets exist?" use `/redlinks` — the aggregated complement.
 - `GET /redlinks?folder=&limit=&offset=` — unresolved targets, ranked by demand. The work-to-be-written queue.

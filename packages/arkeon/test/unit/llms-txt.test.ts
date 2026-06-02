@@ -31,6 +31,8 @@ const REQUIRED_CONCEPTS = [
   "processed-by-",
   "previous_value",
   "exists",
+  "existed",
+  "STRIPPED",
 ];
 
 describe("llms.txt", () => {

@@ -150,7 +150,9 @@ export async function listArtifacts(opts: QueryOptions): Promise<ListResult> {
     kind: ArtifactKind;
     label: string | null;
     source_hash: string;
-    properties: string;
+    // sql.ts:hydrateRow auto-parses `properties` from JSON-string → object
+    // before rows leave the SQL layer. Don't re-parse downstream.
+    properties: Record<string, unknown> | null;
     created_at: string;
     updated_at: string;
   }>;
@@ -174,7 +176,7 @@ export async function listArtifacts(opts: QueryOptions): Promise<ListResult> {
     kind: r.kind,
     label: r.label,
     source_hash: r.source_hash,
-    properties: parseJsonObject(r.properties),
+    properties: r.properties ?? {},
     tags: tagsByPath[r.path] ?? {},
     created_at: r.created_at,
     updated_at: r.updated_at,
@@ -315,7 +317,9 @@ export async function getArtifact(path: string): Promise<ArtifactRow | null> {
     kind: r.kind as ArtifactKind,
     label: (r.label as string | null) ?? null,
     source_hash: r.source_hash as string,
-    properties: parseJsonObject(r.properties as string),
+    // sql.ts:hydrateRow already parsed `properties` from JSON-string to
+    // object — don't double-parse.
+    properties: (r.properties as Record<string, unknown> | null) ?? {},
     tags,
     created_at: r.created_at as string,
     updated_at: r.updated_at as string,
@@ -374,6 +378,12 @@ export async function deleteTag(path: string, key: string): Promise<boolean> {
   return rows.length > 0;
 }
 
+/**
+ * Parse a JSON-string column into an object. Note: `sql.ts:hydrateRow`
+ * already auto-parses `properties` and `tags` — do NOT call this on
+ * those columns or you'll silently turn the object into `{}`. Only
+ * `attrs` (from `links`) needs explicit parsing here.
+ */
 function parseJsonObject(s: string | null | undefined): Record<string, unknown> {
   if (!s) return {};
   try {
