@@ -334,6 +334,22 @@ async function runChecks(): Promise<void> {
     );
   }
 
+  {
+    // Round-2 regression: <meta> tags must round-trip into artifact.properties.
+    // The hydration / parseJsonObject double-parse silently zeroed them out
+    // in the pre-pt4 build.
+    const r = await postJson("/query", {});
+    const article = r.body.artifacts.find(
+      (a: any) => a.path === "iarpa/article.html",
+    );
+    check(
+      "artifact.properties carries <meta> tags from the source HTML",
+      article?.properties?.short_description === "Forecast accuracy for monsoon-season rice." &&
+        article?.properties?.region === "South Asia",
+      JSON.stringify(article?.properties),
+    );
+  }
+
   section("POST /tag + GET /tags + /query not_tag — worker-queue pattern");
   {
     const t1 = await postJson("/tag", {
@@ -364,17 +380,19 @@ async function runChecks(): Promise<void> {
     );
   }
 
-  section("POST /untag — round trip");
+  section("POST /untag — round trip + idempotency");
   {
     const u = await postJson("/untag", { path: "iarpa/article.html", key: "processed-by" });
     check(
-      "POST /untag {ok:true} on removal",
-      u.status === 200 && u.body.ok === true,
+      "POST /untag on real tag: {ok:true, existed:true}",
+      u.status === 200 && u.body.ok === true && u.body.existed === true,
+      JSON.stringify(u.body),
     );
     const u2 = await postJson("/untag", { path: "iarpa/article.html", key: "processed-by" });
     check(
-      "POST /untag {ok:false} when tag no longer exists",
-      u2.status === 200 && u2.body.ok === false,
+      "POST /untag idempotent — same call returns {ok:true, existed:false}",
+      u2.status === 200 && u2.body.ok === true && u2.body.existed === false,
+      JSON.stringify(u2.body),
     );
   }
 
