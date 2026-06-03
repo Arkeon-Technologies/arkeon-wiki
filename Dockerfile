@@ -17,8 +17,10 @@ RUN npm ci --workspaces --include-workspace-root
 
 COPY packages/arkeon ./packages/arkeon
 
-RUN npm run build -w packages/arkeon \
- && npm pack -w packages/arkeon --pack-destination /tmp
+# `npm pack` triggers the package's `prepack` script, which runs the
+# tsup build + bundle steps. No need to invoke `npm run build`
+# separately.
+RUN npm pack -w packages/arkeon --pack-destination /tmp
 
 # ----------------------------------------------------------------------------
 # Runtime: slim node base + python venv + global arkeon-wiki install.
@@ -62,10 +64,11 @@ RUN npm install -g /tmp/arkeon-wiki-*.tgz \
 
 # ----- Bake the adapters manifest at a known path -----
 # Mirrors the AdaptersManifest TypeScript shape. The runtime reads this
-# via $ARKEON_WIKI_ADAPTERS_PATH (set below). PYMUPDF_VERSION is a build
-# arg so a one-line bump tracks the lockfile.
-ARG PYMUPDF_VERSION=1.27.2.3
+# via $ARKEON_WIKI_ADAPTERS_PATH (set below). Versions are derived from
+# the installed venv so requirements.lock stays the single source of
+# truth — bumping the lockfile alone rebuilds the manifest to match.
 RUN PY_VER="$(${ARKEON_WIKI_VENV}/bin/python --version | sed 's/^Python //')" \
+ && PYMUPDF_VERSION="$(${ARKEON_WIKI_VENV}/bin/pip show pymupdf | awk '/^Version:/ {print $2}')" \
  && GEN_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
  && mkdir -p /opt/arkeon-wiki \
  && printf '%s\n' \
