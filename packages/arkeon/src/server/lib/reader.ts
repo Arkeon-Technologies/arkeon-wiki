@@ -45,6 +45,12 @@ export function rewriteWikilinks(
 export interface DirEntry {
   name: string;
   is_dir: boolean;
+  /**
+   * For files: artifact.label from the index (derived from
+   * `<title>` or filename slug). Null for directories — they're
+   * not in the artifact table.
+   */
+  label: string | null;
   /** For files: short_description from <meta name="short_description"> if any. */
   short_description: string | null;
 }
@@ -54,11 +60,26 @@ export function renderDirectoryListing(dirPath: string, entries: DirEntry[]): st
   const items = entries
     .map((e) => {
       const href = e.is_dir ? `${e.name}/` : e.name;
+      // Anchor text: artifact label (typically the <title>) when it
+      // adds information over the filename; otherwise the raw
+      // filename. Sync falls back to the filename basename when
+      // there's no <title>, so a label that matches basename(name)
+      // or name itself is treated as "no real label" and skipped —
+      // showing `paper (paper.md)` for a Markdown file would just
+      // be noise. The filename is preserved alongside any real
+      // label so the URL stays discoverable.
+      let anchor: string;
+      if (e.is_dir) {
+        anchor = escapeHtml(e.name) + "/";
+      } else if (e.label && !isFilenameDerivedLabel(e.label, e.name)) {
+        anchor = `${escapeHtml(e.label)} <span class="ark-sub">(${escapeHtml(e.name)})</span>`;
+      } else {
+        anchor = escapeHtml(e.name);
+      }
       const subtitle = e.short_description
         ? ` <span class="ark-sub">— ${escapeHtml(e.short_description)}</span>`
         : "";
-      const label = escapeHtml(e.name) + (e.is_dir ? "/" : "");
-      return `<li><a href="${escapeAttr(href)}">${label}</a>${subtitle}</li>`;
+      return `<li><a href="${escapeAttr(href)}">${anchor}</a>${subtitle}</li>`;
     })
     .join("\n");
   return `<!DOCTYPE html>
@@ -91,6 +112,19 @@ export function renderNotFound(path: string): string {
   <p><code>${escapeHtml(path)}</code></p>
 </body>
 </html>`;
+}
+
+/**
+ * Returns true when `label` looks like sync's no-<title> fallback —
+ * the filename with its extension stripped, or the filename itself.
+ * Used to avoid emitting `Foo (foo.md)`-style noise for files whose
+ * "label" is just the slug.
+ */
+function isFilenameDerivedLabel(label: string, name: string): boolean {
+  if (label === name) return true;
+  const dot = name.lastIndexOf(".");
+  if (dot > 0 && label === name.slice(0, dot)) return true;
+  return false;
 }
 
 function escapeHtml(s: string): string {

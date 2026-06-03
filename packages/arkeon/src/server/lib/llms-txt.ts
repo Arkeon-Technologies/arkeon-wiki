@@ -45,6 +45,13 @@ Three tables in SQLite, plus an FTS5 virtual table:
         \`topic:us-china\`. The \`key:value\` string form is for
         these where the value carries meaning across artifacts.
 
+    Tag KEYS reject \`:\` (400 \`reserved_character\`). The colon
+    is the key/value separator in \`has_tag\` / \`not_tag\` query
+    specs — a literal colon in the key would store fine but then
+    collide on read with the (key, value) split. Put the colon
+    in the request shape (\`{key: "status", value: "published"}\`),
+    not in the key. Values may contain colons.
+
     "No tag = unprocessed" is the trigger model.
 
   - **links** \`(source_path, target_path, link_text, attrs)\` —

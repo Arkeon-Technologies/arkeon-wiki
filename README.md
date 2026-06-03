@@ -105,6 +105,8 @@ Two tag-key conventions coexist:
 
 **Strict body validation.** POST endpoints reject malformed JSON with `400 invalid_json` and unknown top-level fields with `400 unknown_field`. A typo like `notag` instead of `not_tag` errors loudly rather than silently returning the unfiltered corpus.
 
+**Reserved characters.** Tag KEYS may not contain `:` (`400 reserved_character`). The colon is the key/value separator in `has_tag` / `not_tag` query specs — a literal colon in the key would store fine but then collide on read with the (key, value) split. Pass the colon in the request shape (`{ key: "status", value: "published" }`), not in the key. Values may contain colons.
+
 `GET /redlinks` returns two shapes of `target_path`: HTML `<a class="wikilink" href="...">` resolves to an fs-relative path at extraction time (e.g. `iarpa/sources/missing.html`), while Markdown `[[X]]` keeps the literal slug (e.g. `missing-topic`) until a matching artifact lands, then auto-converges. Branch on `target_path.includes("/")` if your harness needs to distinguish "create at this path" from "create anywhere by basename."
 
 Full reference at `GET /llms.txt` or `GET /help`.
