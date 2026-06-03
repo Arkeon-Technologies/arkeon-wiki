@@ -22,6 +22,11 @@ export interface ParsedHtmlMeta {
   properties: Record<string, string>;
 }
 
+// Meta names the substrate already claims as top-level artifact columns.
+// Hoisting them into `properties` would shadow the top-level field and
+// confuse any consumer that walks `artifact.properties` blindly.
+const RESERVED_META_NAMES = new Set(["label", "title"]);
+
 export function parseHtmlMeta(html: string): ParsedHtmlMeta {
   const root = parse(html);
   const titleNode = root.querySelector("title");
@@ -31,7 +36,7 @@ export function parseHtmlMeta(html: string): ParsedHtmlMeta {
   for (const meta of root.querySelectorAll("meta")) {
     const name = meta.getAttribute("name");
     const content = meta.getAttribute("content");
-    if (name && content !== undefined) {
+    if (name && content !== undefined && !RESERVED_META_NAMES.has(name)) {
       properties[name] = content;
     }
   }
