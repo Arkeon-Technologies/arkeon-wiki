@@ -57,6 +57,24 @@ Three tables in SQLite, plus an FTS5 virtual table:
   - **fts_artifacts** — FTS5 over text-kind artifact contents.
     Populated by syncFile; queried via POST /query \`{text}\`.
 
+## HTML \`<head>\` extraction
+
+The first \`<title>\` element populates the artifact's top-level
+\`label\` column. Every \`<meta name="X" content="Y">\` lands in
+\`properties[X]\`, EXCEPT for two reserved names:
+
+  - \`title\` — would shadow the column derived from \`<title>\`.
+  - \`label\` — would shadow the artifact's \`label\` column.
+
+Both are silently stripped so a harness walking \`artifact.properties\`
+never sees a value that doesn't match the top-level field. Use any
+other meta name (\`status\`, \`topic\`, \`source\`, …) freely.
+
+Sidecars (\`.sidecars/<binary>.html\`) get their label from the
+binary's filename basename, NOT the embedded \`<title>\` — that keeps
+\`asset.label\` and \`sidecar.label\` aligned so harnesses dereferencing
+\`asset.properties.sidecar_path\` see consistent labels.
+
 ## Link conventions
 
 HTML: \`<a class="wikilink" href="./topic-x">topic X</a>\`. Only
@@ -100,9 +118,18 @@ The asset's \`properties.sidecar_path\` carries the convention path,
 so harnesses can dereference \`asset.properties.sidecar_path\` to
 get the right target without hard-coding the convention.
 
-## API surface — six commands
+## API surface
 
+Six substrate commands (\`/query\`, \`/tag\`, \`/untag\`, \`/tags\`,
+\`/backlinks\`, \`/redlinks\`) + \`/stats\`, plus the op endpoints
+(\`/health\`, \`/ready\`) and this doc surface (\`/llms.txt\`, \`/help\`).
 All POST bodies are JSON; all GET params are URL-encoded.
+
+POST endpoints validate strictly: a malformed JSON body returns
+\`400 invalid_json\` (never silently treated as empty); any
+top-level key that isn't in the documented field set returns
+\`400 unknown_field\`. A typo like \`notag\` instead of \`not_tag\`
+errors loudly rather than returning the unfiltered corpus.
 
 ### POST /query
 
@@ -312,12 +339,30 @@ Each tick:
   1. POST /query with \`not_tag: ["processed-by-<worker-name>"]\` and
      whatever \`kinds\` / \`has_tag\` filters fit the worker.
   2. Process each artifact.
-  3. POST /tag with \`{ key: "processed-by-<worker-name>", value: <hash-or-ts> }\`
+  3. POST /tag with
+     \`{ key: "processed-by-<worker-name>", value: <artifact.source_hash> }\`
      so it doesn't pick up the same artifact next tick.
 
 New content surfaces because \`syncFile\` indexes new artifacts
 without any \`processed-by-*\` tag — the worker's next tick picks them
 up automatically.
+
+**Detecting edits.** "No tag = unprocessed" only catches new files.
+To catch *edited* files, store \`artifact.source_hash\` as the tag
+value and add a second pass:
+
+  - Pass 1: \`not_tag: ["processed-by-<worker>"]\` — picks up new
+    artifacts (no tag at all).
+  - Pass 2: \`has_tag: ["processed-by-<worker>"]\` — yields every
+    tagged artifact. For each, compare the tag's value (in the
+    \`/tags\` response or by tracking it locally) against the
+    artifact's current \`source_hash\`. If they differ, the source
+    was edited since the last run — re-process and UPSERT the tag
+    with the new hash. \`POST /tag\` returns \`action: "updated"\` on
+    a hash overwrite, confirming the collision.
+
+Without this pattern an edited source keeps its stale tag forever
+and the worker silently skips updated content.
 
 **Sidecars and folder scoping**: don't reach for \`folder\` when the
 intent is "process all unprocessed text in space X." PDF/Word

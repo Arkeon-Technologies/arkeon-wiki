@@ -2,16 +2,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The substrate HTTP API surface — six commands.
+ * The substrate HTTP API surface.
  *
- *   POST /query        { folder?, kinds?, has_tag?[], not_tag?[], text?, limit?, offset? }
+ *   POST /query        { folder?, kinds?, has_tag?[], not_tag?[], text?,
+ *                        order_by?, order?, limit?, offset? }
  *   POST /tag          { path, key, value? }
  *   POST /untag        { path, key }
  *   GET  /tags?path=...
  *   GET  /backlinks?path=...
  *   GET  /redlinks?folder=...
+ *   GET  /stats
+ *
+ * Plus liveness (`/health`, `/ready`) and the doc surface (`/llms.txt`,
+ * `/help`) mounted at the app level.
  */
 
+import type { Context } from "hono";
 import { Hono } from "hono";
 
 import type { AppBindings } from "../types.js";
@@ -30,6 +36,60 @@ import {
 } from "../lib/entities.js";
 
 export const apiRouter = new Hono<AppBindings>();
+
+/**
+ * Parse a POST JSON body strictly:
+ *   - empty body → empty object (so callers with all-optional fields work).
+ *   - malformed JSON → 400 `invalid_json` (NOT a silent fallthrough — a
+ *     harness with a typo in its body would otherwise see the unfiltered
+ *     corpus and reprocess everything).
+ *   - non-object JSON (array, null, primitive) → 400 `validation_error`.
+ *   - any top-level key not in `allowedKeys` → 400 `unknown_field`. Catches
+ *     typos like `notag` vs `not_tag` that would otherwise be ignored.
+ */
+async function parseJsonBody(
+  c: Context<AppBindings>,
+  allowedKeys: readonly string[],
+): Promise<Record<string, unknown>> {
+  const raw = await c.req.text();
+  if (raw.length === 0) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new ApiError(400, "invalid_json", "request body must be valid JSON");
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new ApiError(400, "validation_error", "request body must be a JSON object");
+  }
+  const body = parsed as Record<string, unknown>;
+  const allowed = new Set(allowedKeys);
+  for (const key of Object.keys(body)) {
+    if (!allowed.has(key)) {
+      throw new ApiError(
+        400,
+        "unknown_field",
+        `unknown field "${key}"; allowed: ${allowedKeys.join(", ")}`,
+      );
+    }
+  }
+  return body;
+}
+
+const QUERY_FIELDS = [
+  "folder",
+  "kinds",
+  "has_tag",
+  "not_tag",
+  "text",
+  "order_by",
+  "order",
+  "limit",
+  "offset",
+] as const;
+
+const TAG_FIELDS = ["path", "key", "value"] as const;
+const UNTAG_FIELDS = ["path", "key"] as const;
 
 function parseStringArray(raw: unknown, name: string): string[] | null {
   if (raw == null) return null;
@@ -83,7 +143,7 @@ function parseOrder(raw: unknown): QueryOrder | null {
 }
 
 apiRouter.post("/query", async (c) => {
-  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const body = await parseJsonBody(c, QUERY_FIELDS);
   const result = await listArtifacts({
     folder: typeof body.folder === "string" ? body.folder : null,
     kinds: parseKinds(body.kinds),
@@ -104,7 +164,7 @@ apiRouter.get("/stats", async (c) => {
 });
 
 apiRouter.post("/tag", async (c) => {
-  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const body = await parseJsonBody(c, TAG_FIELDS);
   const path = requireString(body.path, "path");
   const key = requireString(body.key, "key");
   const value = typeof body.value === "string" ? body.value : "";
@@ -117,7 +177,7 @@ apiRouter.post("/tag", async (c) => {
 });
 
 apiRouter.post("/untag", async (c) => {
-  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const body = await parseJsonBody(c, UNTAG_FIELDS);
   const path = requireString(body.path, "path");
   const key = requireString(body.key, "key");
   // `existed` distinguishes "no-op, tag wasn't set" from "tag was removed."
