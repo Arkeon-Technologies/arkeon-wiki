@@ -106,11 +106,14 @@ Adding a new handler: drop a module under `src/server/extractors/<format>.ts` ex
 
 ## Commands
 
+### Daemon lifecycle
+
 ```bash
 arkeon-wiki up --watch-dir <path>   # start daemon watching <path>
 arkeon-wiki down                    # stop daemon
 arkeon-wiki status                  # is it running?
 arkeon-wiki ls                      # list running instances
+arkeon-wiki where                   # which instance owns this directory?
 arkeon-wiki logs [-f]               # tail daemon log
 arkeon-wiki start                   # foreground (for pm2/launchd/Docker)
 arkeon-wiki install                 # persistent service
@@ -118,6 +121,34 @@ arkeon-wiki uninstall               # remove service
 ```
 
 `arkeon-wiki install-deps` has been removed — binary extractor dependencies (PyMuPDF, future libreoffice/pandoc/tesseract) now ship in the Docker image only. The command stub remains so legacy scripts fail loudly with a pointer to the image.
+
+### Substrate API (one CLI command per HTTP endpoint)
+
+Every command below is a thin wrapper over the HTTP API — no SQLite direct reads, no caching. If stdout is a TTY they pretty-print; if piped they emit the raw JSON response (so `arkeon-wiki query | jq` works).
+
+```bash
+arkeon-wiki query [--folder X --kinds text --has-tag K[:V] --not-tag K --text Q ...]
+arkeon-wiki tag <path> <key>[=<value>]   # UPSERT — = and value optional
+arkeon-wiki untag <path> <key>
+arkeon-wiki tags <path>                  # list every tag on an artifact
+arkeon-wiki backlinks <path>             # inbound link rows (works for redlinks too)
+arkeon-wiki redlinks [--folder X --limit N --offset N]
+arkeon-wiki stats                        # corpus-level counts
+```
+
+Reading article bodies is *not* a CLI command — the filesystem is the read API. `cat`, `bat`, `$EDITOR` work fine; the daemon's job is the index, not the read path.
+
+### Daemon resolution
+
+Every substrate-API command picks a daemon in this order:
+
+1. `--api-url <url>`
+2. `ARKEON_WIKI_URL` env
+3. `--name <inst>` (looks up `~/.arkeon-wiki/instances/<inst>.json`)
+4. CWD walk — deepest registered `watch_dir` containing `process.cwd()` wins
+5. `default` instance
+
+Run `arkeon-wiki where` from inside a watched corpus to see which instance the CLI will hit. Exit code is `0` for success, `1` for HTTP 4xx/5xx, `2` for network errors.
 
 ## Docker image
 

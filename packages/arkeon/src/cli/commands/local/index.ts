@@ -13,6 +13,7 @@ import { registerStatusCommand } from "./status.js";
 import { registerStopCommand } from "./stop.js";
 import { registerUninstallCommand } from "./uninstall.js";
 import { registerUpCommand } from "./up.js";
+import { registerWhereCommand } from "./where.js";
 
 export function registerLocalCommands(program: Command): void {
   registerUpCommand(program);
@@ -22,6 +23,7 @@ export function registerLocalCommands(program: Command): void {
   registerStatusCommand(program);
   registerLsCommand(program);
   registerLogsCommand(program);
+  registerWhereCommand(program);
   registerInstallCommand(program);
   registerInstallDepsCommand(program);
   registerUninstallCommand(program);
