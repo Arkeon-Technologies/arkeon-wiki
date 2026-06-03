@@ -27,6 +27,8 @@ The image bakes PyMuPDF (PDF extraction) so it works out of the box — no host-
 
 Verify PDF extraction with any PDF you already have — or print this README to one (macOS Preview ⌘P → "Save as PDF"; Linux: any browser's Print → PDF). Drop it under `./corpus/`, then `curl http://localhost:8062/stats` should show the asset count tick up and a sidecar appear under `./corpus/.sidecars/`.
 
+**Teardown.** `docker compose down -v` removes the container + the named state volume (SQLite index, daemon logs). The `.sidecars/` tree inside your bind-mounted corpus stays on disk — that's the filesystem-is-truth contract. To wipe sidecars too, `rm -rf ./corpus/.sidecars/` after `down -v`; the watcher will rebuild them next time you `up -d` against the same corpus.
+
 ### npm (HTML + Markdown only)
 
 ```bash
@@ -123,11 +125,14 @@ The same article opens identically under `file://` and `http://`.
 
 ## CLI
 
+### Daemon lifecycle
+
 ```bash
 arkeon-wiki up [--watch-dir <path>]   # start the daemon detached
 arkeon-wiki down                      # stop it
 arkeon-wiki status                    # is it running?
 arkeon-wiki ls                        # list running instances
+arkeon-wiki where                     # which instance owns this directory?
 arkeon-wiki logs [-f]                 # print/tail the daemon log
 arkeon-wiki start                     # foreground (for pm2/launchd/Docker/etc.)
 arkeon-wiki install                   # persistent service
@@ -135,6 +140,28 @@ arkeon-wiki uninstall                 # remove the service
 ```
 
 `--name <name>` runs multiple instances side by side (different state dirs, different ports).
+
+### Substrate API (one CLI command per HTTP endpoint)
+
+Thin wrappers over the HTTP API — no SQLite reads, no caching. Pretty-print on a TTY, raw JSON when piped (so `arkeon-wiki query | jq` works).
+
+```bash
+arkeon-wiki query [--folder X --kinds text --has-tag K[:V] --not-tag K --text Q ...]
+arkeon-wiki tag <path> <key>[=<value>]   # UPSERT — = and value optional
+arkeon-wiki untag <path> <key>
+arkeon-wiki tags <path>                  # list every tag on an artifact
+arkeon-wiki backlinks <path>             # inbound link rows (works for redlinks too)
+arkeon-wiki redlinks [--folder X --limit N --offset N]
+arkeon-wiki stats                        # corpus-level counts
+```
+
+Reading article bodies is *not* a CLI command — the filesystem is the read API. `cat`, `bat`, `$EDITOR` work fine; the daemon's job is the index, not the read path.
+
+**Daemon resolution.** Every substrate-API command picks a daemon in this order: `--api-url <url>` → `ARKEON_WIKI_URL` env → `--name <inst>` → CWD walk (deepest registered `watch_dir` containing your shell's cwd) → `default` instance. Run `arkeon-wiki where` from inside a watched corpus to see which instance the CLI will hit. Exit codes: `0` success, `1` HTTP 4xx/5xx (response body on stderr), `2` network error.
+
+**`--api-url` placement.** `--api-url` is per-command, not program-level: write `arkeon-wiki query --api-url http://...` (the flag AFTER the subcommand). The program-level `--data-dir` flag still comes before the subcommand.
+
+**Auth flag is forward-looking.** `--token <token>` and `ARKEON_WIKI_TOKEN` are wired into every substrate-API command so future hardening doesn't break invocations — the daemon currently ignores them and `Authorization: Bearer …` headers are silently dropped. Treat `--token` as scaffolding, not enforcement.
 
 ## Persistent service
 

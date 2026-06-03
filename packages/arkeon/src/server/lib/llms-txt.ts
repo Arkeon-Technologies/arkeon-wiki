@@ -125,6 +125,15 @@ The asset's \`properties.sidecar_path\` carries the convention path,
 so harnesses can dereference \`asset.properties.sidecar_path\` to
 get the right target without hard-coding the convention.
 
+**Reserved tag: \`extracted_by\`.** Every sidecar gets an
+\`extracted_by\` tag set automatically by the extractor runner
+(value: the handler name, e.g. \`pymupdf\`). Used internally to
+distinguish handler-generated sidecars from hand-written ones
+during re-extraction. Harnesses can read it for provenance, but
+should NOT use it as a worker gate or overwrite it — use a
+\`processed-by-<worker>\` key for your own bookkeeping. The
+\`extracted_by\` key is reserved for the extractor pipeline.
+
 ## API surface
 
 Six substrate commands (\`/query\`, \`/tag\`, \`/untag\`, \`/tags\`,
@@ -167,6 +176,12 @@ entries may be:
 Space-separated tokens are AND'd by default (\`shannon entropy\`
 matches docs containing both terms); wrap in quotes for an exact
 phrase (\`"shannon entropy"\` matches the literal phrase only).
+
+**Tokenizer**: \`porter unicode61\` — Porter-stemmed, Unicode-aware.
+Stemming means \`chokepoint\` matches \`chokepoints\`, \`indexing\`
+matches \`indexed\`, etc. Precision-sensitive callers wanting an
+exact-form match should wrap the term in double quotes
+(\`"chokepoint"\` won't match \`chokepoints\`).
 
 **Folder note**: sidecar HTMLs for binaries live under
 \`.sidecars/<mirrored-path>.html\` — OUTSIDE the source folder. A
