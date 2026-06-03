@@ -366,11 +366,29 @@ export interface SetTagResult {
   action: SetTagAction;
 }
 
+/**
+ * Validate a tag key. `:` is reserved because `has_tag` / `not_tag`
+ * query specs use the first `:` to split key from value
+ * (parseTagSpec). A key like `"status:published"` would be stored
+ * verbatim but then collide with `key="status", value="published"`
+ * on read — invisible until you list raw tags. Reject up front.
+ */
+export function validateTagKey(key: string): void {
+  if (key.includes(":")) {
+    throw new ApiError(
+      400,
+      "reserved_character",
+      `tag key must not contain ":" (reserved as the key/value separator in has_tag / not_tag query specs); got ${JSON.stringify(key)}`,
+    );
+  }
+}
+
 export async function setTag(
   path: string,
   key: string,
   value: string,
 ): Promise<SetTagResult> {
+  validateTagKey(key);
   const sql = createSql();
   const existing = (await sql.query(
     `SELECT value FROM tags WHERE path = ? AND key = ? LIMIT 1`,
@@ -394,6 +412,7 @@ export async function setTag(
 }
 
 export async function deleteTag(path: string, key: string): Promise<boolean> {
+  validateTagKey(key);
   const sql = createSql();
   const rows = await sql.query(
     `DELETE FROM tags WHERE path = ? AND key = ? RETURNING key`,

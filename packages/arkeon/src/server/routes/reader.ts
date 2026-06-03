@@ -21,7 +21,6 @@ import { ApiError } from "../lib/errors.js";
 import { createSql } from "../lib/sql.js";
 import { safeResolve } from "../lib/path.js";
 import { getWatchedRoot, shouldIgnorePath } from "../lib/fs-watcher.js";
-import { parseHtmlMeta } from "../lib/html-meta.js";
 import {
   renderDirectoryListing,
   renderNotFound,
@@ -100,25 +99,32 @@ async function serveDirectory(
   if (!existsSync(abs) || !statSync(abs).isDirectory()) {
     return c.html(renderNotFound(relPath), 404);
   }
+
+  // Pull labels + short_description for every immediate child of this
+  // directory in one query, so we don't re-read each HTML file from
+  // disk (would be 3k+ syscalls on a Substack-sized corpus). Sync
+  // already parses <title> and <meta> into artifact.label /
+  // properties — re-reading would just duplicate that work.
+  const childIndex = await loadChildIndex(relPath);
+
   const entries: DirEntry[] = [];
   for (const entry of readdirSync(abs, { withFileTypes: true })) {
     if (entry.name.startsWith(".")) continue;
     if (entry.isDirectory()) {
-      entries.push({ name: entry.name, is_dir: true, short_description: null });
+      entries.push({
+        name: entry.name,
+        is_dir: true,
+        label: null,
+        short_description: null,
+      });
     } else if (entry.isFile()) {
-      let short: string | null = null;
-      const ext = extname(entry.name).toLowerCase();
-      if (ext === ".html" || ext === ".htm") {
-        try {
-          const html = readFileSync(safeResolve(abs, entry.name), "utf-8");
-          const meta = parseHtmlMeta(html);
-          const desc = meta.properties.short_description;
-          if (typeof desc === "string" && desc.length > 0) short = desc;
-        } catch {
-          /* ignore */
-        }
-      }
-      entries.push({ name: entry.name, is_dir: false, short_description: short });
+      const meta = childIndex.get(entry.name);
+      entries.push({
+        name: entry.name,
+        is_dir: false,
+        label: meta?.label ?? null,
+        short_description: meta?.short_description ?? null,
+      });
     }
   }
   entries.sort((a, b) => {
@@ -126,6 +132,48 @@ async function serveDirectory(
     return a.name.localeCompare(b.name);
   });
   return c.html(renderDirectoryListing(relPath, entries));
+}
+
+interface ChildMeta {
+  label: string | null;
+  short_description: string | null;
+}
+
+async function loadChildIndex(relPath: string): Promise<Map<string, ChildMeta>> {
+  const sql = createSql();
+  // Match immediate children only: paths starting with the dir prefix
+  // and with no further `/` after it. Root (`relPath === ""`) → any
+  // path with no slash at all.
+  let rows: { path: string; label: string | null; properties: unknown }[];
+  if (relPath === "") {
+    rows = (await sql`
+      SELECT path, label, properties
+      FROM artifacts
+      WHERE path NOT LIKE '%/%'
+    `) as { path: string; label: string | null; properties: unknown }[];
+  } else {
+    const prefix = `${relPath}/`;
+    const wildcard = `${prefix}%`;
+    const deeper = `${prefix}%/%`;
+    rows = (await sql.query(
+      `SELECT path, label, properties
+         FROM artifacts
+        WHERE path LIKE ? AND path NOT LIKE ?`,
+      [wildcard, deeper],
+    )) as { path: string; label: string | null; properties: unknown }[];
+  }
+  const index = new Map<string, ChildMeta>();
+  const prefixLen = relPath === "" ? 0 : relPath.length + 1;
+  for (const row of rows) {
+    const basename = row.path.slice(prefixLen);
+    const props = (row.properties as Record<string, unknown> | null) ?? {};
+    const desc = props.short_description;
+    index.set(basename, {
+      label: row.label,
+      short_description: typeof desc === "string" && desc.length > 0 ? desc : null,
+    });
+  }
+  return index;
 }
 
 const MIME_TYPES: Record<string, string> = {

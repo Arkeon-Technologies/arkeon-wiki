@@ -433,6 +433,29 @@ describe("substrate", () => {
     expect(text).toContain("chartbook/");
   });
 
+  it("GET /<dir>/ renders artifact.label (from <title>) next to filename", async () => {
+    // chartbook/about.html has <title>Chartbook</title>; the
+    // directory listing should show that label alongside the
+    // raw filename so the link text isn't just the slug.
+    const res = await app.fetch(new Request("http://test/chartbook/"));
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    // Label first, filename in muted suffix.
+    expect(text).toMatch(/Chartbook\s*<span[^>]*>\(about\.html\)<\/span>/);
+  });
+
+  it("GET /<dir>/ falls back to filename when label equals basename", async () => {
+    // Markdown files derive label from the filename slug (no <title>),
+    // so paper.md → label "paper". The renderer should render the
+    // filename as the anchor, with no `(paper.md)` muted suffix —
+    // anything else would be visual noise.
+    const res = await app.fetch(new Request("http://test/iarpa/sources/"));
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toContain("paper.md");
+    expect(text).not.toMatch(/paper\s*<span[^>]*>\(paper\.md\)<\/span>/);
+  });
+
   it("GET /<file> rewrites wikilinks and marks unresolved as redlinks", async () => {
     const res = await app.fetch(new Request("http://test/iarpa/article.html"));
     expect(res.status).toBe(200);
@@ -660,6 +683,42 @@ describe("substrate", () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe("unknown_field");
+  });
+
+  it("POST /tag rejects keys containing ':' with 400 reserved_character", async () => {
+    // The colon is the key/value separator in has_tag / not_tag specs.
+    // A literal colon-key would store fine but then collide on read with
+    // the (key, value) split, so reject up front.
+    const res = await app.fetch(
+      new Request("http://test/tag", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: "iarpa/article.html",
+          key: "status:published",
+        }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("reserved_character");
+    expect(body.error.message).toContain(":");
+  });
+
+  it("POST /untag rejects keys containing ':' with 400 reserved_character", async () => {
+    const res = await app.fetch(
+      new Request("http://test/untag", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: "iarpa/article.html",
+          key: "status:published",
+        }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("reserved_character");
   });
 
   it("POST /query accepts an empty body (all-defaults query)", async () => {
