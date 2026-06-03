@@ -9,14 +9,14 @@ describe("parseHtmlMeta", () => {
   it("extracts <title> and <meta name>/content pairs", () => {
     const html = `<!doctype html>
 <title>Photosynthesis</title>
-<meta name="label" content="Photosynthesis">
 <meta name="short_description" content="How plants convert light.">
+<meta name="topic" content="biology">
 <body><h1>Photosynthesis</h1></body>`;
     const result = parseHtmlMeta(html);
     expect(result.title).toBe("Photosynthesis");
     expect(result.properties).toEqual({
-      label: "Photosynthesis",
       short_description: "How plants convert light.",
+      topic: "biology",
     });
   });
 
@@ -28,8 +28,24 @@ describe("parseHtmlMeta", () => {
     const html = `<title>X</title>
 <meta charset="utf-8">
 <meta http-equiv="refresh" content="30">
-<meta name="label" content="X">`;
-    expect(parseHtmlMeta(html).properties).toEqual({ label: "X" });
+<meta name="topic" content="X">`;
+    expect(parseHtmlMeta(html).properties).toEqual({ topic: "X" });
+  });
+
+  it("filters reserved meta names that would shadow top-level artifact columns", () => {
+    // <meta name="label"> and <meta name="title"> name the same keys
+    // the substrate already exposes as top-level artifact fields; if
+    // hoisted into `properties`, an artifact would carry two `label`s
+    // with different semantics.
+    const html = `<title>Real Title</title>
+<meta name="label" content="meta-label-value">
+<meta name="title" content="meta-title-value">
+<meta name="topic" content="us-china">`;
+    const result = parseHtmlMeta(html);
+    expect(result.title).toBe("Real Title");
+    expect(result.properties).toEqual({ topic: "us-china" });
+    expect(result.properties).not.toHaveProperty("label");
+    expect(result.properties).not.toHaveProperty("title");
   });
 
   it("handles apostrophes inside double-quoted content (real parser, not regex)", () => {

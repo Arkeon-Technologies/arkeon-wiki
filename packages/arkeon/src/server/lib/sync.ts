@@ -173,7 +173,6 @@ async function syncText(
     label =
       sidecarLbl ??
       meta.title ??
-      (meta.properties.label as string | undefined) ??
       basename(relativePath, extname(relativePath));
     propsJson = JSON.stringify(meta.properties);
     for (const l of extractHtmlLinks(content, relativePath)) {

@@ -71,6 +71,8 @@ Two tag-key conventions coexist:
 
 `POST /query` filters are AND-composed. `has_tag` / `not_tag` entries can be `"key"` (presence) or `"key:value"` (key+value match). `text` runs FTS5 MATCH against the artifact body.
 
+`GET /redlinks` returns two shapes of `target_path`: HTML `<a class="wikilink" href="...">` resolves to an fs-relative path at extraction time (e.g. `iarpa/sources/missing.html`), while Markdown `[[X]]` keeps the literal slug (e.g. `missing-topic`) until a matching artifact lands, then auto-converges. Branch on `target_path.includes("/")` if your harness needs to distinguish "create at this path" from "create anywhere by basename."
+
 Full reference at `GET /llms.txt` or `GET /help`.
 
 ## Reader

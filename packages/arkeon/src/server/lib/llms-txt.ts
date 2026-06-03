@@ -261,6 +261,26 @@ discovery loop building a work queue uses \`/redlinks\`.
 
 The work-to-be-written queue.
 
+**Two \`target_path\` shapes coexist** because the two link syntaxes
+resolve differently:
+
+  - **HTML \`<a class="wikilink" href="./missing.html">\`** — hrefs are
+    resolved relative to the source file's directory at extraction
+    time, so a redlink \`target_path\` looks like an fs-relative path
+    under the watched root (e.g. \`iarpa/sources/missing.html\`).
+  - **Markdown \`[[missing-topic]]\`** — resolved by shortest-unique-
+    basename match against the artifact index. If no match exists,
+    the row keeps the literal slug as \`target_path\` (e.g.
+    \`missing-topic\`, no slashes). Once a matching artifact lands the
+    row auto-converges to the resolved fs path on the next reconcile
+    pass — that "literal until resolved" contract is what lets the MD
+    redlink converge later without manual rewiring.
+
+Harnesses building work queues can branch on the shape:
+\`target_path.includes("/")\` ⇒ fs-relative path (suggests where to
+create the file); otherwise ⇒ MD slug (resolves by basename anywhere
+under the watched root once written).
+
 ### GET /stats
 
 \`\`\`json
