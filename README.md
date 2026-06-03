@@ -4,14 +4,30 @@ A filesystem-first substrate for agent harnesses. Point the daemon at one direct
 
 ## Quick start
 
+Two distribution surfaces. Pick one.
+
+### Docker (recommended — binary extractors included)
+
+```bash
+curl -O https://raw.githubusercontent.com/Arkeon-Technologies/arkeon-wiki/main/docker-compose.example.yml
+mv docker-compose.example.yml docker-compose.yml
+# edit volumes:/watch to point at your corpus, set PUID/PGID to your host UID/GID
+docker compose up -d
+open http://localhost:8062
+```
+
+The image bakes PyMuPDF (PDF extraction) so it works out of the box — no host-side bootstrap. Image: `ghcr.io/arkeon-technologies/arkeon-wiki:latest`.
+
+### npm (HTML + Markdown only)
+
 ```bash
 npm install -g arkeon-wiki
 arkeon-wiki up --watch-dir ~/work/corpus
 ```
 
-The daemon detaches, watches `~/work/corpus` recursively, and serves the API on `http://localhost:8000`. Drop files into the directory — they get indexed. Stop with `arkeon-wiki down`.
+The daemon detaches, watches `~/work/corpus` recursively, and serves the API on `http://localhost:8000`. Drop files into the directory — they get indexed. Stop with `arkeon-wiki down`. For a daemon that survives reboot, run `arkeon-wiki install` (macOS launchd or Linux systemd `--user`).
 
-For a daemon that survives reboot and restarts on crash, run `arkeon-wiki install` (macOS launchd or Linux systemd `--user`).
+PDF extraction is **not** available on the npm path — use the Docker image if you need binary handlers.
 
 ## What gets indexed
 
@@ -20,7 +36,7 @@ Every file the watcher sees lands in the `artifacts` table keyed by its path rel
 - HTML files: `<title>` + `<meta>` tags go into `properties`; `<a class="wikilink">` anchors become graph edges with optional `data-*` citation metadata captured in `links.attrs` JSON.
 - Markdown: `[[X]]` and `[[X|Display]]` wikilinks resolve by shortest-unique-basename match against the index.
 - Text files (code, configs, logs, ...): indexed for FTS5 search; no link extraction.
-- Binaries (PDFs today): indexed as `kind='asset'` so links resolve. An HTML sidecar lands at `.sidecars/<mirrored-path>.html` (run `arkeon-wiki install-deps` once to bootstrap the PyMuPDF venv).
+- Binaries (PDFs today): indexed as `kind='asset'` so links resolve. An HTML sidecar lands at `.sidecars/<mirrored-path>.html` (requires the Docker image — PyMuPDF ships baked in).
 
 The filesystem is the source of truth. SQLite is the index. Delete a file → its row goes. Edit a file → re-sync. No manual commands.
 
@@ -61,10 +77,9 @@ arkeon-wiki down                      # stop it
 arkeon-wiki status                    # is it running?
 arkeon-wiki ls                        # list running instances
 arkeon-wiki logs [-f]                 # print/tail the daemon log
-arkeon-wiki start                     # foreground (for pm2/launchd/etc.)
+arkeon-wiki start                     # foreground (for pm2/launchd/Docker/etc.)
 arkeon-wiki install                   # persistent service
 arkeon-wiki uninstall                 # remove the service
-arkeon-wiki install-deps              # bootstrap Python venv for PDF extraction
 ```
 
 `--name <name>` runs multiple instances side by side (different state dirs, different ports).

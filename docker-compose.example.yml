@@ -1,0 +1,40 @@
+# arkeon-wiki — single-service example.
+#
+# Point `volumes:/watch` at the corpus you want indexed. PUID/PGID
+# should match the host user that owns that corpus so the watcher can
+# write sidecars and `.arkeon-wiki-state/` next to your files without
+# permission surprises.
+#
+# Usage:
+#   cp docker-compose.example.yml docker-compose.yml
+#   $EDITOR docker-compose.yml   # set the bind path + PUID/PGID
+#   docker compose up -d
+#   open http://localhost:8062
+
+services:
+  arkeon-wiki:
+    image: ghcr.io/arkeon-technologies/arkeon-wiki:latest
+    container_name: arkeon-wiki
+    restart: unless-stopped
+    ports:
+      - "8062:8062"
+    environment:
+      # Match the host UID/GID that owns your corpus directory. `id -u`
+      # / `id -g` on Linux; on Docker Desktop for Mac, files end up
+      # owned by your host user regardless.
+      PUID: "1000"
+      PGID: "1000"
+    volumes:
+      # Corpus root — replace with your own absolute path.
+      - ./corpus:/watch
+      # Daemon state: SQLite index, logs, pidfile. Survives restarts.
+      - arkeon-wiki-state:/state
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8062/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  arkeon-wiki-state:

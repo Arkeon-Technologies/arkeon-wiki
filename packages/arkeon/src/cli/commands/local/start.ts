@@ -60,7 +60,11 @@ export function registerStartCommand(program: Command): void {
 
 async function runStart(options: StartOptions): Promise<void> {
   const named = options.name ? applyName(options.name) : null;
-  const apiPort = Number(options.port ?? named?.port ?? DEFAULT_API_PORT);
+  // --port wins, then named-instance derived port, then PORT env (the
+  // Docker convention; the runtime image sets PORT=8062), then default.
+  const apiPort = Number(
+    options.port ?? named?.port ?? process.env.PORT ?? DEFAULT_API_PORT,
+  );
   const instanceName = options.name ?? DEFAULT_INSTANCE_NAME;
   const watchedRoot =
     options.watchDir ?? process.env.ARKEON_WIKI_WATCH_DIR ?? process.cwd();

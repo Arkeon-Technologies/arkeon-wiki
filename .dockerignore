@@ -1,0 +1,13 @@
+**/node_modules
+**/dist
+**/.tsbuildinfo
+**/coverage
+.git
+.github
+.vscode
+.DS_Store
+docs
+experiments
+tasks
+*.tgz
+*.log

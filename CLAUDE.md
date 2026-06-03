@@ -100,9 +100,9 @@ Binary files generate HTML sidecars at `.sidecars/<mirrored-path>.html`. The sid
 
 **Tag the sidecar, not the binary.** Worker `processed-by-<name>` tags belong on the sidecar (the `kind='text'` row), not the asset. Asset artifacts are invisible to any `kinds: ["text"]` query — tagging them does nothing the next tick will notice. Use `asset.properties.sidecar_path` to find the right target.
 
-PDF extraction uses PyMuPDF via a managed Python venv. Run `arkeon-wiki install-deps` once per machine to bootstrap.
+PDF extraction uses PyMuPDF via the Python venv baked into the Docker image (`/opt/arkeon-wiki/python`). On the npm-distribution path there is no binary extractor support — PDFs index as `kind='asset'` (linkable) but no sidecar is produced.
 
-Adding a new handler: drop a module under `src/server/extractors/<format>.ts` exporting a `FileHandler` (extensions, declarative `dependencies`, async `extract`), register it in `index.ts`'s `HANDLERS` array, and add a fixture.
+Adding a new handler: drop a module under `src/server/extractors/<format>.ts` exporting a `FileHandler` (extensions, declarative `dependencies`, async `extract`), register it in `index.ts`'s `HANDLERS` array, add a fixture, and add the corresponding system package or Python wheel to the `Dockerfile` runtime stage.
 
 ## Commands
 
@@ -112,11 +112,18 @@ arkeon-wiki down                    # stop daemon
 arkeon-wiki status                  # is it running?
 arkeon-wiki ls                      # list running instances
 arkeon-wiki logs [-f]               # tail daemon log
-arkeon-wiki start                   # foreground (for pm2/launchd)
+arkeon-wiki start                   # foreground (for pm2/launchd/Docker)
 arkeon-wiki install                 # persistent service
 arkeon-wiki uninstall               # remove service
-arkeon-wiki install-deps            # bootstrap Python venv for PDF extraction
 ```
+
+`arkeon-wiki install-deps` has been removed — binary extractor dependencies (PyMuPDF, future libreoffice/pandoc/tesseract) now ship in the Docker image only. The command stub remains so legacy scripts fail loudly with a pointer to the image.
+
+## Docker image
+
+Published to `ghcr.io/arkeon-technologies/arkeon-wiki` on every push to `main` (`:main`, `:sha-<short>`) and on `arkeon-wiki-v*` tags (`:vX.Y.Z`, `:latest`). The image bakes the Python venv with PyMuPDF at `/opt/arkeon-wiki/python` and an adapters manifest at `/opt/arkeon-wiki/adapters.json` (path overridable via `ARKEON_WIKI_ADAPTERS_PATH`).
+
+Volumes: `/watch` (corpus bind mount) and `/state` (`ARKEON_WIKI_HOME`). Default port 8062. The entrypoint remaps the in-container `arkeon` user to `PUID`/`PGID` so writes into `/state` match the host's expected owner. See `docker-compose.example.yml` for a starter.
 
 `--name <name>` enables multiple instances side by side.
 
@@ -144,8 +151,7 @@ E2e tests spin up the API in-process against a temp watched root.
 - `~/.arkeon-wiki/` — default instance home (DB, pidfile, log).
 - `~/.arkeon-wiki/<name>/` — named instance home.
 - `~/.arkeon-wiki/.env` — user-global env file (write API keys here if needed; the substrate itself has no auth).
-- `~/.arkeon-wiki/python/` — managed Python venv bootstrapped by `install-deps`.
-- `~/.arkeon-wiki/adapters.json` — versioned manifest of resolved extractor dependencies.
+- `~/.arkeon-wiki/adapters.json` — versioned manifest of resolved extractor dependencies. In the Docker image this lives at `/opt/arkeon-wiki/adapters.json` and is selected via `ARKEON_WIKI_ADAPTERS_PATH`.
 
 Override the state dir with `ARKEON_WIKI_HOME` env var or `--data-dir`. Override the watched root with `ARKEON_WIKI_WATCH_DIR` or `--watch-dir`.
 

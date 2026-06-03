@@ -5,10 +5,11 @@
  * PDF → HTML sidecar handler.
  *
  * Single-stage: spawn the bundled `pdf_extract.py` script via the
- * managed Python venv (bootstrapped by `arkeon-wiki install-deps`).
- * The script writes asset files (page renders + embedded figures)
- * into `ctx.assetsDir` and the HTML sidecar to a tmp file inside the
- * staging dir; we read it back after the subprocess exits.
+ * Python interpreter recorded in the adapters manifest (baked into
+ * the official Docker image). The script writes asset files (page
+ * renders + embedded figures) into `ctx.assetsDir` and the HTML
+ * sidecar to a tmp file inside the staging dir; we read it back
+ * after the subprocess exits.
  *
  * Why file-output (not stdout) for the HTML: PyMuPDF's HTML mode
  * emits absolute-positioned <p> elements with inline styles, per
@@ -48,23 +49,22 @@ export const pdfHandler: FileHandler = {
   dependencies: [
     {
       kind: "python_package",
-      // Exact pin: install-deps installs from the bundled lockfile
-      // with --require-hashes when available. The version here drives
-      // the verify-only --check path + llms.txt summary so they stay
-      // in sync with the lockfile.
+      // Exact pin: the image bakes this version via requirements.lock
+      // with --require-hashes at build time. The version here drives
+      // the llms.txt summary, so keep it in sync with the lockfile.
       name: "pymupdf",
       versionConstraint: "==1.27.2.3",
       installHint: {
-        mac: "managed automatically by `arkeon-wiki install-deps`",
-        linux: "managed automatically by `arkeon-wiki install-deps`",
-        windows: "managed automatically by `arkeon-wiki install-deps`",
+        mac: "ships in the arkeon-wiki Docker image (ghcr.io/arkeon-technologies/arkeon-wiki)",
+        linux: "ships in the arkeon-wiki Docker image (ghcr.io/arkeon-technologies/arkeon-wiki)",
+        windows: "ships in the arkeon-wiki Docker image (ghcr.io/arkeon-technologies/arkeon-wiki)",
       },
     },
   ],
   async extract(ctx) {
     if (!ctx.adapters.python) {
       throw new Error(
-        "adapters manifest has no python entry — run `arkeon-wiki install-deps`",
+        "adapters manifest has no python entry — PDF extraction requires the arkeon-wiki Docker image (ghcr.io/arkeon-technologies/arkeon-wiki)",
       );
     }
     const script = resolvePythonScript("pdf_extract.py");

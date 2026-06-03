@@ -1,7 +1,7 @@
 {
   "name": "arkeon-wiki",
   "version": "0.1.1",
-  "description": "Self-contained wiki + knowledge-graph platform: Hono API server, SQLite, CLI. One package, one process, no Docker.",
+  "description": "Filesystem-first substrate for agent harnesses: Hono API server, SQLite index, CLI. Ships as an npm package and a Docker image (ghcr.io/arkeon-technologies/arkeon-wiki).",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Arkeon-Technologies/arkeon-wiki.git",
