@@ -6,8 +6,12 @@ name: Docker
 #   - pull_request           → build-only (no push); verifies the image
 #                              compiles before merge.
 #   - push to main           → ghcr.io/.../arkeon-wiki:main + :sha-<short>
-#   - tag arkeon-wiki-v*     → :latest + :v<version> (mirrors the npm release)
+#                              + :latest (head-of-main convention until v1)
+#   - tag arkeon-wiki-v*     → :v<version> (mirrors the npm release)
 #   - workflow_dispatch      → manual rebuild against current ref
+#
+# Images are multi-arch (linux/amd64 + linux/arm64) so Apple Silicon
+# developers can `docker compose up -d` without platform overrides.
 #
 # The image bundles the Python venv (PyMuPDF) so binary extractors work
 # without per-host bootstrap. See Dockerfile for the layer plan.
@@ -43,6 +47,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up QEMU for cross-platform builds
+        # Required for the linux/arm64 leg of the manifest on amd64 runners.
+        uses: docker/setup-qemu-action@v3
+
       - uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
@@ -65,8 +73,8 @@ jobs:
           tags: |
             type=raw,value=main,enable={{is_default_branch}}
             type=sha,prefix=sha-,format=short,enable={{is_default_branch}}
+            type=raw,value=latest,enable={{is_default_branch}}
             type=match,pattern=arkeon-wiki-v(.+),group=1,prefix=v
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/arkeon-wiki-v') }}
             type=ref,event=pr
 
       - name: Build and push
@@ -74,7 +82,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           # PRs build-only; pushes (main + tags) publish to GHCR.
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
