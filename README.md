@@ -115,7 +115,12 @@ Two tag-key conventions coexist:
 
 **Reserved characters.** Tag KEYS may not contain `:` (`400 reserved_character`). The colon is the key/value separator in `has_tag` / `not_tag` query specs — a literal colon in the key would store fine but then collide on read with the (key, value) split. Pass the colon in the request shape (`{ key: "status", value: "published" }`), not in the key. Values may contain colons.
 
-`GET /redlinks` dedups HTML href and MD slug forms by lowercased basename-minus-extension: `<a href="./chloroplast.html">` and `[[chloroplast]]` collapse into one row whose `demand` sums both anchors and whose `linked_from` unions their source files. The returned `target_path` prefers the fs-relative form (e.g. `iarpa/chloroplast.html`) so harnesses get an actionable place to drop the file; it falls back to the bare slug only when no fs-path anchor exists. Branch on `target_path.includes("/")` to distinguish "create at this path" from "create anywhere by basename."
+`GET /redlinks` aggregates the queue the same way the resolver itself resolves links — so a row represents one concrete unit of work:
+
+- Each unique fs-path target is its own row. `iarpa/wiki.html` and `chartbook/wiki.html` are two distinct gaps; creating one resolves only the anchors that named exactly that path.
+- An MD slug redlink (`[[wiki]]`, no folder/extension) merges into a fs-path row only when its basename has exactly one fs-path match in the queue — the same condition under which `[[wiki]]` would auto-resolve once the file lands. With zero matches the slug stays as its own row (target=`wiki`). With two+ matches the slug stays standalone too (ambiguous — same way the resolver punts).
+
+Branch on `target_path.includes("/")` to distinguish "create at this path" from "create anywhere by basename." Cross-folder same-basename collisions stay visible as separate work items rather than masquerading as one.
 
 Full reference at `GET /llms.txt` or `GET /help`.
 

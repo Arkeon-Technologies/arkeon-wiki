@@ -85,18 +85,51 @@ binary's filename basename, NOT the embedded \`<title>\` — that keeps
 ## Link conventions
 
 HTML: \`<a class="wikilink" href="./topic-x">topic X</a>\`. Only
-anchors with \`wikilink\` in their class list become graph edges.
-Other \`<a>\` elements render as ordinary HTML. Hrefs resolve
-relative to the source file's directory:
-\`./sources/x.pdf\` from \`iarpa/y.html\` → \`iarpa/sources/x.pdf\`.
+anchors with \`wikilink\` in their class list become graph edges;
+other \`<a>\` elements render as ordinary HTML. Hrefs resolve
+relative to the source file's directory (browser-style):
 
-Markdown: \`[[X]]\` resolves by shortest-unique-basename match
-against the artifact index. \`[[folder/X]]\` works for
-disambiguation. \`[[X|Display]]\` carries an alias. If \`[[X]]\` is
-written before its target exists, the link row stays as the
-literal slug — but converges to the resolved path automatically as
-soon as the target lands (either during initial reconcile or via
-a live watcher event).
+  - \`./topic-x.html\` from \`iarpa/notes.html\` → \`iarpa/topic-x.html\`
+  - \`topic-x.html\` from \`iarpa/notes.html\` → \`iarpa/topic-x.html\`
+    (the leading \`./\` is decorative; both forms identical)
+  - \`../chartbook/x.html\` from \`iarpa/notes.html\` → \`chartbook/x.html\`
+  - \`/x.html\` → dropped (server-absolute paths are out of scope —
+    the watched root has no notion of "server root")
+  - \`https://...\` (or any \`scheme:\`) → dropped
+  - paths that escape the watched root → dropped
+
+Markdown: \`[[X]]\` resolves by basename match — looks for any
+artifact whose basename (with or without extension) equals \`X\`
+case-insensitively.
+
+  - **Exactly one match** → resolves to that artifact's path.
+  - **Zero matches** → stays unresolved; target stored as the
+    literal slug. Auto-converges if/when exactly one matching
+    artifact lands (during initial reconcile or via live watcher
+    event).
+  - **Multiple matches** → stays unresolved (ambiguous).
+    Disambiguate with \`[[folder/X]]\` or \`[[folder/X.html]]\`.
+
+\`[[folder/X]]\` is treated as a path-form: normalized relative to
+the source file's directory if it starts with \`./\` or \`../\`,
+otherwise relative to the watched root. \`[[X|Display]]\` carries
+an alias for \`link_text\`.
+
+**Same basename in different folders is the norm, not a
+collision.** \`iarpa/wiki.html\` and \`chartbook/wiki.html\` are two
+distinct artifacts, each with its own backlink graph. An MD
+\`[[wiki]]\` from anywhere in the corpus only resolves if exactly
+one \`wiki.*\` exists. Write \`[[iarpa/wiki]]\` or
+\`[[chartbook/wiki]]\` for an unambiguous cross-folder link. The
+HTML equivalent from a sibling-folder source is
+\`<a class="wikilink" href="../chartbook/wiki.html">\`.
+
+**Prefer \`[[folder/X]]\` over HTML's \`../folder/X.html\` for
+cross-folder links.** The MD form is stable when the SOURCE file
+moves between folders (the resolver walks from the source's
+directory; the path-form normalizes consistently). HTML's
+\`../folder/X.html\` form breaks when you move the source because
+\`../\` is now interpreted from a different starting point.
 
 Citation metadata: \`<a class="wikilink" data-quote="..." data-page="3"
 data-cite-type="evidence" href="./paper.pdf.html">paper</a>\`. Every
@@ -308,30 +341,36 @@ discovery loop building a work queue uses \`/redlinks\`.
 }
 \`\`\`
 
-The work-to-be-written queue.
+The work-to-be-written queue. One row = one concrete unit of work.
 
-**Two link syntaxes, one redlink row.** HTML
-\`<a class="wikilink" href="./missing.html">\` and Markdown
-\`[[missing]]\` both surface as unresolved targets, but they enter the
-index in different shapes:
+**Aggregation mirrors the resolver.** \`/redlinks\` groups anchors the
+same way the substrate resolves links, so a row represents the
+anchors that WILL resolve when a single file lands:
 
-  - **HTML** hrefs resolve to an fs-relative path under the watched
-    root (e.g. \`iarpa/sources/missing.html\`).
-  - **Markdown** \`[[X]]\` keeps the literal slug (e.g.
-    \`missing\`, no slashes) until a matching artifact lands and
-    converges via shortest-unique-basename resolution.
+  - **Each unique fs-path target is its own row.** HTML
+    \`<a class="wikilink" href="...">\` always lands as an fs-relative
+    path (e.g. \`iarpa/missing.html\`). \`iarpa/wiki.html\` and
+    \`chartbook/wiki.html\` are two distinct redlinks — creating one
+    file does NOT resolve anchors that named the other.
+  - **MD slug redlinks** (\`[[X]]\` with no slash or extension) merge
+    into a fs-path row only when the slug's basename has EXACTLY ONE
+    fs-path match in the queue — the same condition under which
+    \`[[X]]\` would auto-resolve once the file lands. Zero matches:
+    slug stays as its own row (target=\`X\`); two+ matches: slug stays
+    standalone too (ambiguous; the resolver would punt the same way).
 
-The endpoint deduplicates across the two shapes by lowercased
-basename-minus-extension, so \`./missing.html\`, \`folder/missing.html\`,
-and \`[[missing]]\` aggregate into one row whose \`demand\` sums all
-anchors and whose \`linked_from\` unions the source files. The
-returned \`target_path\` prefers the fs-relative form (so harnesses
-have an actionable path to create the file at); the slug form only
-surfaces if no fs-path anchor exists.
+So a \`[[chloroplast]]\` slug + a single \`iarpa/chloroplast.html\`
+fs-path anchor surface as one row whose \`demand\` sums both anchors
+and whose \`linked_from\` unions both source files. But two cross-
+folder fs-paths sharing a basename (e.g. \`iarpa/wiki.html\` and
+\`chartbook/wiki.html\`) stay as two rows — plus a third row for any
+\`[[wiki]]\` slug, because the slug is ambiguous and can't be
+attributed to either fs-path safely.
 
 Branch on \`target_path.includes("/")\` ⇒ fs-relative path (suggests
 where to create the file); otherwise ⇒ MD slug (resolves by basename
-anywhere under the watched root once written).
+anywhere under the watched root once exactly one matching file
+lands).
 
 ### GET /stats
 
