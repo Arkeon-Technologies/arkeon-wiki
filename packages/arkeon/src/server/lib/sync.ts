@@ -272,12 +272,20 @@ async function syncAsset(
   const properties: Record<string, unknown> = {
     file_type: extname(relativePath).slice(1).toLowerCase() || "unknown",
     size_bytes: stats.size,
-    // Address of the searchable HTML sidecar a future extractor pass
-    // will produce. The convention is fixed (.sidecars/<mirrored>.html);
-    // the file may not exist yet (no handler registered, or extraction
-    // pending) — harnesses dereference and check.
-    sidecar_path: `.sidecars/${relativePath}.html`,
   };
+  // Address of the searchable HTML sidecar a future extractor pass
+  // will produce. The convention is fixed (.sidecars/<mirrored>.html);
+  // the file may not exist yet (no handler registered, or extraction
+  // pending) — harnesses dereference and check.
+  //
+  // Assets that themselves live under .sidecars/ (e.g. PDF page-render
+  // PNGs at .sidecars/X.assets/page-N.png) are terminal derived state —
+  // no further extractor pass will produce a sidecar from a sidecar's
+  // own derived files. Omit the field rather than fabricate a doubly-
+  // prefixed path (.sidecars/.sidecars/...) that points at nothing.
+  if (!relativePath.startsWith(".sidecars/")) {
+    properties.sidecar_path = `.sidecars/${relativePath}.html`;
+  }
   const propsJson = JSON.stringify(properties);
 
   if (existing) {

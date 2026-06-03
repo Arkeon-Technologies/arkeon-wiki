@@ -250,6 +250,20 @@ async function runExtractionInner(
     }
 
     const errorMessage = err instanceof Error ? err.message : String(err);
+
+    // If the source binary vanished between the entry-point existsSync
+    // and now (transient files like wkhtmltopdf's toPdfViaTempFile*.pdf
+    // that get deleted mid-debounce), don't fabricate a stub sidecar.
+    // The watcher's unlink branch will reap the binary's row shortly;
+    // writing a stub here would leave an orphan sidecar pointing at a
+    // binary that never existed long enough to be useful.
+    if (!existsSync(absPath)) {
+      console.error(
+        `[ingest/${handler.name}] ${relativePath}: source disappeared mid-extraction (${errorMessage})`,
+      );
+      return { status: "skipped", reason: "binary disappeared during extraction" };
+    }
+
     const stubHtml = buildStubSidecar({
       binaryRelPath: relativePath,
       handlerName: handler.name,

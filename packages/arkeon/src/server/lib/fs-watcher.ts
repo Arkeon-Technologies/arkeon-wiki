@@ -13,8 +13,8 @@
  * poll the API on whatever schedule they own.
  */
 
-import { watch, type FSWatcher, existsSync, readdirSync, openSync, readSync, closeSync, statSync } from "node:fs";
-import { join, extname, basename } from "node:path";
+import { watch, type FSWatcher, existsSync, readdirSync, openSync, readSync, closeSync, statSync, unlinkSync, rmSync } from "node:fs";
+import { join, extname, basename, dirname } from "node:path";
 
 import {
   cleanStaleStaging,
@@ -418,8 +418,64 @@ async function handleFileEvent(watchedRoot: string, relativePath: string): Promi
       if (removed) {
         console.log(`[watcher] removed: ${relativePath}`);
       }
+      // Sidecars are derived state — when the source binary is gone,
+      // its sidecar HTML and per-binary assets dir should follow. The
+      // index would otherwise carry an orphan kind='text' sidecar row
+      // pointing at a binary that no longer exists. Only cascade for
+      // ingestable binaries that produce sidecars, and skip if we ARE
+      // a sidecar (avoid recursion on .sidecars/X.html unlink).
+      if (isIngestable(relativePath) && !relativePath.startsWith(".sidecars/")) {
+        await cascadeRemoveSidecar(watchedRoot, relativePath);
+      }
     } catch (err) {
       console.error(`[watcher] Error removing ${relativePath}:`, (err as Error).message);
+    }
+  }
+}
+
+async function cascadeRemoveSidecar(
+  watchedRoot: string,
+  binaryRelPath: string,
+): Promise<void> {
+  const sidecarRelPath = `.sidecars/${binaryRelPath}.html`;
+  const sidecarAbsPath = join(watchedRoot, sidecarRelPath);
+  // .sidecars/<dirname>/<basename>.assets/ holds per-binary render output.
+  const sidecarParentRel = dirname(sidecarRelPath);
+  const assetsRelDir =
+    sidecarParentRel === "."
+      ? `${basename(binaryRelPath)}.assets`
+      : `${sidecarParentRel}/${basename(binaryRelPath)}.assets`;
+  const assetsAbsDir = join(watchedRoot, assetsRelDir);
+
+  if (existsSync(sidecarAbsPath)) {
+    try {
+      unlinkSync(sidecarAbsPath);
+    } catch {
+      // Best-effort — if the file's already gone or unwritable, the
+      // row removal below still cleans the index.
+    }
+    await removeByPath(sidecarRelPath);
+    console.log(`[watcher] cascade-removed sidecar: ${sidecarRelPath}`);
+  }
+
+  if (existsSync(assetsAbsDir)) {
+    let assetNames: string[] = [];
+    try {
+      assetNames = readdirSync(assetsAbsDir);
+    } catch {
+      assetNames = [];
+    }
+    for (const name of assetNames) {
+      try {
+        await removeByPath(`${assetsRelDir}/${name}`);
+      } catch {
+        // best-effort
+      }
+    }
+    try {
+      rmSync(assetsAbsDir, { recursive: true, force: true });
+    } catch {
+      // best-effort
     }
   }
 }

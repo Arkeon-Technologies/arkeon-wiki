@@ -9,7 +9,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -506,6 +506,64 @@ describe("substrate", () => {
     expect(quotes).toEqual(["first", "second"]);
     const pages = fromMulti.map((b) => b.attrs.page).sort();
     expect(pages).toEqual(["3", "7"]);
+  });
+
+  it("cascade-removes sidecar + assets when the source binary is unlinked", async () => {
+    // Regression guard: when a binary disappears, the watcher must
+    // evict its derived state — the sidecar HTML, the per-binary
+    // assets directory, and every row pointing at any of it.
+    // Otherwise /stats reports phantom sidecars and /query returns
+    // kind='text' rows for binaries that no longer exist.
+    //
+    // Simulating a full PDF extraction would need the Python venv
+    // (Docker-only). Stand in by creating the binary, its sidecar
+    // file, and one asset by hand — the cascade-on-unlink path
+    // doesn't care how the sidecar got there.
+    const binaryRel = "iarpa/sources/orphan-probe.pdf";
+    const sidecarRel = `.sidecars/${binaryRel}.html`;
+    const assetRel = `.sidecars/iarpa/sources/orphan-probe.pdf.assets/page-1.png`;
+    const binaryAbs = join(workdir, binaryRel);
+    const sidecarAbs = join(workdir, sidecarRel);
+    const assetAbs = join(workdir, assetRel);
+
+    writeFileSync(binaryAbs, "%PDF-1.4 minimal placeholder\n");
+    mkdirSync(join(workdir, ".sidecars/iarpa/sources"), { recursive: true });
+    writeFileSync(
+      sidecarAbs,
+      `<!doctype html><html><head><title>Orphan probe</title></head><body><p>extracted text</p></body></html>`,
+    );
+    mkdirSync(join(workdir, ".sidecars/iarpa/sources/orphan-probe.pdf.assets"), {
+      recursive: true,
+    });
+    writeFileSync(assetAbs, "fake png bytes");
+
+    const sql = createSql();
+    let deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      const rows = await sql`
+        SELECT path FROM artifacts
+        WHERE path IN (${binaryRel}, ${sidecarRel}, ${assetRel})
+      `;
+      if (rows.length === 3) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    unlinkSync(binaryAbs);
+
+    deadline = Date.now() + 3000;
+    let evicted = false;
+    while (Date.now() < deadline) {
+      const rows = await sql`
+        SELECT path FROM artifacts
+        WHERE path IN (${binaryRel}, ${sidecarRel}, ${assetRel})
+      `;
+      if (rows.length === 0 && !existsSync(sidecarAbs) && !existsSync(assetAbs)) {
+        evicted = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(evicted).toBe(true);
   });
 
   it("converges markdown [[X]] redlinks once the target artifact lands", async () => {

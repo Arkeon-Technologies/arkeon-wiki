@@ -16,12 +16,16 @@ cp docker-compose.example.yml docker-compose.yml
 # Docker Desktop (Mac/Windows): leave the defaults — bind-mount writes
 # end up owned by your host user regardless.
 docker compose up -d
+# Wait for readiness (SQLite probe). 200 = ready, 503 = still warming.
+curl -s http://localhost:8062/ready
 open http://localhost:8062
 ```
 
 The image bakes PyMuPDF (PDF extraction) so it works out of the box — no host-side bootstrap. Multi-arch (`linux/amd64` + `linux/arm64`). Image: `ghcr.io/arkeon-technologies/arkeon-wiki:latest`.
 
-Verify PDF extraction (any plain PDF works — generate one with `pandoc README.md -o test.pdf` if you don't have one handy, or use macOS Quick Look "Print → Save as PDF"). Drop it under `./corpus/`, then `curl http://localhost:8062/stats` should show the asset count tick up and a sidecar appear under `./corpus/.sidecars/`.
+**Corpus directory ownership.** On Linux, the daemon writes sidecars and `.arkeon-wiki-state/` next to your files; if the corpus dir was auto-created by Docker (root-owned), `PUID`/`PGID` writes will fail. Either `chown -R $(id -u):$(id -g) ./corpus` before `up -d`, or `mkdir -p ./corpus` ahead of time so it inherits your shell's user.
+
+Verify PDF extraction with any PDF you already have — or print this README to one (macOS Preview ⌘P → "Save as PDF"; Linux: any browser's Print → PDF). Drop it under `./corpus/`, then `curl http://localhost:8062/stats` should show the asset count tick up and a sidecar appear under `./corpus/.sidecars/`.
 
 ### npm (HTML + Markdown only)
 
