@@ -24,6 +24,13 @@ export interface Instance {
   api_url: string;
   api_port: number;
   home: string;
+  /**
+   * Absolute path the daemon is watching. Stored so the CLI can resolve
+   * which instance owns the current working directory without spinning
+   * up the daemon to ask. May be absent on instances registered before
+   * this field existed — readers should treat it as optional.
+   */
+  watch_dir?: string;
   pid: number;
   started_at: string;
 }

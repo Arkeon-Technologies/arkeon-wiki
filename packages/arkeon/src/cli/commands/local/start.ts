@@ -13,7 +13,9 @@
  */
 
 import type { Command } from "commander";
+import { realpathSync } from "node:fs";
 import { platform } from "node:os";
+import { resolve } from "node:path";
 
 const IS_WIN = platform() === "win32";
 
@@ -66,8 +68,14 @@ async function runStart(options: StartOptions): Promise<void> {
     options.port ?? named?.port ?? process.env.PORT ?? DEFAULT_API_PORT,
   );
   const instanceName = options.name ?? DEFAULT_INSTANCE_NAME;
-  const watchedRoot =
-    options.watchDir ?? process.env.ARKEON_WIKI_WATCH_DIR ?? process.cwd();
+  // Resolve + realpath so the registry stores the canonical absolute
+  // path. macOS aliases `/var` → `/private/var` and `/tmp` → `/private/tmp`,
+  // so a watched root specified as `/var/folders/...` won't string-match
+  // a `process.cwd()` of `/private/var/folders/...`. Canonicalize both
+  // sides (here, plus in instance-resolve) and the comparison just works.
+  const watchedRoot = canonicalize(
+    options.watchDir ?? process.env.ARKEON_WIKI_WATCH_DIR ?? process.cwd(),
+  );
 
   const existingPid = readPidfile();
   if (existingPid && isProcessAlive(existingPid)) {
@@ -157,6 +165,7 @@ async function runStart(options: StartOptions): Promise<void> {
     api_url: `http://localhost:${apiPort}`,
     api_port: apiPort,
     home: arkeonDir(),
+    watch_dir: watchedRoot,
     pid: process.pid,
     started_at: new Date().toISOString(),
   });
@@ -167,4 +176,19 @@ async function runStart(options: StartOptions): Promise<void> {
   console.log(`              Health: http://localhost:${apiPort}/health`);
   console.log("");
   console.log("              Press Ctrl+C to stop.");
+}
+
+/**
+ * Resolve `p` to an absolute path, then chase symlinks to its canonical
+ * form. Falls back to plain resolve() if the path doesn't exist yet —
+ * realpath throws ENOENT and we'd rather index a not-yet-created
+ * directory than abort startup.
+ */
+function canonicalize(p: string): string {
+  const abs = resolve(p);
+  try {
+    return realpathSync(abs);
+  } catch {
+    return abs;
+  }
 }
