@@ -1,0 +1,83 @@
+name: Docker
+
+# Build and publish the arkeon-wiki Docker image to GHCR.
+#
+# Triggers:
+#   - pull_request           → build-only (no push); verifies the image
+#                              compiles before merge.
+#   - push to main           → ghcr.io/.../arkeon-wiki:main + :sha-<short>
+#   - tag arkeon-wiki-v*     → :latest + :v<version> (mirrors the npm release)
+#   - workflow_dispatch      → manual rebuild against current ref
+#
+# The image bundles the Python venv (PyMuPDF) so binary extractors work
+# without per-host bootstrap. See Dockerfile for the layer plan.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'packages/arkeon/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'Dockerfile'
+      - 'docker/**'
+      - '.github/workflows/docker.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'packages/arkeon/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'Dockerfile'
+      - 'docker/**'
+      - '.github/workflows/docker.yml'
+    tags:
+      - 'arkeon-wiki-v*'
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        # PRs build-only — no login needed (and forks would not have a
+        # write-scoped token anyway).
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        name: Compute image tags
+        uses: docker/metadata-action@v5
+        with:
+          # Hardcoded lowercase — GHCR rejects mixed-case repo names and
+          # github.repository_owner is "Arkeon-Technologies".
+          images: ghcr.io/arkeon-technologies/arkeon-wiki
+          tags: |
+            type=raw,value=main,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short,enable={{is_default_branch}}
+            type=match,pattern=arkeon-wiki-v(.+),group=1,prefix=v
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/arkeon-wiki-v') }}
+            type=ref,event=pr
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          # PRs build-only; pushes (main + tags) publish to GHCR.
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

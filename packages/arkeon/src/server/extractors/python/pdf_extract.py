@@ -47,10 +47,11 @@ import sys
 
 try:
     import fitz  # PyMuPDF
-except ImportError as exc:  # pragma: no cover — only hit before install-deps
+except ImportError as exc:  # pragma: no cover — only hit outside the image
     print(
         "ImportError: pymupdf is not installed in this Python environment. "
-        "Run `arkeon-wiki install-deps` to bootstrap the toolchain.",
+        "PDF extraction requires the arkeon-wiki Docker image "
+        "(ghcr.io/arkeon-technologies/arkeon-wiki).",
         file=sys.stderr,
     )
     raise SystemExit(2) from exc

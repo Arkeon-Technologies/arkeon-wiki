@@ -11,11 +11,11 @@ import {
   adaptersManifestPath,
   readAdaptersManifest,
   requireAdaptersManifest,
-  writeAdaptersManifest,
 } from "../../src/server/extractors/adapters.js";
 import type { AdaptersManifest } from "../../src/server/extractors/types.js";
 
 let savedHome: string | undefined;
+let savedAdaptersPath: string | undefined;
 let workdir: string;
 
 const SAMPLE: AdaptersManifest = {
@@ -29,12 +29,20 @@ const SAMPLE: AdaptersManifest = {
 beforeEach(() => {
   workdir = mkdtempSync(join(tmpdir(), "arkeon-adapters-"));
   savedHome = process.env.ARKEON_WIKI_HOME;
+  savedAdaptersPath = process.env.ARKEON_WIKI_ADAPTERS_PATH;
   process.env.ARKEON_WIKI_HOME = workdir;
+  // Ensure the override doesn't leak in from the runtime env (the
+  // Docker image sets it); these tests exercise the host-side path
+  // resolution.
+  delete process.env.ARKEON_WIKI_ADAPTERS_PATH;
 });
 
 afterEach(() => {
   if (savedHome === undefined) delete process.env.ARKEON_WIKI_HOME;
   else process.env.ARKEON_WIKI_HOME = savedHome;
+  if (savedAdaptersPath === undefined)
+    delete process.env.ARKEON_WIKI_ADAPTERS_PATH;
+  else process.env.ARKEON_WIKI_ADAPTERS_PATH = savedAdaptersPath;
   rmSync(workdir, { recursive: true, force: true });
 });
 
@@ -53,11 +61,25 @@ describe("adapters manifest", () => {
     );
   });
 
-  it("writeAdaptersManifest + readAdaptersManifest round-trips", () => {
-    const path = writeAdaptersManifest(SAMPLE);
-    expect(path).toBe(join(workdir, "adapters.json"));
-    const loaded = readAdaptersManifest();
-    expect(loaded).toEqual(SAMPLE);
+  it("reads a manifest written to the resolved path", () => {
+    writeFileSync(
+      join(workdir, "adapters.json"),
+      JSON.stringify(SAMPLE, null, 2),
+    );
+    expect(readAdaptersManifest()).toEqual(SAMPLE);
+  });
+
+  it("ARKEON_WIKI_ADAPTERS_PATH overrides the resolved path", () => {
+    const overrideDir = mkdtempSync(join(tmpdir(), "arkeon-adapters-ovr-"));
+    const overridePath = join(overrideDir, "baked.json");
+    process.env.ARKEON_WIKI_ADAPTERS_PATH = overridePath;
+    try {
+      expect(adaptersManifestPath()).toBe(overridePath);
+      writeFileSync(overridePath, JSON.stringify(SAMPLE));
+      expect(readAdaptersManifest()).toEqual(SAMPLE);
+    } finally {
+      rmSync(overrideDir, { recursive: true, force: true });
+    }
   });
 
   it("rejects manifests with an unsupported schema_version", () => {

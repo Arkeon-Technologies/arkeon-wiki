@@ -85,8 +85,9 @@ Binary files (PDFs today; more handlers in future) auto-generate an
 HTML sidecar at \`.sidecars/<mirrored-path>.html\`. The sidecar is
 indexed as \`kind='text'\` and feeds FTS5. Links to the binary work
 because the binary itself is also indexed (as \`kind='asset'\`).
-Re-run \`arkeon-wiki install-deps\` once per machine to bootstrap the
-Python venv used by the PDF extractor.
+Run via the arkeon-wiki Docker image
+(\`ghcr.io/arkeon-technologies/arkeon-wiki\`) to get PDF extraction —
+PyMuPDF ships pre-installed in the image.
 
 **Tag the sidecar, not the binary.** Worker \`processed-by-<name>\`
 tags belong on the SIDECAR (\`.sidecars/X.html\`), not the binary
