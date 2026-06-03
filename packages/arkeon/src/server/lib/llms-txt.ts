@@ -310,25 +310,28 @@ discovery loop building a work queue uses \`/redlinks\`.
 
 The work-to-be-written queue.
 
-**Two \`target_path\` shapes coexist** because the two link syntaxes
-resolve differently:
+**Two link syntaxes, one redlink row.** HTML
+\`<a class="wikilink" href="./missing.html">\` and Markdown
+\`[[missing]]\` both surface as unresolved targets, but they enter the
+index in different shapes:
 
-  - **HTML \`<a class="wikilink" href="./missing.html">\`** — hrefs are
-    resolved relative to the source file's directory at extraction
-    time, so a redlink \`target_path\` looks like an fs-relative path
-    under the watched root (e.g. \`iarpa/sources/missing.html\`).
-  - **Markdown \`[[missing-topic]]\`** — resolved by shortest-unique-
-    basename match against the artifact index. If no match exists,
-    the row keeps the literal slug as \`target_path\` (e.g.
-    \`missing-topic\`, no slashes). Once a matching artifact lands the
-    row auto-converges to the resolved fs path on the next reconcile
-    pass — that "literal until resolved" contract is what lets the MD
-    redlink converge later without manual rewiring.
+  - **HTML** hrefs resolve to an fs-relative path under the watched
+    root (e.g. \`iarpa/sources/missing.html\`).
+  - **Markdown** \`[[X]]\` keeps the literal slug (e.g.
+    \`missing\`, no slashes) until a matching artifact lands and
+    converges via shortest-unique-basename resolution.
 
-Harnesses building work queues can branch on the shape:
-\`target_path.includes("/")\` ⇒ fs-relative path (suggests where to
-create the file); otherwise ⇒ MD slug (resolves by basename anywhere
-under the watched root once written).
+The endpoint deduplicates across the two shapes by lowercased
+basename-minus-extension, so \`./missing.html\`, \`folder/missing.html\`,
+and \`[[missing]]\` aggregate into one row whose \`demand\` sums all
+anchors and whose \`linked_from\` unions the source files. The
+returned \`target_path\` prefers the fs-relative form (so harnesses
+have an actionable path to create the file at); the slug form only
+surfaces if no fs-path anchor exists.
+
+Branch on \`target_path.includes("/")\` ⇒ fs-relative path (suggests
+where to create the file); otherwise ⇒ MD slug (resolves by basename
+anywhere under the watched root once written).
 
 ### GET /stats
 

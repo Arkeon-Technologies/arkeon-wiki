@@ -219,6 +219,24 @@ export interface ListRedlinksOptions {
   offset?: number | null;
 }
 
+/**
+ * Normalize a redlink target for dedup grouping: lowercased basename
+ * with the trailing extension stripped. Collapses the two target_path
+ * shapes that point at the same unresolved artifact — HTML
+ * `<a href="chloroplast.html">` (fs-relative path, possibly folder-
+ * prefixed) and MD `[[chloroplast]]` (literal slug) — into one
+ * redlink row. Mirrors the wiki's shortest-unique-basename
+ * resolution: both forms WOULD resolve to the same artifact if it
+ * existed under any folder.
+ */
+function normalizeRedlinkTarget(target: string): string {
+  const slashIdx = target.lastIndexOf("/");
+  const base = slashIdx >= 0 ? target.slice(slashIdx + 1) : target;
+  const dotIdx = base.lastIndexOf(".");
+  const stem = dotIdx > 0 ? base.slice(0, dotIdx) : base;
+  return stem.toLowerCase();
+}
+
 export async function listRedlinks(opts: ListRedlinksOptions): Promise<RedlinkResult> {
   const sql = createSql();
   const limit = Math.min(Math.max(opts.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
@@ -233,41 +251,62 @@ export async function listRedlinks(opts: ListRedlinksOptions): Promise<RedlinkRe
   }
   const whereSql = `WHERE ${where.join(" AND ")}`;
 
-  const totalRow = (await sql.query(
-    `SELECT COUNT(DISTINCT l.target_path) AS n
+  // Pull every unresolved anchor and dedup MD-slug vs HTML-fs-path
+  // forms in JS. Computing "lowercased basename minus extension"
+  // purely in SQLite (no REVERSE, no rfind) is hairier than the
+  // savings warrant; the redlink queue is bounded by the unresolved-
+  // link count, which stays small in practice.
+  const rows = (await sql.query(
+    `SELECT l.target_path, l.source_path
      FROM links l
      LEFT JOIN artifacts a ON a.path = l.target_path
      ${whereSql}`,
     params,
-  )) as { n: number }[];
-  const total = Number(totalRow[0]?.n ?? 0);
+  )) as Array<{ target_path: string; source_path: string }>;
 
-  // U+001F (ASCII Unit Separator) — a control character that can't
-  // appear in a filesystem path, so we can split the GROUP_CONCAT
-  // result back into individual source paths losslessly. Interpolate
-  // through char(31) on the SQL side so the source-level character
-  // is visible (not a hidden control byte embedded in a string literal).
-  const rows = (await sql.query(
-    `SELECT l.target_path,
-            COUNT(*) AS demand,
-            GROUP_CONCAT(l.source_path, char(31)) AS linked_from_concat
-     FROM links l
-     LEFT JOIN artifacts a ON a.path = l.target_path
-     ${whereSql}
-     GROUP BY l.target_path
-     ORDER BY demand DESC, l.target_path ASC
-     LIMIT ? OFFSET ?`,
-    [...params, limit, offset],
-  )) as Array<{ target_path: string; demand: number; linked_from_concat: string }>;
+  type Group = { targets: Set<string>; sources: string[] };
+  const groups = new Map<string, Group>();
+  for (const r of rows) {
+    const norm = normalizeRedlinkTarget(r.target_path);
+    let g = groups.get(norm);
+    if (!g) {
+      g = { targets: new Set(), sources: [] };
+      groups.set(norm, g);
+    }
+    g.targets.add(r.target_path);
+    g.sources.push(r.source_path);
+  }
 
-  const redlinks: RedlinkRow[] = rows.map((r) => ({
-    target_path: r.target_path,
-    demand: Number(r.demand),
-    linked_from: (r.linked_from_concat ?? "")
-      .split("\x1f")
-      .filter(Boolean)
-      .slice(0, 3),
-  }));
+  // Representative target_path: prefer the fs-path form (slash or
+  // dot) so harnesses get an actionable place to drop the file;
+  // tie-break alphabetic for stability.
+  const aggregated: RedlinkRow[] = Array.from(groups.values()).map((g) => {
+    const targets = [...g.targets].sort();
+    const fsForm = targets.find((t) => t.includes("/") || t.includes("."));
+    const seen = new Set<string>();
+    const linked_from: string[] = [];
+    for (const s of g.sources) {
+      if (seen.has(s)) continue;
+      seen.add(s);
+      linked_from.push(s);
+      if (linked_from.length === 3) break;
+    }
+    return {
+      target_path: fsForm ?? targets[0],
+      demand: g.sources.length,
+      linked_from,
+    };
+  });
+
+  aggregated.sort((a, b) => {
+    if (a.demand !== b.demand) return b.demand - a.demand;
+    if (a.target_path < b.target_path) return -1;
+    if (a.target_path > b.target_path) return 1;
+    return 0;
+  });
+
+  const total = aggregated.length;
+  const redlinks = aggregated.slice(offset, offset + limit);
 
   return { redlinks, total };
 }
@@ -447,14 +486,18 @@ export async function getStats(): Promise<CorpusStats> {
     `SELECT COUNT(*) AS n FROM links`,
     [],
   )) as { n: number }[];
-  const [{ n: redlinksN }] = (await sql.query(
-    `SELECT COUNT(*) AS n FROM (
-       SELECT DISTINCT l.target_path FROM links l
-       LEFT JOIN artifacts a ON a.path = l.target_path
-       WHERE a.path IS NULL
-     )`,
+  // Count redlinks via the same dedup as listRedlinks — `chloroplast.html`
+  // and `chloroplast` collapse into one. Counting DISTINCT target_path in
+  // SQL would double-count them; keep both numbers in agreement.
+  const redlinkTargets = (await sql.query(
+    `SELECT DISTINCT l.target_path FROM links l
+     LEFT JOIN artifacts a ON a.path = l.target_path
+     WHERE a.path IS NULL`,
     [],
-  )) as { n: number }[];
+  )) as { target_path: string }[];
+  const normalizedRedlinks = new Set<string>();
+  for (const r of redlinkTargets) normalizedRedlinks.add(normalizeRedlinkTarget(r.target_path));
+  const redlinksN = normalizedRedlinks.size;
   const [{ n: tagKeysN }] = (await sql.query(
     `SELECT COUNT(DISTINCT key) AS n FROM tags`,
     [],

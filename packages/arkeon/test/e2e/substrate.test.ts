@@ -41,6 +41,18 @@ beforeAll(async () => {
     join(workdir, "chartbook/about.html"),
     `<!doctype html><html><head><title>Chartbook</title></head><body><p>chart</p></body></html>`,
   );
+  // Two unresolved anchors at the same basename ("chloroplast") via the
+  // two link syntaxes: HTML href lands as fs-relative path
+  // (iarpa/chloroplast.html), MD [[X]] stays as a literal slug
+  // (chloroplast). /redlinks should dedup them into one row.
+  writeFileSync(
+    join(workdir, "iarpa/notes.html"),
+    `<!doctype html><html><head><title>Notes</title></head><body><p>See <a class="wikilink" href="./chloroplast.html">chloroplast</a>.</p></body></html>`,
+  );
+  writeFileSync(
+    join(workdir, "iarpa/sources/notes.md"),
+    `# Notes\n\nSee [[chloroplast]] for context.\n`,
+  );
 
   await startWatching(workdir);
   app = createApp();
@@ -351,6 +363,30 @@ describe("substrate", () => {
     const missing = body.redlinks.find((r) => r.target_path === "missing-target")!;
     expect(missing.linked_from).toEqual(["iarpa/sources/paper.md"]);
     expect(missing.demand).toBe(1);
+  });
+
+  it("GET /redlinks dedups HTML href vs MD slug forms of the same target", async () => {
+    // iarpa/notes.html links to ./chloroplast.html (fs-path form)
+    // iarpa/sources/notes.md links to [[chloroplast]] (slug form)
+    // Both resolve to the same unresolved artifact; one redlink row.
+    const res = await app.fetch(new Request("http://test/redlinks"));
+    const body = (await res.json()) as {
+      redlinks: Array<{ target_path: string; demand: number; linked_from: string[] }>;
+      total: number;
+    };
+    const chloroplastRows = body.redlinks.filter(
+      (r) => r.target_path === "chloroplast" || r.target_path.endsWith("/chloroplast.html") || r.target_path === "chloroplast.html",
+    );
+    expect(chloroplastRows).toHaveLength(1);
+    const row = chloroplastRows[0];
+    // Representative target_path prefers the fs-path form so harnesses
+    // get an actionable file location.
+    expect(row.target_path).toBe("iarpa/chloroplast.html");
+    expect(row.demand).toBe(2);
+    expect(row.linked_from.sort()).toEqual([
+      "iarpa/notes.html",
+      "iarpa/sources/notes.md",
+    ]);
   });
 
   it("POST /query filters by documented `kinds` array (not legacy `kind`)", async () => {
