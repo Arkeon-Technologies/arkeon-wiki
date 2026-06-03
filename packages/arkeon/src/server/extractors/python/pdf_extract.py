@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import html
 import os
+import re
 import sys
 
 try:
@@ -58,6 +59,79 @@ except ImportError as exc:  # pragma: no cover — only hit outside the image
 
 
 RENDER_DPI = 150
+
+# A "block" from get_text("blocks") is one visual paragraph-ish region.
+# Within a block, soft-wrapped lines are separated by \n. If we emit
+# those \n as <br> verbatim, prose paragraphs render with mid-sentence
+# line breaks and (worse) hyphenated wraps strand the hyphen mid-word
+# ("compre-<br>hensive"). _reflow_block joins lines into paragraphs:
+# blank-line gaps split paragraphs; within a paragraph, hyphen+lower
+# wraps dehyphenate, and remaining soft-wraps reflow to a single space.
+# Short-line blocks (poetry, addresses) stay as <br>-separated lines
+# because reflowing them to a single line would lose their structure.
+
+# Below this line length, a block is treated as intentionally lineated
+# (addresses, short poetry, lists). Real PDF prose wraps at 60–80 char.
+SHORT_LINE_MAX = 30
+# Characters that mark a line as a "completed unit" rather than a
+# soft-wrap continuation. Used by the lineated heuristic.
+LINE_END_PUNCT = ".!?;:,"
+
+
+def _is_lineated(lines: list[str]) -> bool:
+    """Decide whether a list of lines should render as <br>-separated
+    (poetry, addresses, lists) or reflow into a prose paragraph.
+
+    Two cues combined:
+      - all lines short (≤ SHORT_LINE_MAX) → lineated, regardless of
+        punctuation (covers addresses, lists, very short verse)
+      - otherwise: lineated if a majority of non-final lines end in
+        terminal punctuation (each line is a self-contained unit).
+        Prose soft-wraps end mid-sentence (a word character, no punct).
+    """
+    if len(lines) <= 1:
+        return False
+    if max(len(ln) for ln in lines) <= SHORT_LINE_MAX:
+        return True
+    non_final = lines[:-1]
+    enders = sum(1 for ln in non_final if ln and ln[-1] in LINE_END_PUNCT)
+    return enders * 2 > len(non_final)
+
+
+def _reflow_block(text: str) -> list[tuple[list[str], bool]]:
+    """Split one block's text into paragraphs with reflow strategy.
+
+    Returns a list of (lines, lineated) tuples:
+      - lines: list of dehyphenated paragraph lines, all non-empty
+      - lineated: True → render with <br> between lines (poetry, etc.)
+                  False → join with single space (prose)
+    """
+    out: list[tuple[list[str], bool]] = []
+    # Blank-line gap = explicit paragraph break inside the block.
+    for chunk in re.split(r"\n[ \t]*\n+", text.strip("\n")):
+        raw_lines = [ln.strip() for ln in chunk.split("\n")]
+        raw_lines = [ln for ln in raw_lines if ln]
+        if not raw_lines:
+            continue
+        # Dehyphenate: if a line ends in '-' and the next starts with
+        # a lowercase letter, drop the hyphen and merge. Compound words
+        # like "twenty-five" can be miscombined to "twentyfive" — rare
+        # enough vs. the common "compre-<br>hensive" bug we're fixing.
+        merged: list[str] = []
+        i = 0
+        while i < len(raw_lines):
+            cur = raw_lines[i]
+            while (
+                i + 1 < len(raw_lines)
+                and cur.endswith("-")
+                and raw_lines[i + 1][:1].islower()
+            ):
+                cur = cur[:-1] + raw_lines[i + 1]
+                i += 1
+            merged.append(cur)
+            i += 1
+        out.append((merged, _is_lineated(merged)))
+    return out
 
 
 def write(out, *strs: str) -> None:
@@ -170,16 +244,14 @@ def main(argv: list[str]) -> int:
                     if len(block) < 7 or block[6] != 0:
                         continue
                     raw_text = block[4]
-                    if not isinstance(raw_text, str):
+                    if not isinstance(raw_text, str) or not raw_text.strip():
                         continue
-                    stripped = raw_text.strip()
-                    if not stripped:
-                        continue
-                    # Preserve in-block line breaks as <br> so soft-
-                    # wrapped lines (poetry, addresses, OCR'd lines)
-                    # don't collapse into one run-on paragraph.
-                    escaped = html.escape(stripped).replace("\n", "<br>")
-                    write(out, f"<p>{escaped}</p>")
+                    for lines, lineated in _reflow_block(raw_text):
+                        if lineated:
+                            escaped = "<br>".join(html.escape(ln) for ln in lines)
+                        else:
+                            escaped = html.escape(" ".join(lines))
+                        write(out, f"<p>{escaped}</p>")
 
             # 2. Embedded images / figures.
             #
