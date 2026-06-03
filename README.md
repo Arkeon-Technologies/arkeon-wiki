@@ -90,6 +90,8 @@ POST /tag       { path, key, value? }
                 → { ok, path, key, value, previous_value, action }   # action ∈ created|updated|unchanged
 POST /untag     { path, key }
                 → { ok, path, key, existed }
+POST /reconcile {}
+                → { ok, created, updated, unchanged, removed, took_ms, coalesced }
 GET  /tags?path=...
                 → { path, tags: { key: value, ... } }
 GET  /backlinks?path=...
@@ -114,6 +116,8 @@ Two tag-key conventions coexist:
 **Strict body validation.** POST endpoints reject malformed JSON with `400 invalid_json` and unknown top-level fields with `400 unknown_field`. A typo like `notag` instead of `not_tag` errors loudly rather than silently returning the unfiltered corpus.
 
 **Reserved characters.** Tag KEYS may not contain `:` (`400 reserved_character`). The colon is the key/value separator in `has_tag` / `not_tag` query specs — a literal colon in the key would store fine but then collide on read with the (key, value) split. Pass the colon in the request shape (`{ key: "status", value: "published" }`), not in the key. Values may contain colons.
+
+**Watcher is best-effort; reconcile is the source of correctness.** `node:fs.watch` silently drops events under bulk filesystem load — FSEvents on macOS, inotify on Linux, the Docker-Desktop bind-mount FUSE layer. A `mv *.html corpus/` over a few thousand files can leak unlink events, leaving stale rows at the old paths. The daemon runs a periodic reconcile sweep (default every 30s) that re-walks the root and prunes orphan rows; tune via `ARKEON_WIKI_RECONCILE_INTERVAL_SECONDS` (set `0` to disable). For an immediate heal, `POST /reconcile` (or `arkeon-wiki reconcile`). Concurrent calls coalesce — single-flight lock — so a manual call colliding with a periodic sweep doesn't double the work.
 
 `GET /redlinks` aggregates the queue the same way the resolver itself resolves links — so a row represents one concrete unit of work:
 
@@ -164,6 +168,7 @@ arkeon-wiki tags <path>                  # list every tag on an artifact
 arkeon-wiki backlinks <path>             # inbound link rows (works for redlinks too)
 arkeon-wiki redlinks [--folder X --limit N --offset N]
 arkeon-wiki stats                        # corpus-level counts
+arkeon-wiki reconcile                    # force a full re-walk + orphan-prune now
 ```
 
 Reading article bodies is *not* a CLI command — the filesystem is the read API. `cat`, `bat`, `$EDITOR` work fine; the daemon's job is the index, not the read path.
