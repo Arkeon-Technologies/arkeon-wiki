@@ -10,13 +10,18 @@ Two distribution surfaces. Pick one.
 
 ```bash
 curl -O https://raw.githubusercontent.com/Arkeon-Technologies/arkeon-wiki/main/docker-compose.example.yml
-mv docker-compose.example.yml docker-compose.yml
-# edit volumes:/watch to point at your corpus, set PUID/PGID to your host UID/GID
+cp docker-compose.example.yml docker-compose.yml
+# edit volumes:/watch to point at your corpus
+# Linux: set PUID/PGID to your host `id -u` / `id -g`
+# Docker Desktop (Mac/Windows): leave the defaults — bind-mount writes
+# end up owned by your host user regardless.
 docker compose up -d
 open http://localhost:8062
 ```
 
-The image bakes PyMuPDF (PDF extraction) so it works out of the box — no host-side bootstrap. Image: `ghcr.io/arkeon-technologies/arkeon-wiki:latest`.
+The image bakes PyMuPDF (PDF extraction) so it works out of the box — no host-side bootstrap. Multi-arch (`linux/amd64` + `linux/arm64`). Image: `ghcr.io/arkeon-technologies/arkeon-wiki:latest`.
+
+Verify PDF extraction (any plain PDF works — generate one with `pandoc README.md -o test.pdf` if you don't have one handy, or use macOS Quick Look "Print → Save as PDF"). Drop it under `./corpus/`, then `curl http://localhost:8062/stats` should show the asset count tick up and a sidecar appear under `./corpus/.sidecars/`.
 
 ### npm (HTML + Markdown only)
 
@@ -40,9 +45,9 @@ Every file the watcher sees lands in the `artifacts` table keyed by its path rel
 
 The filesystem is the source of truth. SQLite is the index. Delete a file → its row goes. Edit a file → re-sync. No manual commands.
 
-## HTTP API — six commands
+## HTTP API
 
-Default base URL: `http://localhost:8000`. No auth (loopback bind). All POSTs are JSON.
+Default base URL: `http://localhost:8062` for Docker, `http://localhost:8000` for npm. No auth (loopback bind). All POSTs are JSON.
 
 ```
 POST /query        { folder?, kinds?, has_tag?[], not_tag?[], text?, limit?, offset? }
@@ -51,9 +56,18 @@ POST /untag        { path, key }
 GET  /tags?path=...
 GET  /backlinks?path=...
 GET  /redlinks?folder=...&limit=&offset=
+GET  /stats
+GET  /health       — liveness
+GET  /ready        — readiness (probes SQLite)
+GET  /llms.txt     — full API reference (also at /help)
 ```
 
-Tag conventions: `key:value` strings throughout (e.g. `status:feedback`, `processed-by:editor`). Workers query for artifacts MISSING their `processed-by:<worker-name>` tag. "No tag = unprocessed."
+Two tag-key conventions coexist:
+
+- **Worker gates** — one key per worker, e.g. `processed-by-editor`, `processed-by-writer`. Each worker queries for artifacts MISSING its own key. **Do not** collapse these into a single `processed-by` key with the worker name as value — worker A's tag would clobber worker B's.
+- **Content labels** — `key:value` strings like `status:feedback`, `topic:us-china`, where the value carries meaning across artifacts.
+
+"No tag = unprocessed" is the trigger model.
 
 `POST /query` filters are AND-composed. `has_tag` / `not_tag` entries can be `"key"` (presence) or `"key:value"` (key+value match). `text` runs FTS5 MATCH against the artifact body.
 
@@ -115,12 +129,14 @@ All state lives in `~/.arkeon-wiki/`.
 
 External harnesses do the agent loop. Each worker tick:
 
-1. `POST /query` with `not_tag: ["processed-by:<worker-name>"]` and whatever folder/has_tag filters fit the worker.
+1. `POST /query` with `not_tag: ["processed-by-<worker-name>"]` and whatever folder/has_tag filters fit the worker.
 2. Read each artifact from the filesystem.
 3. Write outputs to the filesystem (the watcher indexes them).
-4. `POST /tag` with `processed-by:<worker-name>` to mark the artifact done.
+4. `POST /tag` with `{ key: "processed-by-<worker-name>", value: <hash-or-ts> }` to mark the artifact done.
 
-New content surfaces because `syncFile` indexes new artifacts without any `processed-by` tag — the worker's next tick picks them up automatically.
+New content surfaces because `syncFile` indexes new artifacts without any `processed-by-*` tag — the worker's next tick picks them up automatically.
+
+**Tag the sidecar, not the binary.** Worker `processed-by-<name>` tags belong on the `kind='text'` sidecar (`.sidecars/<mirrored>.html`), not on the `kind='asset'` binary — asset rows are invisible to `kinds: ["text"]` queries. Use `asset.properties.sidecar_path` to find the right target.
 
 ## Development
 

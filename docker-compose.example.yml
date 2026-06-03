@@ -19,9 +19,11 @@ services:
     ports:
       - "8062:8062"
     environment:
-      # Match the host UID/GID that owns your corpus directory. `id -u`
-      # / `id -g` on Linux; on Docker Desktop for Mac, files end up
-      # owned by your host user regardless.
+      # Linux: set to the host UID/GID that owns your corpus
+      # directory (`id -u` / `id -g`) so the watcher can write
+      # sidecars without permission surprises.
+      # Docker Desktop for Mac / Windows: bind-mount writes already
+      # land owned by your host user — leave the defaults.
       PUID: "1000"
       PGID: "1000"
     volumes:
