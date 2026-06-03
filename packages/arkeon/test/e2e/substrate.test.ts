@@ -611,4 +611,64 @@ describe("substrate", () => {
     }
     expect(converged).toBe(true);
   });
+
+  it("POST /query rejects malformed JSON with 400 (not a silent unfiltered fallthrough)", async () => {
+    // Footgun guard: c.req.json().catch(() => ({})) used to swallow
+    // syntax errors and quietly return the full corpus. A harness with
+    // a busted body builder would then happily reprocess everything.
+    const res = await app.fetch(
+      new Request("http://test/query", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "not { valid json",
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("invalid_json");
+  });
+
+  it("POST /query rejects unknown top-level fields with 400", async () => {
+    // Typo guard: `notag` ≠ `not_tag`. Silently ignoring the unknown
+    // key would return the unfiltered corpus and the worker would
+    // reprocess everything.
+    const res = await app.fetch(
+      new Request("http://test/query", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ notag: ["processed-by-editor"] }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("unknown_field");
+    expect(body.error.message).toContain("notag");
+  });
+
+  it("POST /tag rejects unknown top-level fields with 400", async () => {
+    const res = await app.fetch(
+      new Request("http://test/tag", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: "iarpa/article.html",
+          key: "k",
+          extra: "nope",
+        }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("unknown_field");
+  });
+
+  it("POST /query accepts an empty body (all-defaults query)", async () => {
+    // Strict validation must not break the documented all-defaults call.
+    const res = await app.fetch(
+      new Request("http://test/query", { method: "POST" }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { artifacts: unknown[] };
+    expect(Array.isArray(body.artifacts)).toBe(true);
+  });
 });
