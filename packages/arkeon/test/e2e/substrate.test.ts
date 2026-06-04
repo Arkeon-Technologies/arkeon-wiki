@@ -200,6 +200,64 @@ describe("substrate", () => {
     }
   });
 
+  it("GET /stats?tag_keys_top=N overrides the default 10-row cap", async () => {
+    // Seed three distinct keys, then ask for 2 — only the top 2 by
+    // count should come back, ordered desc.
+    const seeded = [
+      ["limit-alpha", ["iarpa/article.html"]],
+      ["limit-beta", ["iarpa/article.html", "iarpa/notes.html"]],
+      [
+        "limit-gamma",
+        ["iarpa/article.html", "iarpa/notes.html", "chartbook/about.html"],
+      ],
+    ] as const;
+    for (const [key, paths] of seeded) {
+      for (const path of paths) {
+        await app.fetch(
+          new Request("http://test/tag", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ path, key, value: "1" }),
+          }),
+        );
+      }
+    }
+    const res = await app.fetch(
+      new Request("http://test/stats?tag_keys_top=2"),
+    );
+    const body = (await res.json()) as {
+      tag_keys_top: Array<{ key: string; n: number }>;
+    };
+    expect(body.tag_keys_top.length).toBe(2);
+    const ours = body.tag_keys_top.filter((r) => r.key.startsWith("limit-"));
+    expect(ours).toEqual([
+      { key: "limit-gamma", n: 3 },
+      { key: "limit-beta", n: 2 },
+    ]);
+
+    const bad = await app.fetch(
+      new Request("http://test/stats?tag_keys_top=101"),
+    );
+    expect(bad.status).toBe(400);
+
+    const negative = await app.fetch(
+      new Request("http://test/stats?tag_keys_top=-1"),
+    );
+    expect(negative.status).toBe(400);
+
+    for (const [key, paths] of seeded) {
+      for (const path of paths) {
+        await app.fetch(
+          new Request("http://test/untag", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ path, key }),
+          }),
+        );
+      }
+    }
+  });
+
   it("POST /query honors order_by + order", async () => {
     const asc = await app.fetch(
       new Request("http://test/query", {

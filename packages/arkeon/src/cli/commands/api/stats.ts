@@ -23,18 +23,26 @@ interface StatsResponse {
   tag_keys_top: Array<{ key: string; n: number }>;
 }
 
+interface StatsOptions {
+  tagKeysTop?: string;
+}
+
 export function registerStatsCommand(program: Command): void {
   const cmd = addCommonOptions(
     program
       .command("stats")
-      .description("Show corpus-level counts (artifacts, links, redlinks, tag keys)"),
+      .description("Show corpus-level counts (artifacts, links, redlinks, tag keys)")
+      .option(
+        "--tag-keys-top <n>",
+        "Number of top tag keys to include (default 10, max 100)",
+      ),
   );
-  cmd.action(async (_o: unknown, command: Command) => {
+  cmd.action(async (options: StatsOptions, command: Command) => {
     const g = readGlobals(command);
     const result = await apiCall<StatsResponse>(
       "GET",
       "/stats",
-      {},
+      { query: { tag_keys_top: options.tagKeysTop ?? null } },
       transportOptions(g),
     );
     if (g.json || !isTty()) {

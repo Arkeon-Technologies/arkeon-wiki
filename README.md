@@ -147,7 +147,7 @@ arkeon-wiki up [--watch-dir <path>]   # start the daemon detached
 arkeon-wiki down                      # stop it
 arkeon-wiki status                    # is it running?
 arkeon-wiki ls                        # list running instances
-arkeon-wiki where                     # which instance owns this directory?
+arkeon-wiki where                     # which daemon will my next command hit?
 arkeon-wiki logs [-f]                 # print/tail the daemon log
 arkeon-wiki start                     # foreground (for pm2/launchd/Docker/etc.)
 arkeon-wiki install                   # persistent service
@@ -173,7 +173,7 @@ arkeon-wiki reconcile                    # force a full re-walk + orphan-prune n
 
 Reading article bodies is *not* a CLI command — the filesystem is the read API. `cat`, `bat`, `$EDITOR` work fine; the daemon's job is the index, not the read path.
 
-**Daemon resolution.** Every substrate-API command picks a daemon in this order: `--api-url <url>` → `ARKEON_WIKI_URL` env → `--name <inst>` → CWD walk (deepest registered `watch_dir` containing your shell's cwd) → `default` instance → in-container fallback (`http://127.0.0.1:${PORT}` when `ARKEON_WIKI_IN_CONTAINER=1`, which the Dockerfile sets so `docker exec arkeon-wiki arkeon-wiki query` Just Works). Run `arkeon-wiki where` from inside a watched corpus to see which instance the CLI will hit. Exit codes: `0` success, `1` HTTP 4xx/5xx (response body on stderr), `2` network error.
+**Daemon resolution.** Every substrate-API command picks a daemon in this order: `--api-url <url>` → `ARKEON_WIKI_URL` env → `--name <inst>` → CWD walk (deepest registered `watch_dir` containing your shell's cwd) → `default` instance → in-container fallback (`http://127.0.0.1:${PORT}` when `ARKEON_WIKI_IN_CONTAINER=1`, which the Dockerfile sets so `docker exec arkeon-wiki arkeon-wiki query` Just Works). Run `arkeon-wiki where` to see exactly which source resolved and which `api_url` is on the other end. Exit codes: `0` success, `1` HTTP 4xx/5xx (response body on stderr), `2` network error.
 
 **`--api-url` placement.** `--api-url` is per-command, not program-level: write `arkeon-wiki query --api-url http://...` (the flag AFTER the subcommand). The program-level `--data-dir` flag still comes before the subcommand.
 

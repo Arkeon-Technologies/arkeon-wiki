@@ -395,7 +395,8 @@ discovery-loop sanity checks ("did the watcher actually pick up
 my new files?") without paginating through \`/query\`. \`tag_keys_top\`
 is the top 10 tag keys by row count (descending, ties broken
 alphabetically) — the same shape harnesses use to spot which
-processed-by-* gates dominate the corpus.
+processed-by-* gates dominate the corpus. Override the size with
+\`?tag_keys_top=N\` (capped at 100).
 
 ### POST /reconcile
 
