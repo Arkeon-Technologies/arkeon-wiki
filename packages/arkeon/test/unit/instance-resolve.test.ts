@@ -119,4 +119,37 @@ describe("resolveTarget (no-filesystem branches)", () => {
     expect(result.source).toBe("env");
     expect(result.api_url).toBe("http://from-env");
   });
+
+  it("ARKEON_WIKI_IN_CONTAINER=1 defaults to http://127.0.0.1:${PORT} when nothing else matches", () => {
+    // The Dockerfile sets ARKEON_WIKI_IN_CONTAINER=1 + PORT=8062 so the
+    // in-container CLI can fall back to the daemon's known loopback
+    // when CWD is `/` and the registry lookup misses.
+    const result = resolveTarget({
+      env: { ARKEON_WIKI_IN_CONTAINER: "1", PORT: "9000" },
+      cwd: "/",
+    });
+    expect(result.source).toBe("in_container_default");
+    expect(result.api_url).toBe("http://127.0.0.1:9000");
+  });
+
+  it("ARKEON_WIKI_IN_CONTAINER=1 honors PORT default when unset", () => {
+    const result = resolveTarget({
+      env: { ARKEON_WIKI_IN_CONTAINER: "1" },
+      cwd: "/",
+    });
+    expect(result.source).toBe("in_container_default");
+    expect(result.api_url).toBe("http://127.0.0.1:8062");
+  });
+
+  it("ARKEON_WIKI_URL still wins over in-container default", () => {
+    const result = resolveTarget({
+      env: {
+        ARKEON_WIKI_IN_CONTAINER: "1",
+        ARKEON_WIKI_URL: "http://elsewhere:1234",
+      },
+      cwd: "/",
+    });
+    expect(result.source).toBe("env");
+    expect(result.api_url).toBe("http://elsewhere:1234");
+  });
 });

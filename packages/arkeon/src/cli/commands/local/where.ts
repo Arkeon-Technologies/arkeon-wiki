@@ -2,29 +2,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `arkeon-wiki where` — print which running instance owns the current
- * working directory, along with the CWD-relative path inside its
- * watched root.
+ * `arkeon-wiki where` — print which daemon the next substrate-API
+ * command will target, and (when the answer is "an instance you have
+ * registered") which watch root + relative path inside it.
  *
  * Mirrors `git rev-parse --show-toplevel` / `git rev-parse --show-prefix`
- * — a small introspection command so users can sanity-check what every
- * other api-CLI command (`query`, `tag`, ...) will end up talking to.
+ * — a small introspection command so users can sanity-check what
+ * `query`, `tag`, etc. will end up talking to. Resolves via the full
+ * resolveTarget chain so the answer agrees with what other commands
+ * see (including the in-container fallback and `default`-instance
+ * fallback, which were invisible to `where` before).
  *
  * Exit codes:
- *   0  CWD is under a registered watch root
- *   1  no instance owns CWD (no daemon running, or CWD is outside)
+ *   0  resolveTarget found a target (any source)
+ *   1  resolveTarget threw (no daemon, --name miss, ...)
  */
 
 import type { Command } from "commander";
 
 import {
-  findInstanceForCwd,
   relativeToWatchDir,
+  resolveTarget,
 } from "../../lib/instance-resolve.js";
-import { listInstances } from "../../lib/instances.js";
 import { output } from "../../lib/output.js";
 
 interface WhereOptions {
+  apiUrl?: string;
+  name?: string;
   json?: boolean;
 }
 
@@ -32,53 +36,57 @@ export function registerWhereCommand(program: Command): void {
   program
     .command("where")
     .description(
-      "Show which running instance owns the current directory (watch root + relative path)",
+      "Show which daemon the next substrate-API command will target (resolution source + api_url)",
     )
+    .option("--api-url <url>", "Probe with an explicit api_url override")
+    .option("--name <name>", "Probe a specific named instance")
     .option("--json", "Emit JSON instead of a human-readable summary")
     .action((options: WhereOptions) => {
       const cwd = process.cwd();
-      const instances = listInstances();
-      const owner = findInstanceForCwd(cwd, instances);
 
-      if (!owner) {
+      let target: ReturnType<typeof resolveTarget>;
+      try {
+        target = resolveTarget({ apiUrl: options.apiUrl, name: options.name });
+      } catch (err) {
+        const message = (err as Error).message;
         if (options.json) {
-          output.error(
-            new Error(
-              `No running instance watches a directory containing ${cwd}.`,
-            ),
-            { operation: "where", code: "no_owner" },
-          );
+          output.error(new Error(message), { operation: "where", code: "unresolved" });
         } else {
-          process.stderr.write(
-            `No running instance watches a directory containing ${cwd}.\n` +
-              `  - Run \`arkeon-wiki ls\` to see what's running.\n` +
-              `  - Start one with \`arkeon-wiki up --watch-dir <path>\`.\n`,
-          );
+          process.stderr.write(`${message}\n`);
         }
         process.exit(1);
       }
 
-      // findInstanceForCwd guarantees watch_dir is set, so this is non-null.
-      const rel = relativeToWatchDir(cwd, owner) ?? "";
+      const inst = target.instance;
+      const rel = inst ? relativeToWatchDir(cwd, inst) : null;
 
       if (options.json) {
         output.result({
           operation: "where",
-          instance: owner.name,
-          api_url: owner.api_url,
-          watch_dir: owner.watch_dir,
+          source: target.source,
+          api_url: target.api_url,
+          instance: inst?.name ?? null,
+          watch_dir: inst?.watch_dir ?? null,
           cwd,
           relative: rel,
         });
         return;
       }
 
-      process.stdout.write(
-        `instance:  ${owner.name}\n` +
-          `api_url:   ${owner.api_url}\n` +
-          `watch_dir: ${owner.watch_dir}\n` +
-          `cwd:       ${cwd}\n` +
-          `relative:  ${rel === "" ? "." : rel}\n`,
-      );
+      const lines: string[] = [
+        `source:    ${target.source}`,
+        `api_url:   ${target.api_url}`,
+      ];
+      if (inst) {
+        lines.push(`instance:  ${inst.name}`);
+        if (inst.watch_dir) {
+          lines.push(`watch_dir: ${inst.watch_dir}`);
+        }
+      }
+      lines.push(`cwd:       ${cwd}`);
+      if (rel !== null) {
+        lines.push(`relative:  ${rel === "" ? "." : rel}`);
+      }
+      process.stdout.write(`${lines.join("\n")}\n`);
     });
 }

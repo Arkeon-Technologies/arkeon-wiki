@@ -380,13 +380,23 @@ lands).
   "artifacts": { "total": 1234, "text": 1180, "asset": 54 },
   "links": 4321,
   "redlinks": 17,
-  "tag_keys": 8
+  "tag_keys": 8,
+  "tag_keys_top": [
+    { "key": "processed-by-editor", "n": 1100 },
+    { "key": "processed-by-writer", "n": 600 },
+    { "key": "extracted_by", "n": 54 },
+    { "key": "status", "n": 12 }
+  ]
 }
 \`\`\`
 
 Constant-time corpus size snapshot. Useful for dashboards or for
 discovery-loop sanity checks ("did the watcher actually pick up
-my new files?") without paginating through \`/query\`.
+my new files?") without paginating through \`/query\`. \`tag_keys_top\`
+is the top 10 tag keys by row count (descending, ties broken
+alphabetically) — the same shape harnesses use to spot which
+processed-by-* gates dominate the corpus. Override the size with
+\`?tag_keys_top=N\` (capped at 100).
 
 ### POST /reconcile
 

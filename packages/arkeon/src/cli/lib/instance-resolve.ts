@@ -56,6 +56,7 @@ export type ResolveSource =
   | "env"
   | "name_flag"
   | "cwd_walk"
+  | "in_container_default"
   | "default";
 
 export interface ResolvedTarget {
@@ -63,11 +64,19 @@ export interface ResolvedTarget {
   source: ResolveSource;
   /**
    * The registered instance backing the target — populated for every
-   * source except `api_url_flag` and `env`, where the CLI has no idea
-   * what instance (if any) is on the other end of the URL.
+   * source except `api_url_flag`, `env`, and `in_container_default`,
+   * where the CLI has no idea what instance (if any) is on the other
+   * end of the URL.
    */
   instance?: Instance;
 }
+
+/**
+ * Default port the in-container fallback dials. The Dockerfile pins
+ * PORT=8062, but we honor whatever `PORT` says at runtime so a custom
+ * port mapping doesn't strand the in-container CLI.
+ */
+const DEFAULT_CONTAINER_PORT = "8062";
 
 /**
  * Precedence (first hit wins):
@@ -76,6 +85,7 @@ export interface ResolvedTarget {
  *   3. --name <name>
  *   4. CWD walk against registered watch_dirs (deepest match wins)
  *   5. instance named "default"
+ *   6. ARKEON_WIKI_IN_CONTAINER=1 → http://127.0.0.1:${PORT}
  *
  * Throws with an actionable error if nothing matches.
  */
@@ -105,6 +115,18 @@ export function resolveTarget(opts: ResolveOptions = {}): ResolvedTarget {
   const fallback = findInstance(DEFAULT_INSTANCE_NAME);
   if (fallback) {
     return { api_url: fallback.api_url, source: "default", instance: fallback };
+  }
+  // Last-resort in-container fallback: `docker exec arkeon-wiki
+  // arkeon-wiki query` lands in `/`, which sits under no registered
+  // watch root, but the daemon is right there on loopback. Tied to
+  // ARKEON_WIKI_IN_CONTAINER=1 from the Dockerfile so host CLIs that
+  // happen to have neither flag nor running daemon still fail loudly.
+  if (env.ARKEON_WIKI_IN_CONTAINER === "1") {
+    const port = env.PORT ?? DEFAULT_CONTAINER_PORT;
+    return {
+      api_url: `http://127.0.0.1:${port}`,
+      source: "in_container_default",
+    };
   }
   throw new Error(
     `No arkeon-wiki daemon is running, and CWD (${cwd}) is not under any registered watch root. ` +

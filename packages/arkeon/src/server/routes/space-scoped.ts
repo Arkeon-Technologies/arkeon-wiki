@@ -123,6 +123,31 @@ function requireString(raw: unknown, name: string): string {
   return raw;
 }
 
+/**
+ * Parse the `?tag_keys_top=` query param. Capped at 100 so /stats stays
+ * a constant-time-ish dashboard rather than degenerating into a /tags
+ * dump. `undefined` falls through to the default in getStats().
+ */
+function parseTagKeysTop(raw: string | undefined): number | undefined {
+  if (raw == null) return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
+    throw new ApiError(
+      400,
+      "validation_error",
+      "tag_keys_top must be a non-negative integer",
+    );
+  }
+  if (n > 100) {
+    throw new ApiError(
+      400,
+      "validation_error",
+      "tag_keys_top must be ≤ 100 (use /tags for a full key dump)",
+    );
+  }
+  return n;
+}
+
 const ORDER_BY_VALUES: QueryOrderBy[] = ["updated_at", "created_at", "path"];
 
 function parseOrderBy(raw: unknown): QueryOrderBy | null {
@@ -162,7 +187,9 @@ apiRouter.post("/query", async (c) => {
 });
 
 apiRouter.get("/stats", async (c) => {
-  const stats = await getStats();
+  const stats = await getStats({
+    tag_keys_top: parseTagKeysTop(c.req.query("tag_keys_top")),
+  });
   return c.json(stats);
 });
 
