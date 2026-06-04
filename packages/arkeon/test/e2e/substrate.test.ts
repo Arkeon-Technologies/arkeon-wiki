@@ -78,6 +78,36 @@ beforeAll(async () => {
     join(workdir, "iarpa/sources/bio.md"),
     `# Bio\n\nRelated: [[biology]].\n`,
   );
+  // Two articles tagged with <meta name="topic" content="..."> values
+  // so the has_property / not_property filters have something
+  // distinguishable to match on. No content beyond the meta tags —
+  // these are smoke fixtures, not corpus material.
+  writeFileSync(
+    join(workdir, "iarpa/topic-us-china.html"),
+    `<!doctype html><html><head><title>Topic: us-china</title><meta name="topic" content="us-china"><meta name="status" content="draft"></head><body><p>us-china body</p></body></html>`,
+  );
+  writeFileSync(
+    join(workdir, "iarpa/topic-macro.html"),
+    `<!doctype html><html><head><title>Topic: macro</title><meta name="topic" content="macro"><meta name="status" content="published"></head><body><p>macro body</p></body></html>`,
+  );
+  // Derived-asset fixture: simulate the file layout a PDF extractor
+  // would land — the binary itself plus a `.sidecars/<X>.pdf.assets/`
+  // page-render asset. Tests assert properties.derived_from points
+  // back at the binary, and that the existing has_property /
+  // not_property filter excludes the derived asset.
+  mkdirSync(join(workdir, ".sidecars/iarpa"), { recursive: true });
+  writeFileSync(
+    join(workdir, "iarpa/derived-fixture.pdf"),
+    "%PDF-1.4 derived-fixture placeholder\n",
+  );
+  mkdirSync(
+    join(workdir, ".sidecars/iarpa/derived-fixture.pdf.assets"),
+    { recursive: true },
+  );
+  writeFileSync(
+    join(workdir, ".sidecars/iarpa/derived-fixture.pdf.assets/page-1.png"),
+    "derived-page-render placeholder",
+  );
 
   await startWatching(workdir);
   app = createApp();
@@ -124,6 +154,168 @@ describe("substrate", () => {
     const article = body.artifacts.find((a) => a.path === "iarpa/article.html");
     expect(article).toBeDefined();
     expect(article!.properties.short_description).toBe("On India.");
+  });
+
+  it("POST /query has_property: key-only presence check", async () => {
+    const res = await app.fetch(
+      new Request("http://test/query", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ folder: "iarpa", has_property: ["topic"] }),
+      }),
+    );
+    const body = (await res.json()) as { artifacts: Array<{ path: string }> };
+    const paths = body.artifacts.map((a) => a.path).sort();
+    expect(paths).toContain("iarpa/topic-us-china.html");
+    expect(paths).toContain("iarpa/topic-macro.html");
+    // article.html lacks `topic` — has short_description instead.
+    expect(paths).not.toContain("iarpa/article.html");
+  });
+
+  it("POST /query has_property: key:value match", async () => {
+    const res = await app.fetch(
+      new Request("http://test/query", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          folder: "iarpa",
+          has_property: ["topic:us-china"],
+        }),
+      }),
+    );
+    const body = (await res.json()) as { artifacts: Array<{ path: string }> };
+    const paths = body.artifacts.map((a) => a.path);
+    expect(paths).toEqual(["iarpa/topic-us-china.html"]);
+  });
+
+  it("POST /query has_property AND-composes across multiple entries", async () => {
+    const res = await app.fetch(
+      new Request("http://test/query", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          folder: "iarpa",
+          has_property: ["topic", "status:draft"],
+        }),
+      }),
+    );
+    const body = (await res.json()) as { artifacts: Array<{ path: string }> };
+    const paths = body.artifacts.map((a) => a.path);
+    expect(paths).toEqual(["iarpa/topic-us-china.html"]);
+  });
+
+  it("POST /query not_property: excludes artifacts with the key set", async () => {
+    const res = await app.fetch(
+      new Request("http://test/query", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          folder: "iarpa",
+          not_property: ["topic"],
+        }),
+      }),
+    );
+    const body = (await res.json()) as { artifacts: Array<{ path: string }> };
+    const paths = body.artifacts.map((a) => a.path);
+    expect(paths).not.toContain("iarpa/topic-us-china.html");
+    expect(paths).not.toContain("iarpa/topic-macro.html");
+    // article.html has no `topic`, should still surface.
+    expect(paths).toContain("iarpa/article.html");
+  });
+
+  it("POST /query not_property key:value keeps artifacts whose value differs", async () => {
+    const res = await app.fetch(
+      new Request("http://test/query", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          folder: "iarpa",
+          not_property: ["topic:us-china"],
+        }),
+      }),
+    );
+    const body = (await res.json()) as { artifacts: Array<{ path: string }> };
+    const paths = body.artifacts.map((a) => a.path);
+    expect(paths).not.toContain("iarpa/topic-us-china.html");
+    expect(paths).toContain("iarpa/topic-macro.html");
+  });
+
+  it("POST /query rejects has_property entries that aren't strings", async () => {
+    const res = await app.fetch(
+      new Request("http://test/query", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ has_property: [42] }),
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("derived assets carry properties.derived_from pointing at the source binary", async () => {
+    // The page-render PNG under .sidecars/<X>.pdf.assets/ should
+    // surface derived_from = "iarpa/derived-fixture.pdf" without any
+    // extractor running — the substrate detects the convention from
+    // the path alone.
+    const res = await app.fetch(
+      new Request("http://test/query", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          folder: ".sidecars/iarpa/derived-fixture.pdf.assets",
+          kinds: ["asset"],
+        }),
+      }),
+    );
+    const body = (await res.json()) as {
+      artifacts: Array<{ path: string; properties: Record<string, unknown> }>;
+    };
+    const page = body.artifacts.find((a) =>
+      a.path.endsWith("/page-1.png"),
+    );
+    expect(page).toBeDefined();
+    expect(page!.properties.derived_from).toBe("iarpa/derived-fixture.pdf");
+  });
+
+  it("not_property: ['derived_from'] hides page renders from kinds:[asset] queries", async () => {
+    // The "what binaries do I have?" case from #198. The PDF should
+    // surface; its page-render should not.
+    const res = await app.fetch(
+      new Request("http://test/query", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kinds: ["asset"],
+          not_property: ["derived_from"],
+        }),
+      }),
+    );
+    const body = (await res.json()) as { artifacts: Array<{ path: string }> };
+    const paths = body.artifacts.map((a) => a.path);
+    expect(paths).toContain("iarpa/derived-fixture.pdf");
+    expect(paths).not.toContain(
+      ".sidecars/iarpa/derived-fixture.pdf.assets/page-1.png",
+    );
+  });
+
+  it("has_property: ['derived_from'] selects the page renders alone", async () => {
+    // The "what visual assets exist?" case from #198 — inverse of the
+    // not_property test.
+    const res = await app.fetch(
+      new Request("http://test/query", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kinds: ["asset"],
+          has_property: ["derived_from"],
+        }),
+      }),
+    );
+    const body = (await res.json()) as { artifacts: Array<{ path: string }> };
+    const paths = body.artifacts.map((a) => a.path);
+    expect(paths).toContain(
+      ".sidecars/iarpa/derived-fixture.pdf.assets/page-1.png",
+    );
+    expect(paths).not.toContain("iarpa/derived-fixture.pdf");
   });
 
   it("GET /stats returns corpus size breakdown", async () => {

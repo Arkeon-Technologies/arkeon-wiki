@@ -74,7 +74,7 @@ URL structure mirrors disk structure. The same article opens identically under `
 
 All POST bodies are JSON; all GET params are URL-encoded.
 
-- `POST /query` — `{folder?, kinds?, has_tag?[], not_tag?[], text?, limit?, offset?}`. AND-composed. `has_tag` / `not_tag` entries are `"key"` (presence) or `"key:value"` (key+value match). `text` runs FTS5 MATCH.
+- `POST /query` — `{folder?, kinds?, has_tag?[], not_tag?[], has_property?[], not_property?[], text?, limit?, offset?}`. AND-composed. `has_tag` / `not_tag` / `has_property` / `not_property` entries are `"key"` (presence) or `"key:value"` (key+value match). `has_property` / `not_property` target `artifacts.properties` (HTML `<meta>` values, plus substrate-set `sidecar_path` on primary binaries and `derived_from` on extractor-produced assets — `kinds:["asset"], not_property:["derived_from"]` lists primary binaries only). `text` runs FTS5 MATCH.
 - `POST /tag` — `{path, key, value?}`. UPSERT. Returns `{ok, path, key, value, previous_value, action}` where `action` is `created` / `updated` / `unchanged`. Workers detect collisions by inspecting `previous_value`.
 - `POST /untag` — `{path, key}`. Returns `{ok: true, path, key, existed}` where `existed` distinguishes a real deletion from a no-op (removing a non-existent tag is not an error).
 - `GET /tags?path=...` — `{path, tags: Record<key,value>}`.
