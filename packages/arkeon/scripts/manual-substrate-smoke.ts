@@ -432,22 +432,32 @@ async function runChecks(): Promise<void> {
       (rl: any) => rl.target_path === "iarpa/drought-index.html",
     );
     check(
-      "redlink target_path = iarpa/drought-index.html (HTML wikilink to missing file)",
+      "redlink target_path = iarpa/drought-index.html (HTML wikilink to missing file; preferred over the bare slug)",
       droughtIndex != null,
     );
     check(
-      "linked_from is a real source path, NOT character-shredded (regression on GROUP_CONCAT bug)",
-      droughtIndex?.linked_from?.[0] === "iarpa/article.html" &&
+      "linked_from is real source paths, NOT character-shredded (regression on GROUP_CONCAT bug)",
+      Array.isArray(droughtIndex?.linked_from) &&
         droughtIndex.linked_from.every((s: string) => s.length > 1),
       JSON.stringify(droughtIndex?.linked_from),
     );
-
-    const droughtMd = r.body.redlinks.find(
-      (rl: any) => rl.target_path === "drought-index",
+    // HTML href (./drought-index.html from iarpa/article.html → iarpa/drought-index.html)
+    // and MD [[drought-index]] (from iarpa/sources/notes.md) dedup into one row.
+    check(
+      "dedup: demand=2 sums both HTML href + MD slug anchors at the same basename",
+      droughtIndex?.demand === 2,
+      `demand=${droughtIndex?.demand}`,
     );
     check(
-      "MD [[drought-index]] surfaces as a redlink (basename verbatim)",
-      droughtMd != null,
+      "dedup: linked_from unions both source files",
+      Array.isArray(droughtIndex?.linked_from) &&
+        droughtIndex.linked_from.includes("iarpa/article.html") &&
+        droughtIndex.linked_from.includes("iarpa/sources/notes.md"),
+      JSON.stringify(droughtIndex?.linked_from),
+    );
+    check(
+      "dedup: bare slug `drought-index` does NOT appear as a separate redlink row",
+      r.body.redlinks.find((rl: any) => rl.target_path === "drought-index") == null,
     );
   }
 

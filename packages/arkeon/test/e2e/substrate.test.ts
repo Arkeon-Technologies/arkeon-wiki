@@ -41,6 +41,37 @@ beforeAll(async () => {
     join(workdir, "chartbook/about.html"),
     `<!doctype html><html><head><title>Chartbook</title></head><body><p>chart</p></body></html>`,
   );
+  // chloroplast: unique fs-path basename match. HTML href from
+  // iarpa/notes.html resolves to iarpa/chloroplast.html; MD
+  // [[chloroplast]] from iarpa/sources/notes.md stays as a literal
+  // slug. /redlinks should merge the slug into the fs-path row because
+  // the slug's basename has exactly one fs-path match.
+  writeFileSync(
+    join(workdir, "iarpa/notes.html"),
+    `<!doctype html><html><head><title>Notes</title></head><body><p>See <a class="wikilink" href="./chloroplast.html">chloroplast</a>.</p></body></html>`,
+  );
+  writeFileSync(
+    join(workdir, "iarpa/sources/notes.md"),
+    `# Notes\n\nSee [[chloroplast]] for context.\n`,
+  );
+  // biology: cross-folder same-basename collision. Two distinct
+  // fs-path redlinks (iarpa/biology.html, chartbook/biology.html) and
+  // a MD slug [[biology]] whose basename has TWO fs-path matches.
+  // /redlinks should keep all three as separate rows — the slug
+  // can't merge because it's ambiguous, and creating either fs-path
+  // file does NOT resolve the other.
+  writeFileSync(
+    join(workdir, "iarpa/biology-source.html"),
+    `<!doctype html><html><head><title>Biology (iarpa)</title></head><body><p>See <a class="wikilink" href="./biology.html">biology overview</a>.</p></body></html>`,
+  );
+  writeFileSync(
+    join(workdir, "chartbook/biology-source.html"),
+    `<!doctype html><html><head><title>Biology (chartbook)</title></head><body><p>See <a class="wikilink" href="./biology.html">biology overview</a>.</p></body></html>`,
+  );
+  writeFileSync(
+    join(workdir, "iarpa/sources/bio.md"),
+    `# Bio\n\nRelated: [[biology]].\n`,
+  );
 
   await startWatching(workdir);
   app = createApp();
@@ -351,6 +382,67 @@ describe("substrate", () => {
     const missing = body.redlinks.find((r) => r.target_path === "missing-target")!;
     expect(missing.linked_from).toEqual(["iarpa/sources/paper.md"]);
     expect(missing.demand).toBe(1);
+  });
+
+  it("GET /redlinks merges MD slug into a UNIQUE fs-path basename match", async () => {
+    // iarpa/notes.html links to ./chloroplast.html (fs-path form
+    // iarpa/chloroplast.html). iarpa/sources/notes.md has [[chloroplast]]
+    // (slug). Creating iarpa/chloroplast.html resolves BOTH anchors —
+    // the slug auto-converges via shortest-unique-basename. So the
+    // redlink queue surfaces one row; demand=2 reflects the real
+    // unit of work.
+    const res = await app.fetch(new Request("http://test/redlinks"));
+    const body = (await res.json()) as {
+      redlinks: Array<{ target_path: string; demand: number; linked_from: string[] }>;
+      total: number;
+    };
+    const chloroplastRows = body.redlinks.filter(
+      (r) =>
+        r.target_path === "chloroplast" ||
+        r.target_path.endsWith("/chloroplast.html") ||
+        r.target_path === "chloroplast.html",
+    );
+    expect(chloroplastRows).toHaveLength(1);
+    const row = chloroplastRows[0];
+    expect(row.target_path).toBe("iarpa/chloroplast.html");
+    expect(row.demand).toBe(2);
+    expect(row.linked_from.sort()).toEqual([
+      "iarpa/notes.html",
+      "iarpa/sources/notes.md",
+    ]);
+  });
+
+  it("GET /redlinks keeps cross-folder same-basename fs-paths as separate gaps", async () => {
+    // iarpa/biology-source.html and chartbook/biology-source.html each
+    // link to ./biology.html — two distinct unresolved fs-paths
+    // (iarpa/biology.html, chartbook/biology.html). They are NOT the
+    // same gap: creating iarpa/biology.html doesn't resolve the
+    // chartbook anchor and vice versa. The substrate's MD resolver
+    // would punt on [[biology]] with two matches, so the slug also
+    // stays as its own row rather than merging into either fs-path.
+    const res = await app.fetch(new Request("http://test/redlinks"));
+    const body = (await res.json()) as {
+      redlinks: Array<{ target_path: string; demand: number; linked_from: string[] }>;
+    };
+    const biologyRows = body.redlinks.filter(
+      (r) =>
+        r.target_path === "biology" ||
+        r.target_path === "iarpa/biology.html" ||
+        r.target_path === "chartbook/biology.html",
+    );
+    expect(biologyRows).toHaveLength(3);
+
+    const iarpaRow = biologyRows.find((r) => r.target_path === "iarpa/biology.html")!;
+    expect(iarpaRow.demand).toBe(1);
+    expect(iarpaRow.linked_from).toEqual(["iarpa/biology-source.html"]);
+
+    const chartbookRow = biologyRows.find((r) => r.target_path === "chartbook/biology.html")!;
+    expect(chartbookRow.demand).toBe(1);
+    expect(chartbookRow.linked_from).toEqual(["chartbook/biology-source.html"]);
+
+    const slugRow = biologyRows.find((r) => r.target_path === "biology")!;
+    expect(slugRow.demand).toBe(1);
+    expect(slugRow.linked_from).toEqual(["iarpa/sources/bio.md"]);
   });
 
   it("POST /query filters by documented `kinds` array (not legacy `kind`)", async () => {

@@ -219,6 +219,100 @@ export interface ListRedlinksOptions {
   offset?: number | null;
 }
 
+/**
+ * fs-path form = the target carries a folder ("/") or extension (".").
+ * Slug form = neither — only emitted by Markdown `[[X]]` redlinks that
+ * stay literal until a basename match lands. (Strictly: HTML hrefs
+ * always normalize to a path with at least a "." or "/", so fs-form
+ * uniquely identifies "the harness needs to drop a file at this path"
+ * vs. "the harness can drop a file at any basename match.")
+ */
+function isFsPathForm(target: string): boolean {
+  return target.includes("/") || target.includes(".");
+}
+
+/** Lowercased basename with the trailing extension stripped. */
+function basenameStem(target: string): string {
+  const slashIdx = target.lastIndexOf("/");
+  const base = slashIdx >= 0 ? target.slice(slashIdx + 1) : target;
+  const dotIdx = base.lastIndexOf(".");
+  const stem = dotIdx > 0 ? base.slice(0, dotIdx) : base;
+  return stem.toLowerCase();
+}
+
+type RedlinkBucket = { target_path: string; sources: string[] };
+
+/**
+ * Group raw redlink anchor rows into dedup buckets. Mirrors the
+ * substrate's link-resolution semantics so the queue summary doesn't
+ * lie about how anchors WILL resolve when a file lands:
+ *
+ *   - Each unique fs-path target stays its own row. `iarpa/wiki.html`
+ *     and `chartbook/wiki.html` are two distinct gaps — creating one
+ *     file resolves anchors that named exactly that path; cross-folder
+ *     anchors at the same basename do not collapse.
+ *
+ *   - An MD slug redlink (`[[wiki]]`, no slash/dot) merges into a fs-
+ *     path bucket IFF exactly one fs-path bucket shares its basename
+ *     stem. That's the same condition `resolveWikilink()` uses to
+ *     resolve `[[wiki]]` at extraction time — one match wins; zero or
+ *     two+ leave the slug literal. So the slug shows as its own row
+ *     when (a) no fs-path anchor exists for it yet or (b) the basename
+ *     is ambiguous across folders.
+ *
+ * Net effect: `demand` and `linked_from` describe a concrete unit of
+ * work — "create the file at this path and these N anchors resolve."
+ * Cross-folder same-basename anchors stay visible as separate work
+ * items rather than masquerading as one.
+ */
+function aggregateRedlinks(
+  rows: Array<{ target_path: string; source_path: string }>,
+): RedlinkBucket[] {
+  const fsBuckets = new Map<string, RedlinkBucket>();
+  const slugBuckets = new Map<string, RedlinkBucket>();
+  for (const r of rows) {
+    if (isFsPathForm(r.target_path)) {
+      let b = fsBuckets.get(r.target_path);
+      if (!b) {
+        b = { target_path: r.target_path, sources: [] };
+        fsBuckets.set(r.target_path, b);
+      }
+      b.sources.push(r.source_path);
+    } else {
+      const key = r.target_path.toLowerCase();
+      let b = slugBuckets.get(key);
+      if (!b) {
+        b = { target_path: r.target_path, sources: [] };
+        slugBuckets.set(key, b);
+      }
+      b.sources.push(r.source_path);
+    }
+  }
+
+  const fsByStem = new Map<string, RedlinkBucket[]>();
+  for (const b of fsBuckets.values()) {
+    const stem = basenameStem(b.target_path);
+    let arr = fsByStem.get(stem);
+    if (!arr) {
+      arr = [];
+      fsByStem.set(stem, arr);
+    }
+    arr.push(b);
+  }
+
+  const standaloneSlugs: RedlinkBucket[] = [];
+  for (const slug of slugBuckets.values()) {
+    const matches = fsByStem.get(slug.target_path.toLowerCase()) ?? [];
+    if (matches.length === 1) {
+      matches[0].sources.push(...slug.sources);
+    } else {
+      standaloneSlugs.push(slug);
+    }
+  }
+
+  return [...fsBuckets.values(), ...standaloneSlugs];
+}
+
 export async function listRedlinks(opts: ListRedlinksOptions): Promise<RedlinkResult> {
   const sql = createSql();
   const limit = Math.min(Math.max(opts.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
@@ -233,41 +327,46 @@ export async function listRedlinks(opts: ListRedlinksOptions): Promise<RedlinkRe
   }
   const whereSql = `WHERE ${where.join(" AND ")}`;
 
-  const totalRow = (await sql.query(
-    `SELECT COUNT(DISTINCT l.target_path) AS n
+  // Pull every unresolved anchor and group in JS. The slug-into-fs-
+  // path merge depends on a corpus-wide basename uniqueness check
+  // that's awkward in SQLite (no REVERSE, no rfind); the redlink
+  // queue is bounded by the unresolved-link count, which stays small
+  // in practice.
+  const rows = (await sql.query(
+    `SELECT l.target_path, l.source_path
      FROM links l
      LEFT JOIN artifacts a ON a.path = l.target_path
      ${whereSql}`,
     params,
-  )) as { n: number }[];
-  const total = Number(totalRow[0]?.n ?? 0);
+  )) as Array<{ target_path: string; source_path: string }>;
 
-  // U+001F (ASCII Unit Separator) — a control character that can't
-  // appear in a filesystem path, so we can split the GROUP_CONCAT
-  // result back into individual source paths losslessly. Interpolate
-  // through char(31) on the SQL side so the source-level character
-  // is visible (not a hidden control byte embedded in a string literal).
-  const rows = (await sql.query(
-    `SELECT l.target_path,
-            COUNT(*) AS demand,
-            GROUP_CONCAT(l.source_path, char(31)) AS linked_from_concat
-     FROM links l
-     LEFT JOIN artifacts a ON a.path = l.target_path
-     ${whereSql}
-     GROUP BY l.target_path
-     ORDER BY demand DESC, l.target_path ASC
-     LIMIT ? OFFSET ?`,
-    [...params, limit, offset],
-  )) as Array<{ target_path: string; demand: number; linked_from_concat: string }>;
+  const buckets = aggregateRedlinks(rows);
 
-  const redlinks: RedlinkRow[] = rows.map((r) => ({
-    target_path: r.target_path,
-    demand: Number(r.demand),
-    linked_from: (r.linked_from_concat ?? "")
-      .split("\x1f")
-      .filter(Boolean)
-      .slice(0, 3),
-  }));
+  const aggregated: RedlinkRow[] = buckets.map((b) => {
+    const seen = new Set<string>();
+    const linked_from: string[] = [];
+    for (const s of b.sources) {
+      if (seen.has(s)) continue;
+      seen.add(s);
+      linked_from.push(s);
+      if (linked_from.length === 3) break;
+    }
+    return {
+      target_path: b.target_path,
+      demand: b.sources.length,
+      linked_from,
+    };
+  });
+
+  aggregated.sort((a, b) => {
+    if (a.demand !== b.demand) return b.demand - a.demand;
+    if (a.target_path < b.target_path) return -1;
+    if (a.target_path > b.target_path) return 1;
+    return 0;
+  });
+
+  const total = aggregated.length;
+  const redlinks = aggregated.slice(offset, offset + limit);
 
   return { redlinks, total };
 }
@@ -447,14 +546,19 @@ export async function getStats(): Promise<CorpusStats> {
     `SELECT COUNT(*) AS n FROM links`,
     [],
   )) as { n: number }[];
-  const [{ n: redlinksN }] = (await sql.query(
-    `SELECT COUNT(*) AS n FROM (
-       SELECT DISTINCT l.target_path FROM links l
-       LEFT JOIN artifacts a ON a.path = l.target_path
-       WHERE a.path IS NULL
-     )`,
+  // Count redlinks via the same aggregation as listRedlinks so the
+  // corpus number agrees with the row count harnesses see. We need the
+  // raw (target_path, source_path) rows for aggregateRedlinks because
+  // the slug-into-fs-path merge depends on whether the slug's basename
+  // has exactly one fs-path match — a corpus-wide condition that can't
+  // be derived from DISTINCT target_path alone.
+  const redlinkRows = (await sql.query(
+    `SELECT l.target_path, l.source_path FROM links l
+     LEFT JOIN artifacts a ON a.path = l.target_path
+     WHERE a.path IS NULL`,
     [],
-  )) as { n: number }[];
+  )) as Array<{ target_path: string; source_path: string }>;
+  const redlinksN = aggregateRedlinks(redlinkRows).length;
   const [{ n: tagKeysN }] = (await sql.query(
     `SELECT COUNT(DISTINCT key) AS n FROM tags`,
     [],

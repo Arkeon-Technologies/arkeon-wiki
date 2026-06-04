@@ -84,16 +84,22 @@ Drop this under your watched root as `iarpa/example.html` and it'll be a fully-i
 Default base URL: `http://localhost:8062` for Docker, `http://localhost:8000` for npm. No auth (loopback bind). All POSTs are JSON.
 
 ```
-POST /query        { folder?, kinds?, has_tag?[], not_tag?[], text?, limit?, offset? }
-POST /tag          { path, key, value? }
-POST /untag        { path, key }
+POST /query     { folder?, kinds?, has_tag?[], not_tag?[], text?, limit?, offset? }
+                → { artifacts: [{ path, kind, label, source_hash, properties, tags, created_at, updated_at }], total }
+POST /tag       { path, key, value? }
+                → { ok, path, key, value, previous_value, action }   # action ∈ created|updated|unchanged
+POST /untag     { path, key }
+                → { ok, path, key, existed }
 GET  /tags?path=...
+                → { path, tags: { key: value, ... } }
 GET  /backlinks?path=...
+                → { path, exists, demand, backlinks: [{ source_path, link_text, attrs, synced_at }] }
 GET  /redlinks?folder=...&limit=&offset=
-GET  /stats
-GET  /health       — liveness
-GET  /ready        — readiness (probes SQLite)
-GET  /llms.txt     — full API reference (also at /help)
+                → { redlinks: [{ target_path, demand, linked_from: [...] }], total }
+GET  /stats     → { artifacts: { total, text, asset }, links, redlinks, tag_keys }
+GET  /health    — liveness
+GET  /ready     — readiness (probes SQLite)
+GET  /llms.txt  — full API reference (also at /help)
 ```
 
 Two tag-key conventions coexist:
@@ -109,7 +115,12 @@ Two tag-key conventions coexist:
 
 **Reserved characters.** Tag KEYS may not contain `:` (`400 reserved_character`). The colon is the key/value separator in `has_tag` / `not_tag` query specs — a literal colon in the key would store fine but then collide on read with the (key, value) split. Pass the colon in the request shape (`{ key: "status", value: "published" }`), not in the key. Values may contain colons.
 
-`GET /redlinks` returns two shapes of `target_path`: HTML `<a class="wikilink" href="...">` resolves to an fs-relative path at extraction time (e.g. `iarpa/sources/missing.html`), while Markdown `[[X]]` keeps the literal slug (e.g. `missing-topic`) until a matching artifact lands, then auto-converges. Branch on `target_path.includes("/")` if your harness needs to distinguish "create at this path" from "create anywhere by basename."
+`GET /redlinks` aggregates the queue the same way the resolver itself resolves links — so a row represents one concrete unit of work:
+
+- Each unique fs-path target is its own row. `iarpa/wiki.html` and `chartbook/wiki.html` are two distinct gaps; creating one resolves only the anchors that named exactly that path.
+- An MD slug redlink (`[[wiki]]`, no folder/extension) merges into a fs-path row only when its basename has exactly one fs-path match in the queue — the same condition under which `[[wiki]]` would auto-resolve once the file lands. With zero matches the slug stays as its own row (target=`wiki`). With two+ matches the slug stays standalone too (ambiguous — same way the resolver punts).
+
+Branch on `target_path.includes("/")` to distinguish "create at this path" from "create anywhere by basename." Cross-folder same-basename collisions stay visible as separate work items rather than masquerading as one.
 
 Full reference at `GET /llms.txt` or `GET /help`.
 
