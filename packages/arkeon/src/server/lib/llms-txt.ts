@@ -189,6 +189,8 @@ errors loudly rather than returning the unfiltered corpus.
   "kinds": ["text"],
   "has_tag": ["status:feedback"],
   "not_tag": ["processed-by-editor"],
+  "has_property": ["topic:us-china"],
+  "not_property": ["derived_from"],
   "text": "shannon entropy",
   "order_by": "updated_at",
   "order": "desc",
@@ -201,10 +203,25 @@ errors loudly rather than returning the unfiltered corpus.
 or \`path\`. \`order\` is \`asc\` | \`desc\` — defaults to \`desc\`
 for time columns and \`asc\` for \`path\`.
 
-All filters are optional and AND-composed. \`has_tag\` / \`not_tag\`
-entries may be:
+All filters are optional and AND-composed. \`has_tag\` / \`not_tag\` /
+\`has_property\` / \`not_property\` entries may be:
   - \`"key"\` — match by key presence (any value).
   - \`"key:value"\` — match key + value exactly.
+
+\`has_property\` / \`not_property\` filter on \`artifacts.properties\` —
+the JSON column populated from \`<meta name="X" content="Y">\` tags on
+text ingest, plus a few substrate-set fields:
+  - \`sidecar_path\` (on binary assets) → path of the searchable HTML
+    sidecar.
+  - \`derived_from\` (on extractor-produced assets like PDF page
+    renders) → path of the source binary they were extracted from.
+
+The \`derived_from\` pointer powers the "what binaries do I have?" vs
+"what visual assets exist?" split — query \`kinds:["asset"],
+not_property:["derived_from"]\` to see only primary binaries, or
+\`has_property:["derived_from"]\` to see only extractor outputs. Both
+work today against the convention-driven path detector; future
+non-PDF handlers will populate the same field automatically.
 
 \`text\` runs SQLite FTS5 MATCH against artifact text content.
 Space-separated tokens are AND'd by default (\`shannon entropy\`

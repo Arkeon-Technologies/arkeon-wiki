@@ -84,7 +84,7 @@ Drop this under your watched root as `iarpa/example.html` and it'll be a fully-i
 Default base URL: `http://localhost:8062` for Docker, `http://localhost:8000` for npm. No auth (loopback bind). All POSTs are JSON.
 
 ```
-POST /query     { folder?, kinds?, has_tag?[], not_tag?[], text?, limit?, offset? }
+POST /query     { folder?, kinds?, has_tag?[], not_tag?[], has_property?[], not_property?[], text?, limit?, offset? }
                 → { artifacts: [{ path, kind, label, source_hash, properties, tags, created_at, updated_at }], total }
 POST /tag       { path, key, value? }
                 → { ok, path, key, value, previous_value, action }   # action ∈ created|updated|unchanged
@@ -111,7 +111,9 @@ Two tag-key conventions coexist:
 
 "No tag = unprocessed" is the trigger model.
 
-`POST /query` filters are AND-composed. `has_tag` / `not_tag` entries can be `"key"` (presence) or `"key:value"` (key+value match). `text` runs FTS5 MATCH against the artifact body.
+`POST /query` filters are AND-composed. `has_tag` / `not_tag` / `has_property` / `not_property` entries can be `"key"` (presence) or `"key:value"` (key+value match). `text` runs FTS5 MATCH against the artifact body.
+
+**Filtering by properties.** `has_property` / `not_property` match against `artifacts.properties` — the JSON column populated from `<meta name="X" content="Y">` tags on HTML ingest plus substrate-set fields (`sidecar_path` on primary binaries; `derived_from` on extractor-produced assets like PDF page-renders). Two canonical use cases: `kinds: ["asset"], not_property: ["derived_from"]` lists primary binaries only, hiding page-render noise; `kinds: ["asset"], has_property: ["derived_from"]` lists only the extractor outputs. The detector is convention-driven from the path (`.sidecars/<X>.assets/*`), so future non-PDF handlers populate the same field automatically.
 
 **Strict body validation.** POST endpoints reject malformed JSON with `400 invalid_json` and unknown top-level fields with `400 unknown_field`. A typo like `notag` instead of `not_tag` errors loudly rather than silently returning the unfiltered corpus.
 

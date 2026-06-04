@@ -22,6 +22,8 @@ interface QueryFlags {
   kinds?: string[];
   hasTag?: string[];
   notTag?: string[];
+  hasProperty?: string[];
+  notProperty?: string[];
   text?: string;
   orderBy?: string;
   order?: string;
@@ -65,6 +67,18 @@ export function registerQueryCommand(program: Command): void {
         collect,
         [] as string[],
       )
+      .option(
+        "--has-property <key[:value]>",
+        "Require this properties.<key> (repeatable)",
+        collect,
+        [] as string[],
+      )
+      .option(
+        "--not-property <key[:value]>",
+        "Exclude artifacts with this properties.<key> (repeatable)",
+        collect,
+        [] as string[],
+      )
       .option("--text <query>", "FTS5 match query against artifact body text")
       .option(
         "--order-by <column>",
@@ -82,6 +96,14 @@ export function registerQueryCommand(program: Command): void {
       kinds: flags.kinds && flags.kinds.length > 0 ? flags.kinds : undefined,
       has_tag: flags.hasTag && flags.hasTag.length > 0 ? flags.hasTag : undefined,
       not_tag: flags.notTag && flags.notTag.length > 0 ? flags.notTag : undefined,
+      has_property:
+        flags.hasProperty && flags.hasProperty.length > 0
+          ? flags.hasProperty
+          : undefined,
+      not_property:
+        flags.notProperty && flags.notProperty.length > 0
+          ? flags.notProperty
+          : undefined,
       text: flags.text,
       order_by: flags.orderBy,
       order: flags.order,

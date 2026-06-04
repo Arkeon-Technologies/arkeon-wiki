@@ -25,6 +25,18 @@ export interface QueryOptions {
   has_tag?: string[] | null;
   /** Tag keys (or "key:value" strings) that must NOT be present. */
   not_tag?: string[] | null;
+  /**
+   * `artifacts.properties` keys (or "key:value" strings) that must be
+   * present. Same syntax as `has_tag` — split on the first `:` into
+   * key + value. Value comparison is string-equality against the
+   * JSON-extracted scalar (numbers / booleans get stringified).
+   * Useful for filtering on `<meta name="X" content="Y">` values that
+   * land in `properties[X]`, or substrate-set fields like
+   * `properties.derived_from` on extractor-produced assets.
+   */
+  has_property?: string[] | null;
+  /** Property keys (or "key:value" strings) that must NOT be present. */
+  not_property?: string[] | null;
   /** FTS5 match query over artifact body text. */
   text?: string | null;
   /** Sort column. Default: `updated_at`. */
@@ -87,12 +99,23 @@ export function parseKinds(raw: unknown): ArtifactKind[] | null {
 
 /**
  * Split "key:value" tag specs into key + optional value parts.
- * "key" alone → presence check (value omitted).
+ * "key" alone → presence check (value omitted). Shared between
+ * `has_tag` / `not_tag` and `has_property` / `not_property`.
  */
 function parseTagSpec(spec: string): { key: string; value: string | null } {
   const idx = spec.indexOf(":");
   if (idx < 0) return { key: spec, value: null };
   return { key: spec.slice(0, idx), value: spec.slice(idx + 1) };
+}
+
+/**
+ * Build the SQLite `json_extract` path for a properties key. Keys
+ * arrive from user input (HTML meta tags) so we have to defend
+ * against quotes inside the JSON pointer; the `replace` produces the
+ * `'$."escaped"'` form SQLite parses.
+ */
+function jsonPropertyPath(key: string): string {
+  return `$."${key.replace(/"/g, '""')}"`;
 }
 
 export async function listArtifacts(opts: QueryOptions): Promise<ListResult> {
@@ -129,6 +152,37 @@ export async function listArtifacts(opts: QueryOptions): Promise<ListResult> {
       } else {
         where.push("NOT EXISTS (SELECT 1 FROM tags t WHERE t.path = a.path AND t.key = ? AND t.value = ?)");
         params.push(key, value);
+      }
+    }
+  }
+  if (opts.has_property) {
+    for (const spec of opts.has_property) {
+      const { key, value } = parseTagSpec(spec);
+      const path = jsonPropertyPath(key);
+      if (value == null) {
+        // `json_extract(props, path)` returns NULL when the key is
+        // absent. Check `json_type` instead so "key set to JSON null"
+        // still counts as present.
+        where.push("json_type(a.properties, ?) IS NOT NULL");
+        params.push(path);
+      } else {
+        where.push("CAST(json_extract(a.properties, ?) AS TEXT) = ?");
+        params.push(path, value);
+      }
+    }
+  }
+  if (opts.not_property) {
+    for (const spec of opts.not_property) {
+      const { key, value } = parseTagSpec(spec);
+      const path = jsonPropertyPath(key);
+      if (value == null) {
+        where.push("json_type(a.properties, ?) IS NULL");
+        params.push(path);
+      } else {
+        where.push(
+          "(json_type(a.properties, ?) IS NULL OR CAST(json_extract(a.properties, ?) AS TEXT) != ?)",
+        );
+        params.push(path, path, value);
       }
     }
   }

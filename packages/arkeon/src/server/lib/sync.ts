@@ -80,6 +80,32 @@ function sidecarLabel(relativePath: string): string | null {
 }
 
 /**
+ * Given an asset's relative path, return the path of the binary it
+ * was derived from (`null` if the asset is a primary, not a derived
+ * one).
+ *
+ * Derived-asset convention: extractor outputs land under
+ * `.sidecars/<mirrored-binary>.assets/<asset-name>`, where the
+ * `.assets/` segment immediately precedes the asset's basename.
+ * Stripping `.sidecars/` and everything from the last `.assets/`
+ * onward yields the parent binary's watch-relative path.
+ *
+ *   `.sidecars/iarpa/paper.pdf.assets/page-1.png` → `iarpa/paper.pdf`
+ */
+export function detectDerivedFrom(relativePath: string): string | null {
+  if (!relativePath.startsWith(".sidecars/")) return null;
+  const inner = relativePath.slice(".sidecars/".length);
+  const idx = inner.lastIndexOf(".assets/");
+  if (idx < 0) return null;
+  const assetName = inner.slice(idx + ".assets/".length);
+  // Reject pathological paths where something further nested follows
+  // `.assets/`. The current extractor pipeline always lands assets at
+  // the immediate child of the `.assets/` directory.
+  if (assetName.length === 0 || assetName.includes("/")) return null;
+  return inner.slice(0, idx);
+}
+
+/**
  * Sync a single file from disk into the database.
  *
  * @param watchedRoot - Absolute path to the root the daemon is watching.
@@ -285,6 +311,16 @@ async function syncAsset(
   // prefixed path (.sidecars/.sidecars/...) that points at nothing.
   if (!relativePath.startsWith(".sidecars/")) {
     properties.sidecar_path = `.sidecars/${relativePath}.html`;
+  }
+  // Derived assets (PDF page-renders, extracted figures, future
+  // handler outputs) carry a pointer back to the binary they were
+  // extracted from. Lets harnesses filter "what binaries do I have?"
+  // (not_property: ["derived_from"]) separately from "what visual
+  // assets exist?" (has_property: ["derived_from"]) without a schema
+  // change.
+  const derivedFrom = detectDerivedFrom(relativePath);
+  if (derivedFrom !== null) {
+    properties.derived_from = derivedFrom;
   }
   const propsJson = JSON.stringify(properties);
 
