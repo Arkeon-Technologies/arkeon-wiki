@@ -21,6 +21,10 @@
  * came from a sibling call.
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
+import { isIngestable, runExtraction } from "../extractors/runner.js";
 import { syncDirectory } from "./sync.js";
 import { walkEligibleFiles } from "./fs-watcher.js";
 
@@ -29,6 +33,13 @@ export interface ReconcileSummary {
   updated: number;
   unchanged: number;
   removed: number;
+  /**
+   * Files whose syncFile call threw. The sweep continues past errors
+   * (one corrupt file shouldn't stop the heal), but the count is
+   * surfaced here so a harness gating on /reconcile can tell "clean
+   * sweep" from "N files silently failed."
+   */
+  failed: number;
   took_ms: number;
   /**
    * False for the call that actually ran the sweep; true for callers
@@ -72,13 +83,57 @@ async function runReconcile(
   const t0 = Date.now();
   const files = walkEligibleFiles(watchedRoot);
   const summary = await syncDirectory(watchedRoot, files);
+  dispatchMissingSidecars(watchedRoot, files);
   return {
     created: summary.created,
     updated: summary.updated,
     unchanged: summary.unchanged,
     removed: summary.removed,
+    failed: summary.failed,
     took_ms: Date.now() - t0,
   };
+}
+
+/**
+ * Dispatch sidecar extraction for any ingestable file whose sidecar
+ * HTML is missing on disk. The recovery path for the headline bug:
+ * a PDF dropped during a watcher-deaf window gets its asset row
+ * indexed by syncDirectory above, but the sidecar HTML would never
+ * generate without this loop — the watcher event that would normally
+ * trigger extraction was the one that got dropped.
+ *
+ * Skip-check is a single `existsSync` on the sidecar path: cheap on
+ * healthy corpora, where most ingestables already have a sidecar and
+ * we want the periodic sweep to be effectively free. `runExtraction`
+ * itself enforces full skip semantics (extracted_by=manual /
+ * extracted_by=failed-for-this-hash) via the path lock, so a racy
+ * stat at worst dispatches one redundant call.
+ *
+ * `extractFn` is injected so tests can substitute a spy without
+ * standing up the Python venv.
+ */
+export function dispatchMissingSidecars(
+  watchedRoot: string,
+  files: string[],
+  extractFn: (opts: {
+    watchedRoot: string;
+    relativePath: string;
+  }) => Promise<unknown> = runExtraction,
+): string[] {
+  const dispatched: string[] = [];
+  for (const relPath of files) {
+    if (!isIngestable(relPath)) continue;
+    const sidecarAbsPath = join(watchedRoot, `.sidecars/${relPath}.html`);
+    if (existsSync(sidecarAbsPath)) continue;
+    dispatched.push(relPath);
+    extractFn({ watchedRoot, relativePath: relPath }).catch((err) => {
+      console.error(
+        `[reconcile] extraction failed for ${relPath}:`,
+        (err as Error).message,
+      );
+    });
+  }
+  return dispatched;
 }
 
 // ── Periodic sweep ────────────────────────────────────────────────
@@ -166,10 +221,10 @@ async function runPeriodicSweep(watchedRoot: string): Promise<void> {
     // every 30s would just be noise in the daemon log.
     if (
       !summary.coalesced &&
-      summary.created + summary.updated + summary.removed > 0
+      summary.created + summary.updated + summary.removed + summary.failed > 0
     ) {
       console.log(
-        `[reconcile] periodic sweep: ${summary.created} created, ${summary.updated} updated, ${summary.removed} removed (${summary.took_ms}ms)`,
+        `[reconcile] periodic sweep: ${summary.created} created, ${summary.updated} updated, ${summary.removed} removed, ${summary.failed} failed (${summary.took_ms}ms)`,
       );
     }
   } catch (err) {

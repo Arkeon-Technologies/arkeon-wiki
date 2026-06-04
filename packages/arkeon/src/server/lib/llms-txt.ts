@@ -408,6 +408,7 @@ Response:
   "updated": 0,
   "unchanged": 3217,
   "removed": 195,
+  "failed": 0,
   "took_ms": 184,
   "coalesced": false
 }
@@ -421,6 +422,18 @@ stale rows at the old paths. The daemon catches this drift on the
 periodic sweep (default 30s, configurable via
 \`ARKEON_WIKI_RECONCILE_INTERVAL_SECONDS\`, 0 to disable). Call
 \`/reconcile\` to heal immediately.
+
+\`failed\` counts files whose \`syncFile\` call threw — the sweep
+continues past errors so one corrupt file doesn't stop the heal,
+but the count surfaces here so a harness gating on \`/reconcile\`
+can distinguish "clean sweep" from "N silently-failed syncs."
+
+Sidecar extraction is dispatched in the same sweep: any ingestable
+binary whose \`.sidecars/<mirrored>.html\` is missing on disk gets
+a fresh extraction call (fire-and-forget). This handles the PDF
+case of the headline bug — a batch of binaries dropped during a
+watcher-deaf window get their sidecars built on the next reconcile
+rather than waiting for a daemon restart.
 
 \`coalesced: true\` means another reconcile was already in flight
 when this request arrived and the response rode that sweep's

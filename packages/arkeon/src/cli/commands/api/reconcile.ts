@@ -27,6 +27,7 @@ interface ReconcileResponse {
   updated: number;
   unchanged: number;
   removed: number;
+  failed: number;
   took_ms: number;
   coalesced: boolean;
 }
@@ -56,6 +57,7 @@ export function registerReconcileCommand(program: Command): void {
       ["updated", String(result.updated)],
       ["unchanged", String(result.unchanged)],
       ["removed", String(result.removed)],
+      ["failed", String(result.failed)],
       ["took_ms", String(result.took_ms)],
       ["coalesced", String(result.coalesced)],
     ]);

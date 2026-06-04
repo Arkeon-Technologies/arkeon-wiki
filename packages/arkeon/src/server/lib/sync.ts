@@ -330,12 +330,23 @@ export async function removeByPath(relativePath: string): Promise<boolean> {
 /**
  * Sync a list of files in one pass, then remove rows whose files no
  * longer exist on disk. Reconcile walk.
+ *
+ * `failed` counts files whose syncFile call threw — the loop continues
+ * past errors so one corrupt file doesn't stop the sweep, but the
+ * caller (POST /reconcile, periodic sweep) gets a real number back
+ * instead of a silent log entry.
  */
 export async function syncDirectory(
   watchedRoot: string,
   files: string[],
-): Promise<{ created: number; updated: number; unchanged: number; removed: number }> {
-  const summary = { created: 0, updated: 0, unchanged: 0, removed: 0 };
+): Promise<{
+  created: number;
+  updated: number;
+  unchanged: number;
+  removed: number;
+  failed: number;
+}> {
+  const summary = { created: 0, updated: 0, unchanged: 0, removed: 0, failed: 0 };
 
   for (const file of files) {
     try {
@@ -344,6 +355,7 @@ export async function syncDirectory(
       else if (result.action === "updated") summary.updated++;
       else if (result.action === "unchanged") summary.unchanged++;
     } catch (err) {
+      summary.failed++;
       console.error(`[sync] failed ${file}: ${(err as Error).message}`);
     }
   }
