@@ -21,6 +21,11 @@ import {
   isIngestable,
   runExtraction,
 } from "../extractors/runner.js";
+import {
+  resolveReconcileIntervalMs,
+  startPeriodicReconcile,
+  stopPeriodicReconcile,
+} from "./reconcile.js";
 import { syncFile, syncDirectory, removeByPath } from "./sync.js";
 
 // Directories to skip during walk + watch.
@@ -377,6 +382,32 @@ export async function startWatching(watchedRoot: string): Promise<void> {
     activeWatcher = watcher;
     activeWatchedRoot = watchedRoot;
     console.log(`[watcher] Watching ${watchedRoot} (${files.length} files)`);
+
+    // node:fs.watch silently drops events under bulk filesystem load
+    // (macOS FSEvents, Docker-Desktop bind mounts). The periodic sweep
+    // is the safety net — it re-walks the root + prunes orphan rows on
+    // an interval so the index heals automatically. Configurable via
+    // ARKEON_WIKI_RECONCILE_INTERVAL_SECONDS (0 disables, default 30s).
+    //
+    // Lives inside the watch() try block on purpose: if watch() throws
+    // the watcher never starts and activeWatchedRoot stays null, which
+    // means POST /reconcile would 503. Arming a background sweep in
+    // that state would be asymmetric — the manual force-now button
+    // would fail while the background sweep happily walks. Either
+    // both fire or neither does.
+    const intervalMs = resolveReconcileIntervalMs(
+      process.env.ARKEON_WIKI_RECONCILE_INTERVAL_SECONDS,
+    );
+    if (intervalMs > 0) {
+      startPeriodicReconcile(watchedRoot, intervalMs);
+      console.log(
+        `[reconcile] periodic sweep every ${intervalMs / 1000}s (set ARKEON_WIKI_RECONCILE_INTERVAL_SECONDS=0 to disable)`,
+      );
+    } else {
+      console.log(
+        `[reconcile] periodic sweep disabled (ARKEON_WIKI_RECONCILE_INTERVAL_SECONDS=0); use POST /reconcile or 'arkeon-wiki reconcile' to heal manually`,
+      );
+    }
   } catch (err) {
     console.error(`[watcher] Failed to start watching ${watchedRoot}:`, (err as Error).message);
   }
@@ -481,6 +512,7 @@ async function cascadeRemoveSidecar(
 }
 
 export async function stopWatching(): Promise<void> {
+  stopPeriodicReconcile();
   if (activeWatcher) {
     activeWatcher.close();
     activeWatcher = null;

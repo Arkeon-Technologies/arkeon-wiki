@@ -14,6 +14,7 @@ const REQUIRED_ROUTES = [
   "POST /query",
   "POST /tag",
   "POST /untag",
+  "POST /reconcile",
   "GET /tags",
   "GET /backlinks",
   "GET /redlinks",

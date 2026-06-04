@@ -21,6 +21,12 @@ import { createApp } from "../../src/server/app.js";
 let workdir: string;
 let app: ReturnType<typeof createApp>;
 
+// Disable the background reconcile loop for this suite — it tests
+// watcher + API behavior, not reconcile timing, and a stray sweep
+// would race with the writeFileSync calls below.
+const savedReconcileInterval = process.env.ARKEON_WIKI_RECONCILE_INTERVAL_SECONDS;
+process.env.ARKEON_WIKI_RECONCILE_INTERVAL_SECONDS = "0";
+
 beforeAll(async () => {
   workdir = mkdtempSync(join(tmpdir(), "arkeon-substrate-"));
   const dbPath = join(workdir, "arke.db");
@@ -81,6 +87,11 @@ afterAll(async () => {
   await stopWatching();
   closeDb();
   rmSync(workdir, { recursive: true, force: true });
+  if (savedReconcileInterval === undefined) {
+    delete process.env.ARKEON_WIKI_RECONCILE_INTERVAL_SECONDS;
+  } else {
+    process.env.ARKEON_WIKI_RECONCILE_INTERVAL_SECONDS = savedReconcileInterval;
+  }
 });
 
 describe("substrate", () => {

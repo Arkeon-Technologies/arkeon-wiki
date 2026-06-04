@@ -170,9 +170,10 @@ should NOT use it as a worker gate or overwrite it — use a
 ## API surface
 
 Six substrate commands (\`/query\`, \`/tag\`, \`/untag\`, \`/tags\`,
-\`/backlinks\`, \`/redlinks\`) + \`/stats\`, plus the op endpoints
-(\`/health\`, \`/ready\`) and this doc surface (\`/llms.txt\`, \`/help\`).
-All POST bodies are JSON; all GET params are URL-encoded.
+\`/backlinks\`, \`/redlinks\`) + \`/stats\` + \`/reconcile\`, plus the
+op endpoints (\`/health\`, \`/ready\`) and this doc surface
+(\`/llms.txt\`, \`/help\`). All POST bodies are JSON; all GET params
+are URL-encoded.
 
 POST endpoints validate strictly: a malformed JSON body returns
 \`400 invalid_json\` (never silently treated as empty); any
@@ -386,6 +387,60 @@ lands).
 Constant-time corpus size snapshot. Useful for dashboards or for
 discovery-loop sanity checks ("did the watcher actually pick up
 my new files?") without paginating through \`/query\`.
+
+### POST /reconcile
+
+\`\`\`json
+{}
+\`\`\`
+
+Force a full re-walk of the watched root: re-sync every eligible
+file, prune any \`artifacts\` row whose path no longer exists on
+disk. The same operation runs at startup and on a 30s timer in
+the background — this endpoint is the force-now button.
+
+Response:
+
+\`\`\`json
+{
+  "ok": true,
+  "created": 0,
+  "updated": 0,
+  "unchanged": 3217,
+  "removed": 195,
+  "failed": 0,
+  "took_ms": 184,
+  "coalesced": false
+}
+\`\`\`
+
+Why this exists: \`node:fs.watch\` (FSEvents on macOS, inotify on
+Linux, ReadDirectoryChangesW on Windows) silently drops events
+under bulk filesystem load. A \`mv *.html corpus/\` over a few
+thousand files can leak a percentage of unlink events, leaving
+stale rows at the old paths. The daemon catches this drift on the
+periodic sweep (default 30s, configurable via
+\`ARKEON_WIKI_RECONCILE_INTERVAL_SECONDS\`, 0 to disable). Call
+\`/reconcile\` to heal immediately.
+
+\`failed\` counts files whose \`syncFile\` call threw — the sweep
+continues past errors so one corrupt file doesn't stop the heal,
+but the count surfaces here so a harness gating on \`/reconcile\`
+can distinguish "clean sweep" from "N silently-failed syncs."
+
+Sidecar extraction is dispatched in the same sweep: any ingestable
+binary whose \`.sidecars/<mirrored>.html\` is missing on disk gets
+a fresh extraction call (fire-and-forget). This handles the PDF
+case of the headline bug — a batch of binaries dropped during a
+watcher-deaf window get their sidecars built on the next reconcile
+rather than waiting for a daemon restart.
+
+\`coalesced: true\` means another reconcile was already in flight
+when this request arrived and the response rode that sweep's
+result — a single-flight lock ensures concurrent calls don't
+re-walk the disk. From the caller's perspective the contract is
+the same: when this response returns, the index is consistent
+with disk.
 
 ## Reader (catch-all)
 

@@ -8,6 +8,7 @@
  *                        order_by?, order?, limit?, offset? }
  *   POST /tag          { path, key, value? }
  *   POST /untag        { path, key }
+ *   POST /reconcile    {} — force a sweep now
  *   GET  /tags?path=...
  *   GET  /backlinks?path=...
  *   GET  /redlinks?folder=...
@@ -34,6 +35,8 @@ import {
   type QueryOrder,
   type QueryOrderBy,
 } from "../lib/entities.js";
+import { getWatchedRoot } from "../lib/fs-watcher.js";
+import { reconcile } from "../lib/reconcile.js";
 
 export const apiRouter = new Hono<AppBindings>();
 
@@ -218,4 +221,16 @@ apiRouter.get("/redlinks", async (c) => {
     offset: c.req.query("offset") ? Number(c.req.query("offset")) : null,
   });
   return c.json(result);
+});
+
+apiRouter.post("/reconcile", async (c) => {
+  // No body fields today, but parse strictly so a typo'd field gets a
+  // 400 instead of being silently ignored (matches the other POSTs).
+  await parseJsonBody(c, []);
+  const root = getWatchedRoot();
+  if (!root) {
+    throw new ApiError(503, "not_ready", "watcher not started");
+  }
+  const summary = await reconcile(root);
+  return c.json({ ok: true, ...summary });
 });
