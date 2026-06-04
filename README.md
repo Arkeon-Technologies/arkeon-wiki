@@ -207,6 +207,20 @@ All state lives in `~/.arkeon-wiki/`.
 | `--port <port>` | API port (default 8000, or derived from `--name`) |
 | `--name <name>` | Run a named instance side-by-side with others |
 | `ARKEON_WIKI_HOST` | Bind address (default `127.0.0.1` — loopback) |
+| `ARKEON_WIKI_RECONCILE_INTERVAL_SECONDS` | Periodic reconcile interval (default 30, `0` disables) |
+
+### Extractor tunables
+
+Defaults are calibrated against typical Docker workloads — bump them when a specific corpus pushes a limit.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `ARKEON_WIKI_INGEST_CONCURRENCY` | 4 | Max concurrent extractor subprocesses (PyMuPDF, future handlers) |
+| `ARKEON_WIKI_ASSET_SYNC_CONCURRENCY` | 16 | Parallel `syncFile` calls per binary's post-extract asset batch |
+| `ARKEON_WIKI_ASSET_PROGRESS_INTERVAL` | 100 | Log "syncing assets: N / total" every N assets when total > N |
+| `ARKEON_WIKI_PDF_MAX_PAGES` | 2000 | Reject PDFs above this size with a clear stub sidecar (`0` disables) |
+| `ARKEON_WIKI_PDF_EXTRACT_TIMEOUT_MS` | 600000 | Per-PDF subprocess timeout (10 min) |
+| `ARKEON_WIKI_SIGTERM_GRACE_MS` | 2000 | SIGTERM → SIGKILL grace window for extractor subprocesses |
 
 ## Trigger pattern (for harnesses)
 

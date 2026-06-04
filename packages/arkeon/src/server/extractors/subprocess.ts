@@ -53,8 +53,15 @@ const DEFAULT_MAX_STDOUT = 50 * 1024 * 1024;
  * SIGTERM; jumping straight to SIGKILL strands them. Two seconds is
  * long enough for an honest cleanup and short enough not to delay
  * watcher progress meaningfully when a process really is wedged.
+ * Override via `ARKEON_WIKI_SIGTERM_GRACE_MS` if a specific handler
+ * needs longer cleanup.
  */
-const SIGTERM_GRACE_MS = 2_000;
+const SIGTERM_GRACE_MS = (() => {
+  const raw = process.env.ARKEON_WIKI_SIGTERM_GRACE_MS;
+  if (!raw) return 2_000;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 2_000;
+})();
 
 function readConcurrencyCap(): number {
   const raw = process.env.ARKEON_WIKI_INGEST_CONCURRENCY;

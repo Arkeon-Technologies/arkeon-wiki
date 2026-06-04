@@ -349,17 +349,44 @@ function baseName(relativePath: string): string {
 type ExtractionLog = (level: "info" | "warn" | "error", msg: string) => void;
 
 /**
+ * Read a positive integer from `process.env[name]`, falling back to
+ * `fallback` on missing/garbage/non-positive input. Used for the
+ * extractor tunables below — operators bump them via env when a
+ * specific workload pushes the defaults.
+ */
+function readPositiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 1 ? Math.floor(n) : fallback;
+}
+
+/**
  * Maximum number of parallel asset-sync calls per binary. PDF
  * extraction of a 600-page scan can land 600+ assets; running them
  * serially through `syncFile` (one content-hash + one SQL transaction
  * each) stalls the daemon. 16 keeps SQLite from gridlocking on
  * concurrent writes while making the post-extract stretch noticeably
- * faster.
+ * faster. Override via `ARKEON_WIKI_ASSET_SYNC_CONCURRENCY`.
+ *
+ * Calibration note: better-sqlite3 is synchronous + single-connection,
+ * so SQL itself serializes through one queue regardless of concurrency
+ * here. The win is amortizing the per-asset FS read + SHA-256, which
+ * dominates wall time for asset sync.
  */
-const ASSET_SYNC_CONCURRENCY = 16;
+const ASSET_SYNC_CONCURRENCY = readPositiveIntEnv(
+  "ARKEON_WIKI_ASSET_SYNC_CONCURRENCY",
+  16,
+);
 
-/** How often to log progress during a large asset sync. */
-const ASSET_PROGRESS_INTERVAL = 100;
+/**
+ * How often to log progress during a large asset sync. Override via
+ * `ARKEON_WIKI_ASSET_PROGRESS_INTERVAL`.
+ */
+const ASSET_PROGRESS_INTERVAL = readPositiveIntEnv(
+  "ARKEON_WIKI_ASSET_PROGRESS_INTERVAL",
+  100,
+);
 
 /**
  * Sync every freshly-extracted asset through `syncFile` in capped
@@ -367,6 +394,18 @@ const ASSET_PROGRESS_INTERVAL = 100;
  * pathological asset shouldn't block the rest of the page renders
  * from landing.
  */
+export async function _syncAssetsParallelForTest(opts: {
+  assetNames: string[];
+  watchedRoot: string;
+  assetsSpaceRelDir: string;
+  log: ExtractionLog;
+}): Promise<void> {
+  return syncAssetsParallel(opts);
+}
+
+export const _assetSyncConcurrencyForTest = ASSET_SYNC_CONCURRENCY;
+export const _assetProgressIntervalForTest = ASSET_PROGRESS_INTERVAL;
+
 async function syncAssetsParallel(opts: {
   assetNames: string[];
   watchedRoot: string;
