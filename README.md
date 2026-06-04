@@ -135,8 +135,10 @@ Full reference at `GET /llms.txt` or `GET /help`.
 URL structure mirrors disk structure.
 
 - `GET /` — directory listing of the watched root.
-- `GET /<path>/` — directory listing of any subfolder.
-- `GET /<path>` — serve the file. HTML files run through wikilink rewriting; unresolved `<a class="wikilink">` anchors gain a `redlink` class so CSS can style them.
+- `GET /<path>/` — directory listing of any subfolder. Query params: `?limit` (default 200, max 2000), `?offset` (default 0), `?sort=name|mtime|size` (default `name`). The rendered page emits `rel="prev"` / `rel="next"` links and an active-sort marker so callers can paginate without hand-building URLs.
+- `GET /<path>` — serve the file. HTML files run through wikilink rewriting; unresolved `<a class="wikilink">` anchors gain a `redlink` class so CSS can style them. Binaries stream off disk (no full in-memory buffer) so a 50 MB embedded PDF doesn't pin the event loop.
+
+File serves carry a weak `ETag: W/"<mtime-ms>-<size>"` and `Cache-Control: no-cache, must-revalidate`. Browsers and proxies revalidate every request; `If-None-Match` with the current ETag returns `304 Not Modified`. Edits invalidate naturally — `syncFile` writes through atomic rename, which bumps `mtime` on every save.
 
 The same article opens identically under `file://` and `http://`.
 

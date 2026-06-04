@@ -65,8 +65,10 @@ Wikilink hrefs resolve relative to the source file's directory: `./sources/x.pdf
 Catch-all directory browser:
 
 - `GET /` → directory listing of the watched root.
-- `GET /<path>/` → directory listing of any subfolder.
-- `GET /<path>` → file serve. HTML files run through wikilink rewriting; unresolved `<a class="wikilink">` anchors gain a `redlink` class so CSS can style them.
+- `GET /<path>/` → directory listing of any subfolder. Query params: `?limit` (default 200, max 2000), `?offset` (default 0), `?sort=name|mtime|size` (default `name`). The renderer emits `rel="prev"` / `rel="next"` links so callers can paginate without hand-building URLs.
+- `GET /<path>` → file serve. HTML files run through wikilink rewriting; unresolved `<a class="wikilink">` anchors gain a `redlink` class so CSS can style them. Binaries stream off disk via `createReadStream` so a 50 MB embedded PDF doesn't buffer fully in memory.
+
+File serves carry a weak `ETag: W/"<mtime-ms>-<size>"` plus `Cache-Control: no-cache, must-revalidate`. `If-None-Match` against the same ETag returns `304 Not Modified`. Edits on disk invalidate naturally — `syncFile` writes via atomic rename, so `mtime` bumps even when content is identical.
 
 URL structure mirrors disk structure. The same article opens identically under `file://` and `http://` (apart from the redlink class injection).
 
