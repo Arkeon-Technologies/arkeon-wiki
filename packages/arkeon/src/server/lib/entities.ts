@@ -186,8 +186,16 @@ export async function listArtifacts(opts: QueryOptions): Promise<ListResult> {
       }
     }
   }
+  // When `text` is set, drive the query from `fts_artifacts` and JOIN
+  // back to `artifacts`. The obvious form — `EXISTS (SELECT 1 FROM
+  // fts_artifacts f WHERE f.path = a.path AND f.text MATCH ?)` — plans
+  // as `SCAN artifacts` + per-row FTS lookup, which is O(N_corpus) per
+  // query. Driving from the FTS virtual table lets SQLite use the FTS
+  // index directly. Measured ~70x on a 3k-doc corpus.
+  let fromSql = "FROM artifacts a";
   if (opts.text) {
-    where.push("EXISTS (SELECT 1 FROM fts_artifacts f WHERE f.path = a.path AND f.text MATCH ?)");
+    fromSql = "FROM fts_artifacts f JOIN artifacts a ON a.path = f.path";
+    where.push("f.text MATCH ?");
     params.push(opts.text);
   }
 
@@ -199,7 +207,7 @@ export async function listArtifacts(opts: QueryOptions): Promise<ListResult> {
   const sql = createSql();
 
   const totalRow = (await sql.query(
-    `SELECT COUNT(*) AS n FROM artifacts a ${whereSql}`,
+    `SELECT COUNT(*) AS n ${fromSql} ${whereSql}`,
     params,
   )) as { n: number }[];
   const total = Number(totalRow[0]?.n ?? 0);
@@ -211,7 +219,7 @@ export async function listArtifacts(opts: QueryOptions): Promise<ListResult> {
   const rows = (await sql.query(
     `SELECT a.path, a.kind, a.label, a.source_hash, a.properties,
             a.created_at, a.updated_at
-     FROM artifacts a
+     ${fromSql}
      ${whereSql}
      ORDER BY ${orderCol} ${orderDir}, a.path ASC
      LIMIT ? OFFSET ?`,
