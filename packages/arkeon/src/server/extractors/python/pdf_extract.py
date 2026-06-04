@@ -203,6 +203,26 @@ def main(argv: list[str]) -> int:
             )
             return 4
 
+        # Bail before iterating on pathologically large PDFs. At ~500ms
+        # per page render via PyMuPDF.get_pixmap, anything past a few
+        # thousand pages will blow past the subprocess timeout and burn
+        # significant disk + CPU before being killed mid-stream. Cap
+        # via ARKEON_WIKI_PDF_MAX_PAGES (default 2000) — the failed
+        # stub the runner writes captures the cause so operators see
+        # the reason instead of a vague timeout. Set to 0 to disable.
+        max_pages_raw = os.environ.get("ARKEON_WIKI_PDF_MAX_PAGES", "2000")
+        try:
+            max_pages = int(max_pages_raw)
+        except ValueError:
+            max_pages = 2000
+        if max_pages > 0 and doc.page_count > max_pages:
+            print(
+                f"PDF exceeds {max_pages}-page cap ({doc.page_count} pages in "
+                f"{input_path}). Raise ARKEON_WIKI_PDF_MAX_PAGES or split the file.",
+                file=sys.stderr,
+            )
+            return 5
+
         write(out,f'<meta name="page_count" content="{doc.page_count}">')
 
         for page_index, page in enumerate(doc):

@@ -7,6 +7,7 @@ import {
   runSubprocess,
   SubprocessError,
   _semaphoreForTest,
+  _sigtermGraceMsForTest,
 } from "../../src/server/extractors/subprocess.js";
 
 // Use the node binary itself as a portable subprocess. -e takes a JS
@@ -70,6 +71,47 @@ describe("runSubprocess", () => {
     expect((err as SubprocessError).message).toMatch(/timed out/i);
     // Sanity check that the timer actually fired — not the 60s sleep.
     expect(elapsed).toBeLessThan(5_000);
+  });
+
+  it("SIGTERM lets a well-behaved child exit before SIGKILL fires", async () => {
+    // The child traps SIGTERM, prints a marker, and exits 0 — proving
+    // the kill path sends SIGTERM first instead of jumping straight
+    // to SIGKILL (which can't be trapped). We expect a successful
+    // resolve here, not a timeout rejection.
+    const start = Date.now();
+    const result = await runSubprocess({
+      cmd: NODE,
+      args: [
+        "-e",
+        `process.on("SIGTERM", () => { process.stdout.write("graceful"); process.exit(0); }); setTimeout(() => process.exit(0), 60_000)`,
+      ],
+      signal: new AbortController().signal,
+      timeoutMs: 200,
+    });
+    const elapsed = Date.now() - start;
+    expect(result.stdout).toBe("graceful");
+    // Should resolve well before the SIGKILL grace window expires.
+    expect(elapsed).toBeLessThan(200 + _sigtermGraceMsForTest);
+  });
+
+  it("falls back to SIGKILL when the child ignores SIGTERM", async () => {
+    // Child explicitly traps SIGTERM and refuses to exit — we should
+    // still reap it via SIGKILL within roughly the grace window.
+    const start = Date.now();
+    const err: unknown = await runSubprocess({
+      cmd: NODE,
+      args: [
+        "-e",
+        `process.on("SIGTERM", () => {}); setTimeout(() => process.exit(0), 60_000)`,
+      ],
+      signal: new AbortController().signal,
+      timeoutMs: 200,
+    }).catch((e) => e);
+    const elapsed = Date.now() - start;
+    expect(err).toBeInstanceOf(SubprocessError);
+    // Total wall time: timeout (200ms) + grace (~2s) + slack. If
+    // SIGKILL never fired we'd be at 60s.
+    expect(elapsed).toBeLessThan(200 + _sigtermGraceMsForTest + 2_000);
   });
 
   it("respects an external AbortSignal", async () => {

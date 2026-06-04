@@ -47,6 +47,15 @@ export class SubprocessError extends Error {
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_STDOUT = 50 * 1024 * 1024;
 
+/**
+ * Grace window between SIGTERM and SIGKILL. PyMuPDF (and most
+ * well-behaved CLIs) flush partial output and clean up temp files on
+ * SIGTERM; jumping straight to SIGKILL strands them. Two seconds is
+ * long enough for an honest cleanup and short enough not to delay
+ * watcher progress meaningfully when a process really is wedged.
+ */
+const SIGTERM_GRACE_MS = 2_000;
+
 function readConcurrencyCap(): number {
   const raw = process.env.ARKEON_WIKI_INGEST_CONCURRENCY;
   if (!raw) return 4;
@@ -110,6 +119,7 @@ function spawnAndCapture(opts: RunSubprocessOptions): Promise<SubprocessResult> 
     let stdoutBytes = 0;
     let settled = false;
     let killReason: string | null = null;
+    let sigkillTimer: NodeJS.Timeout | null = null;
 
     const finalize = (
       code: number | null,
@@ -118,6 +128,10 @@ function spawnAndCapture(opts: RunSubprocessOptions): Promise<SubprocessResult> 
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (sigkillTimer) {
+        clearTimeout(sigkillTimer);
+        sigkillTimer = null;
+      }
       opts.signal.removeEventListener("abort", onAbort);
       const stdout = Buffer.concat(stdoutChunks).toString("utf8");
       const stderr = Buffer.concat(stderrChunks).toString("utf8");
@@ -139,13 +153,34 @@ function spawnAndCapture(opts: RunSubprocessOptions): Promise<SubprocessResult> 
       }
     };
 
+    /**
+     * SIGTERM first, then SIGKILL after a short grace if the child
+     * hasn't exited. Matches how launchd/systemd treat managed
+     * services and lets PyMuPDF flush partial state. Idempotent —
+     * `killReason` only takes the first call's value so subsequent
+     * SIGKILLs from the grace timer (or back-to-back abort+timeout)
+     * don't overwrite the original cause.
+     */
     const killWith = (reason: string): void => {
-      killReason = reason;
+      if (killReason === null) killReason = reason;
       try {
-        child.kill("SIGKILL");
+        child.kill("SIGTERM");
       } catch {
         // already gone
+        return;
       }
+      if (sigkillTimer) return; // grace already armed
+      sigkillTimer = setTimeout(() => {
+        sigkillTimer = null;
+        if (settled) return;
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // already gone
+        }
+      }, SIGTERM_GRACE_MS);
+      // Don't keep the event loop alive just for the grace timer.
+      sigkillTimer.unref?.();
     };
 
     const timer = setTimeout(() => {
@@ -181,3 +216,4 @@ function spawnAndCapture(opts: RunSubprocessOptions): Promise<SubprocessResult> 
 }
 
 export const _semaphoreForTest = concurrencySemaphore;
+export const _sigtermGraceMsForTest = SIGTERM_GRACE_MS;

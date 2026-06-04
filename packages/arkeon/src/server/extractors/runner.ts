@@ -205,17 +205,20 @@ async function runExtractionInner(
     // renamed directory, so the watcher would never index our assets.
     // Sync them explicitly here — same code path the watcher uses for
     // any normal file landing.
-    for (const assetName of readdirSync(assetsAbsDir)) {
-      const assetSpaceRelPath = `${assetsSpaceRelDir}/${assetName}`;
-      try {
-        await syncFile(watchedRoot, assetSpaceRelPath);
-      } catch (err) {
-        log(
-          "warn",
-          `failed to sync asset ${assetSpaceRelPath}: ${(err as Error).message}`,
-        );
-      }
-    }
+    //
+    // Sync in parallel batches: a 568-page book produces 568+ asset
+    // files, and a sequential await loop here means each page render
+    // waits for the prior `syncFile` (one hash + one SQL transaction)
+    // before starting. Better to amortize via small concurrent chunks
+    // and emit progress so the daemon log isn't silent during the
+    // post-extraction stretch.
+    const assetNames = readdirSync(assetsAbsDir);
+    await syncAssetsParallel({
+      assetNames,
+      watchedRoot,
+      assetsSpaceRelDir,
+      log,
+    });
 
     writeSidecarAtomic(sidecarAbsPath, result.html);
     await syncFile(watchedRoot, sidecarRelPath);
@@ -341,6 +344,69 @@ async function shouldSkipExisting(
 function baseName(relativePath: string): string {
   const idx = relativePath.lastIndexOf("/");
   return idx >= 0 ? relativePath.slice(idx + 1) : relativePath;
+}
+
+type ExtractionLog = (level: "info" | "warn" | "error", msg: string) => void;
+
+/**
+ * Maximum number of parallel asset-sync calls per binary. PDF
+ * extraction of a 600-page scan can land 600+ assets; running them
+ * serially through `syncFile` (one content-hash + one SQL transaction
+ * each) stalls the daemon. 16 keeps SQLite from gridlocking on
+ * concurrent writes while making the post-extract stretch noticeably
+ * faster.
+ */
+const ASSET_SYNC_CONCURRENCY = 16;
+
+/** How often to log progress during a large asset sync. */
+const ASSET_PROGRESS_INTERVAL = 100;
+
+/**
+ * Sync every freshly-extracted asset through `syncFile` in capped
+ * parallel batches. Failures are logged but never bubble — one
+ * pathological asset shouldn't block the rest of the page renders
+ * from landing.
+ */
+async function syncAssetsParallel(opts: {
+  assetNames: string[];
+  watchedRoot: string;
+  assetsSpaceRelDir: string;
+  log: ExtractionLog;
+}): Promise<void> {
+  const { assetNames, watchedRoot, assetsSpaceRelDir, log } = opts;
+  const total = assetNames.length;
+  if (total === 0) return;
+
+  let done = 0;
+  const tick = (): void => {
+    done += 1;
+    if (
+      total > ASSET_PROGRESS_INTERVAL &&
+      done % ASSET_PROGRESS_INTERVAL === 0 &&
+      done < total
+    ) {
+      log("info", `syncing assets: ${done} / ${total}`);
+    }
+  };
+
+  for (let i = 0; i < total; i += ASSET_SYNC_CONCURRENCY) {
+    const batch = assetNames.slice(i, i + ASSET_SYNC_CONCURRENCY);
+    await Promise.all(
+      batch.map(async (assetName) => {
+        const assetSpaceRelPath = `${assetsSpaceRelDir}/${assetName}`;
+        try {
+          await syncFile(watchedRoot, assetSpaceRelPath);
+        } catch (err) {
+          log(
+            "warn",
+            `failed to sync asset ${assetSpaceRelPath}: ${(err as Error).message}`,
+          );
+        } finally {
+          tick();
+        }
+      }),
+    );
+  }
 }
 
 function createStagingDir(binaryAbsPath: string): string {
