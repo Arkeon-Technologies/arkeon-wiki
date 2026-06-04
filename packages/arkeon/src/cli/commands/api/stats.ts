@@ -20,6 +20,7 @@ interface StatsResponse {
   links: number;
   redlinks: number;
   tag_keys: number;
+  tag_keys_top: Array<{ key: string; n: number }>;
 }
 
 export function registerStatsCommand(program: Command): void {
@@ -40,13 +41,17 @@ export function registerStatsCommand(program: Command): void {
       printJson(result);
       return;
     }
-    printKeyValue([
+    const rows: Array<[string, string]> = [
       ["artifacts.total", String(result.artifacts.total)],
       ["artifacts.text", String(result.artifacts.text)],
       ["artifacts.asset", String(result.artifacts.asset)],
       ["links", String(result.links)],
       ["redlinks", String(result.redlinks)],
       ["tag_keys", String(result.tag_keys)],
-    ]);
+    ];
+    for (const { key, n } of result.tag_keys_top) {
+      rows.push([`tag_keys_top.${key}`, String(n)]);
+    }
+    printKeyValue(rows);
   });
 }

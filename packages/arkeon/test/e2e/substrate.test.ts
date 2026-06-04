@@ -134,12 +134,70 @@ describe("substrate", () => {
       links: number;
       redlinks: number;
       tag_keys: number;
+      tag_keys_top: Array<{ key: string; n: number }>;
     };
     expect(body.artifacts.total).toBeGreaterThan(0);
     expect(body.artifacts.total).toBe(body.artifacts.text + body.artifacts.asset);
     expect(body.links).toBeGreaterThan(0);
     expect(body.redlinks).toBeGreaterThan(0); // missing-target from setup
     expect(body.tag_keys).toBeGreaterThanOrEqual(0);
+    expect(Array.isArray(body.tag_keys_top)).toBe(true);
+    expect(body.tag_keys_top.length).toBeLessThanOrEqual(10);
+    expect(body.tag_keys_top.length).toBeLessThanOrEqual(body.tag_keys);
+  });
+
+  it("GET /stats tag_keys_top orders by row count desc, ties alphabetical", async () => {
+    // Self-contained: post three distinct keys at three distinct row
+    // counts, then assert ordering. Cleans up after itself so other
+    // tests see the same starting state.
+    const fixtures = [
+      // key, [paths to tag]
+      ["topN-alpha", ["iarpa/article.html"]],
+      [
+        "topN-beta",
+        ["iarpa/article.html", "iarpa/notes.html"],
+      ],
+      [
+        "topN-gamma",
+        [
+          "iarpa/article.html",
+          "iarpa/notes.html",
+          "chartbook/about.html",
+        ],
+      ],
+    ] as const;
+    for (const [key, paths] of fixtures) {
+      for (const path of paths) {
+        await app.fetch(
+          new Request("http://test/tag", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ path, key, value: "1" }),
+          }),
+        );
+      }
+    }
+    const res = await app.fetch(new Request("http://test/stats"));
+    const body = (await res.json()) as {
+      tag_keys_top: Array<{ key: string; n: number }>;
+    };
+    const ours = body.tag_keys_top.filter((r) => r.key.startsWith("topN-"));
+    expect(ours).toEqual([
+      { key: "topN-gamma", n: 3 },
+      { key: "topN-beta", n: 2 },
+      { key: "topN-alpha", n: 1 },
+    ]);
+    for (const [key, paths] of fixtures) {
+      for (const path of paths) {
+        await app.fetch(
+          new Request("http://test/untag", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ path, key }),
+          }),
+        );
+      }
+    }
   });
 
   it("POST /query honors order_by + order", async () => {

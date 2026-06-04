@@ -528,7 +528,11 @@ export interface CorpusStats {
   redlinks: number;
   /** Distinct tag keys in use. */
   tag_keys: number;
+  /** Top tag keys by row count, descending. Capped at TAG_KEYS_TOP_LIMIT. */
+  tag_keys_top: Array<{ key: string; n: number }>;
 }
+
+const TAG_KEYS_TOP_LIMIT = 10;
 
 export async function getStats(): Promise<CorpusStats> {
   const sql = createSql();
@@ -563,11 +567,16 @@ export async function getStats(): Promise<CorpusStats> {
     `SELECT COUNT(DISTINCT key) AS n FROM tags`,
     [],
   )) as { n: number }[];
+  const tagKeysTopRows = (await sql.query(
+    `SELECT key, COUNT(*) AS n FROM tags GROUP BY key ORDER BY n DESC, key ASC LIMIT ?`,
+    [TAG_KEYS_TOP_LIMIT],
+  )) as Array<{ key: string; n: number }>;
   return {
     artifacts: { total: textN + assetN, text: textN, asset: assetN },
     links: Number(linksN),
     redlinks: Number(redlinksN),
     tag_keys: Number(tagKeysN),
+    tag_keys_top: tagKeysTopRows.map((r) => ({ key: r.key, n: Number(r.n) })),
   };
 }
 
