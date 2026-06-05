@@ -43,6 +43,10 @@ export const readerRouter = new Hono<AppBindings>();
 const DEFAULT_LISTING_LIMIT = 200;
 const MAX_LISTING_LIMIT = 2000;
 const VALID_SORTS: ListingSort[] = ["name", "mtime", "size"];
+// Matches the extractor asset-sync cap from #211 — high enough to
+// stay above libuv's default 4-thread fs pool, low enough to keep
+// the pending-promise set bounded on huge directories.
+const STAT_CONCURRENCY = 16;
 
 function decodePath(rawUrl: string): string {
   const u = new URL(rawUrl);
@@ -94,14 +98,26 @@ readerRouter.get("/*", async (c) => {
   // Weak ETag from mtime + size. Edits on disk invalidate naturally
   // because syncFile writes go through atomic rename, which bumps
   // mtime even when the content hash is identical.
-  const etag = buildEtag(st);
+  //
+  // HTML serves additionally mix in a corpus fingerprint: the
+  // rendered body depends on `knownPaths` (which artifacts exist)
+  // because `rewriteWikilinks` flips an unresolved anchor to the
+  // `redlink` class. If a target lands in the corpus without
+  // touching the source file's mtime, the page would resolve
+  // differently — without the fingerprint, browsers would 304 on
+  // the stale class. Binary serves don't depend on corpus state, so
+  // they keep the cheap two-component tag.
+  const ext = extname(relPath).toLowerCase();
+  const isHtml = ext === ".html" || ext === ".htm";
+  const etag = isHtml
+    ? buildEtag([Math.floor(st.mtimeMs), st.size, await corpusVersion()])
+    : buildEtag([Math.floor(st.mtimeMs), st.size]);
   const ifNoneMatch = c.req.header("if-none-match");
   if (ifNoneMatch && etagMatches(etag, ifNoneMatch)) {
     return new Response(null, { status: 304, headers: cacheHeaders(etag) });
   }
 
-  const ext = extname(relPath).toLowerCase();
-  if (ext === ".html" || ext === ".htm") {
+  if (isHtml) {
     // HTML still buffers — wikilink rewriting needs the full document
     // and HTML sidecars are bounded by sane corpus sizes (KB to a few
     // MB). The streaming win is on raw binaries.
@@ -169,6 +185,11 @@ async function serveDirectory(
 
   // For mtime / size sorts we need a stat per entry. Name sort skips
   // the syscall entirely so the cheap path stays cheap.
+  //
+  // Concurrency cap matters at the upper end: a 100k-entry folder
+  // would otherwise queue 100k pending Promise objects in memory
+  // while libuv's default 4-thread pool chewed through them in
+  // batches. Bounded pool keeps the in-flight set ~constant.
   let entries: SortableEntry[];
   if (sort === "name") {
     entries = dirents.map((d) => ({
@@ -178,8 +199,8 @@ async function serveDirectory(
       size: 0,
     }));
   } else {
-    const stats = await Promise.all(
-      dirents.map((d) => stat(join(abs, d.name)).catch(() => null)),
+    const stats = await mapPool(dirents, STAT_CONCURRENCY, (d) =>
+      stat(join(abs, d.name)).catch(() => null),
     );
     entries = dirents.map((d, i) => ({
       name: d.name,
@@ -257,8 +278,58 @@ function parseSort(raw: string | undefined): ListingSort {
   return "name";
 }
 
-function buildEtag(st: Stats): string {
-  return `W/"${Math.floor(st.mtimeMs)}-${st.size}"`;
+/**
+ * Map `fn` over `items` with bounded concurrency, preserving input
+ * order. Used to cap in-flight stat() calls on large directories
+ * without forcing serial execution.
+ */
+async function mapPool<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = new Array(Math.min(concurrency, items.length))
+    .fill(0)
+    .map(async () => {
+      for (;;) {
+        const i = next++;
+        if (i >= items.length) return;
+        results[i] = await fn(items[i]!, i);
+      }
+    });
+  await Promise.all(workers);
+  return results;
+}
+
+function buildEtag(parts: Array<string | number>): string {
+  return `W/"${parts.join("-")}"`;
+}
+
+/**
+ * Cheap fingerprint of the artifact index. Changes whenever an
+ * artifact is created (COUNT bumps), modified (MAX(updated_at)
+ * bumps), or deleted (COUNT shrinks). Used as the third component
+ * of HTML ETags so a target landing flips the cached redlink class.
+ *
+ * Single aggregation query — no row scan, no allocation. Re-running
+ * it per HTML serve is cheaper than rebuilding `knownPaths` ahead of
+ * the 304 short-circuit.
+ */
+async function corpusVersion(): Promise<string> {
+  const sql = createSql();
+  // `updated_at` is a SQLite text timestamp ("YYYY-MM-DD HH:MM:SS")
+  // — `strftime('%s', ...)` converts it to an epoch-seconds string,
+  // keeping the ETag component digit-only and well-formed under
+  // RFC 9110 entity-tag syntax.
+  const rows = (await sql`
+    SELECT COUNT(*) AS n,
+           COALESCE(strftime('%s', MAX(updated_at)), '0') AS mx
+    FROM artifacts
+  `) as { n: number; mx: string }[];
+  const row = rows[0];
+  return `${row?.n ?? 0}-${row?.mx ?? "0"}`;
 }
 
 function etagMatches(etag: string, header: string): boolean {

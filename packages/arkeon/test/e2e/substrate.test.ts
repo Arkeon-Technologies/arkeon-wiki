@@ -884,12 +884,65 @@ describe("substrate", () => {
     expect(text).not.toMatch(/wikilink[^"]*redlink/);
   });
 
-  it("file serve includes a weak ETag + cache-control", async () => {
+  it("HTML serve emits a 3-component ETag (mtime-size-corpus)", async () => {
+    // HTML rendering depends on `knownPaths`, so the ETag has to mix
+    // a corpus fingerprint in alongside the file's mtime + size.
+    // Binary serves stay at the cheap two-component form (asserted
+    // by the streaming-binary test below).
     const res = await app.fetch(new Request("http://test/iarpa/article.html"));
     expect(res.status).toBe(200);
     const etag = res.headers.get("etag");
-    expect(etag).toMatch(/^W\/"\d+-\d+"$/);
+    expect(etag).toMatch(/^W\/"\d+-\d+-\d+-\d+"$/);
     expect(res.headers.get("cache-control")).toBe("no-cache, must-revalidate");
+  });
+
+  it("binary serve emits a 2-component ETag (mtime-size)", async () => {
+    const res = await app.fetch(
+      new Request("http://test/iarpa/derived-fixture.pdf"),
+    );
+    expect(res.status).toBe(200);
+    const etag = res.headers.get("etag");
+    expect(etag).toMatch(/^W\/"\d+-\d+"$/);
+  });
+
+  it("HTML ETag invalidates when a new artifact lands in the corpus", async () => {
+    // The HTML render path flips the `redlink` class based on
+    // `knownPaths`. Without a corpus fingerprint in the ETag, a
+    // matching mtime + size would 304 even after a previously-
+    // unresolved target lands — the cached page would keep the
+    // stale class. The corpus version component prevents that.
+    const first = await app.fetch(
+      new Request("http://test/iarpa/article.html"),
+    );
+    const firstEtag = first.headers.get("etag")!;
+    expect(firstEtag).toBeTruthy();
+
+    // Land a new file in the corpus and wait for the watcher to index it.
+    const dropName = "iarpa/etag-bump-target.html";
+    writeFileSync(
+      join(workdir, dropName),
+      `<!doctype html><html><head><title>Bump</title></head><body>bump</body></html>`,
+    );
+    const sql = createSql();
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      const rows = await sql`SELECT 1 FROM artifacts WHERE path = ${dropName}`;
+      if (rows.length > 0) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    const second = await app.fetch(
+      new Request("http://test/iarpa/article.html"),
+    );
+    const secondEtag = second.headers.get("etag")!;
+    expect(secondEtag).not.toBe(firstEtag);
+    // A request bearing the OLD etag must now miss the cache.
+    const validate = await app.fetch(
+      new Request("http://test/iarpa/article.html", {
+        headers: { "if-none-match": firstEtag },
+      }),
+    );
+    expect(validate.status).toBe(200);
   });
 
   it("If-None-Match with the current ETag returns 304 + empty body", async () => {
