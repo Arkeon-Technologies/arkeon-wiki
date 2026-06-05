@@ -9,7 +9,15 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  unlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -874,6 +882,170 @@ describe("substrate", () => {
     // The resolved wikilink still carries its class, no redlink.
     expect(text).toContain(`class="wikilink"`);
     expect(text).not.toMatch(/wikilink[^"]*redlink/);
+  });
+
+  it("file serve includes a weak ETag + cache-control", async () => {
+    const res = await app.fetch(new Request("http://test/iarpa/article.html"));
+    expect(res.status).toBe(200);
+    const etag = res.headers.get("etag");
+    expect(etag).toMatch(/^W\/"\d+-\d+"$/);
+    expect(res.headers.get("cache-control")).toBe("no-cache, must-revalidate");
+  });
+
+  it("If-None-Match with the current ETag returns 304 + empty body", async () => {
+    const first = await app.fetch(
+      new Request("http://test/iarpa/article.html"),
+    );
+    const etag = first.headers.get("etag")!;
+    expect(etag).toBeTruthy();
+    const second = await app.fetch(
+      new Request("http://test/iarpa/article.html", {
+        headers: { "if-none-match": etag },
+      }),
+    );
+    expect(second.status).toBe(304);
+    expect(second.headers.get("etag")).toBe(etag);
+    expect(second.headers.get("cache-control")).toBe("no-cache, must-revalidate");
+    // 304 body must be empty per RFC 9110.
+    expect(await second.text()).toBe("");
+  });
+
+  it("If-None-Match: * is the wildcard match → 304", async () => {
+    const res = await app.fetch(
+      new Request("http://test/iarpa/article.html", {
+        headers: { "if-none-match": "*" },
+      }),
+    );
+    expect(res.status).toBe(304);
+  });
+
+  it("If-None-Match with a stale ETag still returns the body", async () => {
+    const res = await app.fetch(
+      new Request("http://test/iarpa/article.html", {
+        headers: { "if-none-match": 'W/"0-0"' },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect((await res.text()).length).toBeGreaterThan(0);
+  });
+
+  it("binary serve streams the file with content-type + content-length", async () => {
+    // derived-fixture.pdf is set up in beforeAll with deterministic
+    // ASCII bytes — the reader should serve them verbatim with the
+    // PDF content-type and a matching content-length.
+    const res = await app.fetch(
+      new Request("http://test/iarpa/derived-fixture.pdf"),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/pdf");
+    const len = Number(res.headers.get("content-length"));
+    expect(len).toBeGreaterThan(0);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect(bytes.length).toBe(len);
+    expect(new TextDecoder().decode(bytes)).toBe(
+      "%PDF-1.4 derived-fixture placeholder\n",
+    );
+  });
+
+  it("directory listing paginates with offset / limit + total + prev/next links", async () => {
+    // Self-contained fixture so the page math is deterministic
+    // regardless of other tests dropping files in iarpa/.
+    mkdirSync(join(workdir, "pagination-fixture"), { recursive: true });
+    for (let i = 1; i <= 12; i++) {
+      writeFileSync(
+        join(workdir, "pagination-fixture", `file-${String(i).padStart(2, "0")}.txt`),
+        `entry ${i}`,
+      );
+    }
+
+    const first = await app.fetch(
+      new Request("http://test/pagination-fixture/?limit=5"),
+    );
+    expect(first.status).toBe(200);
+    const firstHtml = await first.text();
+    expect(firstHtml).toContain("1–5 of 12");
+    expect(firstHtml).toContain("file-01.txt");
+    expect(firstHtml).toContain("file-05.txt");
+    expect(firstHtml).not.toContain("file-06.txt");
+    expect(firstHtml).toContain('rel="next"');
+    expect(firstHtml).not.toContain('rel="prev"');
+
+    const middle = await app.fetch(
+      new Request("http://test/pagination-fixture/?limit=5&offset=5"),
+    );
+    const middleHtml = await middle.text();
+    expect(middleHtml).toContain("6–10 of 12");
+    expect(middleHtml).toContain('rel="prev"');
+    expect(middleHtml).toContain('rel="next"');
+    expect(middleHtml).toContain("file-06.txt");
+    expect(middleHtml).toContain("file-10.txt");
+    expect(middleHtml).not.toContain("file-01.txt");
+
+    const last = await app.fetch(
+      new Request("http://test/pagination-fixture/?limit=5&offset=10"),
+    );
+    const lastHtml = await last.text();
+    expect(lastHtml).toContain("11–12 of 12");
+    expect(lastHtml).toContain('rel="prev"');
+    expect(lastHtml).not.toContain('rel="next"');
+  });
+
+  it("directory listing sort=mtime orders entries newest-first", async () => {
+    mkdirSync(join(workdir, "mtime-fixture"), { recursive: true });
+    const files = ["a.txt", "b.txt", "c.txt"];
+    for (const n of files) {
+      writeFileSync(join(workdir, "mtime-fixture", n), n);
+    }
+    // a oldest → c newest.
+    utimesSync(
+      join(workdir, "mtime-fixture/a.txt"),
+      new Date("2026-01-01"),
+      new Date("2026-01-01"),
+    );
+    utimesSync(
+      join(workdir, "mtime-fixture/b.txt"),
+      new Date("2026-01-02"),
+      new Date("2026-01-02"),
+    );
+    utimesSync(
+      join(workdir, "mtime-fixture/c.txt"),
+      new Date("2026-01-03"),
+      new Date("2026-01-03"),
+    );
+
+    const res = await app.fetch(
+      new Request("http://test/mtime-fixture/?sort=mtime"),
+    );
+    const html = await res.text();
+    const idxA = html.indexOf(">a.txt<");
+    const idxB = html.indexOf(">b.txt<");
+    const idxC = html.indexOf(">c.txt<");
+    expect(idxA).toBeGreaterThan(0);
+    expect(idxB).toBeGreaterThan(0);
+    expect(idxC).toBeGreaterThan(0);
+    // Newest first → c, then b, then a.
+    expect(idxC).toBeLessThan(idxB);
+    expect(idxB).toBeLessThan(idxA);
+    // The sort link for mtime should carry the ark-active marker.
+    expect(html).toMatch(/<a [^>]*class="ark-active"[^>]*>mtime<\/a>/);
+  });
+
+  it("invalid sort / limit / offset query params fall back to defaults", async () => {
+    mkdirSync(join(workdir, "validation-fixture"), { recursive: true });
+    writeFileSync(join(workdir, "validation-fixture/only.txt"), "x");
+    const res = await app.fetch(
+      new Request(
+        "http://test/validation-fixture/?sort=bogus&limit=-7&offset=garbage",
+      ),
+    );
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    // Default sort=name should be marked active.
+    expect(html).toMatch(/<a [^>]*class="ark-active"[^>]*>name<\/a>/);
+    // Single entry, default limit 200 → no pager.
+    expect(html).not.toContain('rel="next"');
+    expect(html).not.toContain('rel="prev"');
+    expect(html).toContain("only.txt");
   });
 
   it("reader only marks redlinks on <a class='wikilink'>, not plain anchors", async () => {
