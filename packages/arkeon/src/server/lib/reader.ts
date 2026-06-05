@@ -55,7 +55,20 @@ export interface DirEntry {
   short_description: string | null;
 }
 
-export function renderDirectoryListing(dirPath: string, entries: DirEntry[]): string {
+export type ListingSort = "name" | "mtime" | "size";
+
+export interface ListingPage {
+  offset: number;
+  limit: number;
+  total: number;
+  sort: ListingSort;
+}
+
+export function renderDirectoryListing(
+  dirPath: string,
+  entries: DirEntry[],
+  page?: ListingPage,
+): string {
   const title = dirPath === "" ? "arkeon-wiki" : dirPath;
   const items = entries
     .map((e) => {
@@ -82,6 +95,7 @@ export function renderDirectoryListing(dirPath: string, entries: DirEntry[]): st
       return `<li><a href="${escapeAttr(href)}">${anchor}</a>${subtitle}</li>`;
     })
     .join("\n");
+  const controls = page ? renderListingControls(page) : "";
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -91,13 +105,69 @@ export function renderDirectoryListing(dirPath: string, entries: DirEntry[]): st
     body { font: 14px system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
     .ark-sub { color: #666; }
     .ark-empty { color: #999; font-style: italic; }
+    .ark-controls { display: flex; justify-content: space-between; align-items: baseline; margin: 1rem 0; gap: 1rem; flex-wrap: wrap; }
+    .ark-controls a { margin-right: 0.5rem; }
+    .ark-controls a.ark-active { font-weight: 600; text-decoration: none; color: #000; }
+    .ark-page-count { color: #666; }
   </style>
 </head>
 <body>
   <h1>${escapeHtml(title || "/")}</h1>
+  ${controls}
   ${entries.length === 0 ? `<p class="ark-empty">(empty)</p>` : `<ul>${items}</ul>`}
+  ${controls}
 </body>
 </html>`;
+}
+
+function renderListingControls(page: ListingPage): string {
+  const { offset, limit, total, sort } = page;
+  const end = Math.min(offset + limit, total);
+  const sortLinks: ListingSort[] = ["name", "mtime", "size"];
+  const sortHtml = sortLinks
+    .map((s) => {
+      const href = buildPageHref(0, limit, s);
+      const cls = s === sort ? ' class="ark-active"' : "";
+      return `<a href="${escapeAttr(href)}"${cls}>${escapeHtml(s)}</a>`;
+    })
+    .join("");
+
+  let pager = "";
+  if (total > limit) {
+    const prevOffset = Math.max(offset - limit, 0);
+    const nextOffset = offset + limit;
+    const links: string[] = [];
+    if (offset > 0) {
+      links.push(
+        `<a href="${escapeAttr(buildPageHref(prevOffset, limit, sort))}" rel="prev">← prev</a>`,
+      );
+    }
+    if (nextOffset < total) {
+      links.push(
+        `<a href="${escapeAttr(buildPageHref(nextOffset, limit, sort))}" rel="next">next →</a>`,
+      );
+    }
+    pager = links.join(" ");
+  }
+
+  const range =
+    total === 0
+      ? ""
+      : `<span class="ark-page-count">${offset + 1}–${end} of ${total}</span>`;
+
+  return `<div class="ark-controls">
+  <div>sort: ${sortHtml}</div>
+  <div>${pager}${pager && range ? " · " : ""}${range}</div>
+</div>`;
+}
+
+function buildPageHref(offset: number, limit: number, sort: ListingSort): string {
+  const params = new URLSearchParams();
+  if (offset > 0) params.set("offset", String(offset));
+  params.set("limit", String(limit));
+  if (sort !== "name") params.set("sort", sort);
+  const qs = params.toString();
+  return qs ? `?${qs}` : "./";
 }
 
 export function renderNotFound(path: string): string {

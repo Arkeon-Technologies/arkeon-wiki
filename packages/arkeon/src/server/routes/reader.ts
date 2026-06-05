@@ -10,11 +10,19 @@
  *
  * The reader is the catch-all; mount it last so explicit API routes
  * (/query, /tag, /tags, …) win.
+ *
+ * I/O posture: every filesystem touch goes through `node:fs/promises`
+ * so the event loop keeps moving for concurrent API requests during
+ * a long file read. Binary serves stream via `createReadStream` →
+ * `Readable.toWeb` so a 50 MB embedded PDF doesn't buffer fully into
+ * memory before flushing.
  */
 
 import { Hono, type Context } from "hono";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { extname } from "node:path";
+import { createReadStream, type Stats } from "node:fs";
+import { readdir, readFile, stat } from "node:fs/promises";
+import { Readable } from "node:stream";
+import { extname, join } from "node:path";
 
 import type { AppBindings } from "../types.js";
 import { ApiError } from "../lib/errors.js";
@@ -26,9 +34,19 @@ import {
   renderNotFound,
   rewriteWikilinks,
   type DirEntry,
+  type ListingPage,
+  type ListingSort,
 } from "../lib/reader.js";
 
 export const readerRouter = new Hono<AppBindings>();
+
+const DEFAULT_LISTING_LIMIT = 200;
+const MAX_LISTING_LIMIT = 2000;
+const VALID_SORTS: ListingSort[] = ["name", "mtime", "size"];
+// Matches the extractor asset-sync cap from #211 — high enough to
+// stay above libuv's default 4-thread fs pool, low enough to keep
+// the pending-promise set bounded on huge directories.
+const STAT_CONCURRENCY = 16;
 
 function decodePath(rawUrl: string): string {
   const u = new URL(rawUrl);
@@ -64,29 +82,73 @@ readerRouter.get("/*", async (c) => {
   } catch {
     return c.html(renderNotFound(relPath), 404);
   }
-  if (!existsSync(abs)) return c.html(renderNotFound(relPath), 404);
 
-  const stat = statSync(abs);
-  if (stat.isDirectory()) {
+  let st: Stats;
+  try {
+    st = await stat(abs);
+  } catch {
+    return c.html(renderNotFound(relPath), 404);
+  }
+  if (st.isDirectory()) {
     // Browsers usually trailing-slash directory URLs, but treat
     // /<dir> as a directory listing too.
     return serveDirectory(c, root, relPath);
   }
 
+  // Weak ETag from mtime + size. Edits on disk invalidate naturally
+  // because syncFile writes go through atomic rename, which bumps
+  // mtime even when the content hash is identical.
+  //
+  // HTML serves additionally mix in a corpus fingerprint: the
+  // rendered body depends on `knownPaths` (which artifacts exist)
+  // because `rewriteWikilinks` flips an unresolved anchor to the
+  // `redlink` class. If a target lands in the corpus without
+  // touching the source file's mtime, the page would resolve
+  // differently — without the fingerprint, browsers would 304 on
+  // the stale class. Binary serves don't depend on corpus state, so
+  // they keep the cheap two-component tag.
   const ext = extname(relPath).toLowerCase();
-  if (ext === ".html" || ext === ".htm") {
+  const isHtml = ext === ".html" || ext === ".htm";
+  const etag = isHtml
+    ? buildEtag([Math.floor(st.mtimeMs), st.size, await corpusVersion()])
+    : buildEtag([Math.floor(st.mtimeMs), st.size]);
+  const ifNoneMatch = c.req.header("if-none-match");
+  if (ifNoneMatch && etagMatches(etag, ifNoneMatch)) {
+    return new Response(null, { status: 304, headers: cacheHeaders(etag) });
+  }
+
+  if (isHtml) {
+    // HTML still buffers — wikilink rewriting needs the full document
+    // and HTML sidecars are bounded by sane corpus sizes (KB to a few
+    // MB). The streaming win is on raw binaries.
     const sql = createSql();
     const rows = await sql`SELECT path FROM artifacts`;
     const knownPaths = new Set<string>();
     for (const row of rows) knownPaths.add(row.path as string);
-    const original = readFileSync(abs, "utf-8");
-    return c.html(rewriteWikilinks(original, relPath, knownPaths));
+    const original = await readFile(abs, "utf-8");
+    const html = rewriteWikilinks(original, relPath, knownPaths);
+    return new Response(html, {
+      status: 200,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        ...cacheHeaders(etag),
+      },
+    });
   }
 
-  const body = readFileSync(abs);
-  return new Response(body, {
+  // Binary serve: stream off disk so a 50 MB PDF isn't buffered in
+  // full before the first byte ships. `Readable.toWeb` is the
+  // node-stream → web-stream adapter Hono / `new Response(...)`
+  // consume directly.
+  const stream = createReadStream(abs);
+  const webStream = Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>;
+  return new Response(webStream, {
     status: 200,
-    headers: { "content-type": mimeTypeFor(abs) },
+    headers: {
+      "content-type": mimeTypeFor(abs),
+      "content-length": String(st.size),
+      ...cacheHeaders(etag),
+    },
   });
 });
 
@@ -96,9 +158,19 @@ async function serveDirectory(
   relPath: string,
 ): Promise<Response> {
   const abs = relPath === "" ? root : safeResolve(root, relPath);
-  if (!existsSync(abs) || !statSync(abs).isDirectory()) {
+  let st: Stats;
+  try {
+    st = await stat(abs);
+  } catch {
     return c.html(renderNotFound(relPath), 404);
   }
+  if (!st.isDirectory()) {
+    return c.html(renderNotFound(relPath), 404);
+  }
+
+  const limit = parseLimit(c.req.query("limit"));
+  const offset = parseOffset(c.req.query("offset"));
+  const sort = parseSort(c.req.query("sort"));
 
   // Pull labels + short_description for every immediate child of this
   // directory in one query, so we don't re-read each HTML file from
@@ -107,31 +179,174 @@ async function serveDirectory(
   // properties — re-reading would just duplicate that work.
   const childIndex = await loadChildIndex(relPath);
 
-  const entries: DirEntry[] = [];
-  for (const entry of readdirSync(abs, { withFileTypes: true })) {
-    if (entry.name.startsWith(".")) continue;
-    if (entry.isDirectory()) {
-      entries.push({
-        name: entry.name,
-        is_dir: true,
-        label: null,
-        short_description: null,
-      });
-    } else if (entry.isFile()) {
-      const meta = childIndex.get(entry.name);
-      entries.push({
-        name: entry.name,
-        is_dir: false,
-        label: meta?.label ?? null,
-        short_description: meta?.short_description ?? null,
-      });
-    }
+  const dirents = (await readdir(abs, { withFileTypes: true })).filter(
+    (d) => !d.name.startsWith("."),
+  );
+
+  // For mtime / size sorts we need a stat per entry. Name sort skips
+  // the syscall entirely so the cheap path stays cheap.
+  //
+  // Concurrency cap matters at the upper end: a 100k-entry folder
+  // would otherwise queue 100k pending Promise objects in memory
+  // while libuv's default 4-thread pool chewed through them in
+  // batches. Bounded pool keeps the in-flight set ~constant.
+  let entries: SortableEntry[];
+  if (sort === "name") {
+    entries = dirents.map((d) => ({
+      name: d.name,
+      is_dir: d.isDirectory(),
+      mtime_ms: 0,
+      size: 0,
+    }));
+  } else {
+    const stats = await mapPool(dirents, STAT_CONCURRENCY, (d) =>
+      stat(join(abs, d.name)).catch(() => null),
+    );
+    entries = dirents.map((d, i) => ({
+      name: d.name,
+      is_dir: d.isDirectory(),
+      mtime_ms: stats[i]?.mtimeMs ?? 0,
+      size: stats[i]?.size ?? 0,
+    }));
   }
-  entries.sort((a, b) => {
+
+  entries.sort(sorterFor(sort));
+
+  const total = entries.length;
+  const page = entries.slice(offset, offset + limit).map((e): DirEntry => {
+    const meta = e.is_dir ? null : childIndex.get(e.name);
+    return {
+      name: e.name,
+      is_dir: e.is_dir,
+      label: meta?.label ?? null,
+      short_description: meta?.short_description ?? null,
+    };
+  });
+
+  const pagination: ListingPage = { offset, limit, total, sort };
+  return c.html(renderDirectoryListing(relPath, page, pagination));
+}
+
+interface SortableEntry {
+  name: string;
+  is_dir: boolean;
+  mtime_ms: number;
+  size: number;
+}
+
+function sorterFor(sort: ListingSort): (a: SortableEntry, b: SortableEntry) => number {
+  if (sort === "mtime") {
+    return (a, b) => {
+      if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+      // Most recent first.
+      return b.mtime_ms - a.mtime_ms;
+    };
+  }
+  if (sort === "size") {
+    return (a, b) => {
+      if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+      // Largest first; directories sort by name among themselves
+      // (their size is always 0).
+      if (a.is_dir && b.is_dir) return a.name.localeCompare(b.name);
+      return b.size - a.size;
+    };
+  }
+  return (a, b) => {
     if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
     return a.name.localeCompare(b.name);
-  });
-  return c.html(renderDirectoryListing(relPath, entries));
+  };
+}
+
+function parseLimit(raw: string | undefined): number {
+  if (!raw) return DEFAULT_LISTING_LIMIT;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
+    return DEFAULT_LISTING_LIMIT;
+  }
+  return Math.min(n, MAX_LISTING_LIMIT);
+}
+
+function parseOffset(raw: string | undefined): number {
+  if (!raw) return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) return 0;
+  return n;
+}
+
+function parseSort(raw: string | undefined): ListingSort {
+  if (raw && (VALID_SORTS as string[]).includes(raw)) return raw as ListingSort;
+  return "name";
+}
+
+/**
+ * Map `fn` over `items` with bounded concurrency, preserving input
+ * order. Used to cap in-flight stat() calls on large directories
+ * without forcing serial execution.
+ */
+async function mapPool<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = new Array(Math.min(concurrency, items.length))
+    .fill(0)
+    .map(async () => {
+      for (;;) {
+        const i = next++;
+        if (i >= items.length) return;
+        results[i] = await fn(items[i]!, i);
+      }
+    });
+  await Promise.all(workers);
+  return results;
+}
+
+function buildEtag(parts: Array<string | number>): string {
+  return `W/"${parts.join("-")}"`;
+}
+
+/**
+ * Cheap fingerprint of the artifact index. Changes whenever an
+ * artifact is created (COUNT bumps), modified (MAX(updated_at)
+ * bumps), or deleted (COUNT shrinks). Used as the third component
+ * of HTML ETags so a target landing flips the cached redlink class.
+ *
+ * Single aggregation query — no row scan, no allocation. Re-running
+ * it per HTML serve is cheaper than rebuilding `knownPaths` ahead of
+ * the 304 short-circuit.
+ */
+async function corpusVersion(): Promise<string> {
+  const sql = createSql();
+  // `updated_at` is a SQLite text timestamp ("YYYY-MM-DD HH:MM:SS")
+  // — `strftime('%s', ...)` converts it to an epoch-seconds string,
+  // keeping the ETag component digit-only and well-formed under
+  // RFC 9110 entity-tag syntax.
+  const rows = (await sql`
+    SELECT COUNT(*) AS n,
+           COALESCE(strftime('%s', MAX(updated_at)), '0') AS mx
+    FROM artifacts
+  `) as { n: number; mx: string }[];
+  const row = rows[0];
+  return `${row?.n ?? 0}-${row?.mx ?? "0"}`;
+}
+
+function etagMatches(etag: string, header: string): boolean {
+  // RFC 9110: If-None-Match is a comma-separated list. `*` matches
+  // anything. Weak-compare both sides (everything we emit is weak).
+  if (header.trim() === "*") return true;
+  return header
+    .split(",")
+    .map((s) => s.trim())
+    .some((candidate) => candidate === etag);
+}
+
+function cacheHeaders(etag: string): Record<string, string> {
+  return {
+    "cache-control": "no-cache, must-revalidate",
+    etag,
+  };
 }
 
 interface ChildMeta {
