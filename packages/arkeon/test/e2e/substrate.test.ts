@@ -13,6 +13,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   unlinkSync,
   utimesSync,
@@ -1367,13 +1368,13 @@ describe("substrate", () => {
     expect(Array.isArray(body.artifacts)).toBe(true);
   });
 
-  it("HTML href to a moved-between-folders file heals to the new location", async () => {
+  it("HTML href to a moved-between-folders file heals on disk + index", async () => {
     // Setup: inbound article references a sibling article via
     // `./moved-target.html`. The target lives one folder down at
-    // `bf/sub/moved-target.html`. Today the literal-resolved path is
-    // `bf/moved-target.html` — wrong location. Basename fallback in
-    // sync + reader should heal the link to bf/sub/moved-target.html
-    // automatically.
+    // `bf/sub/moved-target.html`. Doctrine: the watcher detects the
+    // mismatch, the basename fallback finds the unique match, and
+    // the SOURCE HTML on disk gets rewritten so its href spells
+    // `sub/moved-target.html`. SQL converges naturally.
     mkdirSync(join(workdir, "bf/sub"), { recursive: true });
     writeFileSync(
       join(workdir, "bf/sub/moved-target.html"),
@@ -1386,20 +1387,31 @@ describe("substrate", () => {
        </body></html>`,
     );
 
-    // Wait for both files to land.
+    // Wait for both files to land AND for the inbound to reflect
+    // the healed target (covers both arrival orders: target-first
+    // heals during inbound's syncText; inbound-first heals during
+    // the reresolve sweep triggered by target's create).
     const sql = createSql();
-    const deadline = Date.now() + 3000;
+    const deadline = Date.now() + 4000;
     while (Date.now() < deadline) {
-      const rows = await sql`
+      const arrived = (await sql`
         SELECT COUNT(*) AS n FROM artifacts
         WHERE path IN ('bf/inbound.html', 'bf/sub/moved-target.html')
-      `;
-      if ((rows[0] as { n: number }).n === 2) break;
+      `) as { n: number }[];
+      const linked = (await sql`
+        SELECT target_path FROM links WHERE source_path = 'bf/inbound.html'
+      `) as { target_path: string }[];
+      if (
+        (arrived[0]?.n ?? 0) === 2 &&
+        linked.some((r) => r.target_path === "bf/sub/moved-target.html")
+      ) {
+        break;
+      }
       await new Promise((r) => setTimeout(r, 50));
     }
 
-    // Index-level convergence: the link row should target the moved
-    // location, not the literal-resolved (and absent) bf/moved-target.html.
+    // Index-level convergence: the link row targets the moved
+    // location, not the literal-resolved (and absent) path.
     const linkRows = (await sql`
       SELECT target_path FROM links WHERE source_path = 'bf/inbound.html'
     `) as { target_path: string }[];
@@ -1407,12 +1419,20 @@ describe("substrate", () => {
       "bf/sub/moved-target.html",
     );
 
-    // Backlinks convergence: the moved file's backlinks should
-    // surface the inbound article without manual rewrites.
+    // Doctrine assertion: the SOURCE file on disk has been edited so
+    // the href spells the new relative path. View-source matches what
+    // renders; the daemon doesn't lie at render time.
+    const sourceOnDisk = readFileSync(
+      join(workdir, "bf/inbound.html"),
+      "utf-8",
+    );
+    expect(sourceOnDisk).toMatch(/href="sub\/moved-target\.html"/);
+    expect(sourceOnDisk).not.toMatch(/href="\.\/moved-target\.html"/);
+
+    // Backlinks convergence: the moved file's backlinks surface the
+    // inbound article via the SQL link row.
     const back = await app.fetch(
-      new Request(
-        "http://test/backlinks?path=bf/sub/moved-target.html",
-      ),
+      new Request("http://test/backlinks?path=bf/sub/moved-target.html"),
     );
     expect(back.status).toBe(200);
     const backBody = (await back.json()) as {
@@ -1422,8 +1442,8 @@ describe("substrate", () => {
       "bf/inbound.html",
     );
 
-    // /redlinks should NOT report bf/moved-target.html — the basename
-    // fallback resolved it at sync time.
+    // /redlinks does not surface the broken literal — the link row
+    // got healed by the reresolve sweep (or by sync extraction).
     const red = await app.fetch(new Request("http://test/redlinks"));
     const redBody = (await red.json()) as {
       redlinks: Array<{ target_path: string }>;
@@ -1432,25 +1452,23 @@ describe("substrate", () => {
       "bf/moved-target.html",
     );
 
-    // Reader: served HTML should rewrite the href to the resolved
-    // path AND NOT carry the redlink class.
+    // Reader is intentionally dumb-serve: the served HTML reflects
+    // the file on disk, which now has the corrected href. No
+    // render-time magic, no redlink class.
     const served = await app.fetch(
       new Request("http://test/bf/inbound.html"),
     );
     expect(served.status).toBe(200);
     const html = await served.text();
-    // href rewritten to the sub-relative path.
-    expect(html).toMatch(
-      /<a class="wikilink" href="sub\/moved-target\.html">/,
-    );
-    // No redlink class added.
+    expect(html).toMatch(/href="sub\/moved-target\.html"/);
     expect(html).not.toMatch(/wikilink[^"]*redlink/);
   });
 
   it("HTML href stays a redlink when basename is ambiguous (no silent guess)", async () => {
-    // Two files share the same basename in different folders.
-    // The inbound href spelling can't be auto-resolved because
-    // fallback has two candidates — it should remain a redlink.
+    // Two files share the same basename in different folders. The
+    // inbound href can't be auto-healed because fallback has two
+    // candidates. Doctrine consequence: no SQL rewrite, no file
+    // edit, anchor surfaces as a redlink at render time.
     mkdirSync(join(workdir, "ambig/a"), { recursive: true });
     mkdirSync(join(workdir, "ambig/b"), { recursive: true });
     writeFileSync(
@@ -1461,12 +1479,10 @@ describe("substrate", () => {
       join(workdir, "ambig/b/dup.html"),
       `<!doctype html><html><head><title>B dup</title></head><body>b</body></html>`,
     );
-    writeFileSync(
-      join(workdir, "ambig/in.html"),
-      `<!doctype html><html><head><title>In</title></head><body>
+    const inSrc = `<!doctype html><html><head><title>In</title></head><body>
          <a class="wikilink" href="./dup.html">dup</a>
-       </body></html>`,
-    );
+       </body></html>`;
+    writeFileSync(join(workdir, "ambig/in.html"), inSrc);
 
     const sql = createSql();
     const deadline = Date.now() + 3000;
@@ -1486,7 +1502,14 @@ describe("substrate", () => {
     `) as { target_path: string }[];
     expect(linkRows.map((r) => r.target_path)).toContain("ambig/dup.html");
 
-    // Reader marks the anchor as a redlink (still ambiguous at render time).
+    // Source HTML on disk is untouched — no heal write happened.
+    const sourceOnDisk = readFileSync(
+      join(workdir, "ambig/in.html"),
+      "utf-8",
+    );
+    expect(sourceOnDisk).toContain(`href="./dup.html"`);
+
+    // Reader marks the anchor as a redlink (visible-broken).
     const served = await app.fetch(
       new Request("http://test/ambig/in.html"),
     );

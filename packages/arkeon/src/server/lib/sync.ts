@@ -18,7 +18,12 @@ import { posix } from "node:path";
 import { createSql, withTransaction } from "./sql.js";
 import { classifyFile } from "./fs-watcher.js";
 import { parseHtmlMeta } from "./html-meta.js";
-import { extractHtmlLinks } from "./html-links.js";
+import {
+  applyHeals,
+  writeAtomic,
+  type HrefHeal,
+} from "./heal-html.js";
+import { extractHtmlLinks, resolveHref } from "./html-links.js";
 import { extractMarkdownLinks } from "./md-links.js";
 
 export type ArtifactKind = "text" | "asset";
@@ -166,7 +171,14 @@ export async function syncFile(
   }
 
   // (4) Real content change.
-  const result = await syncText(relativePath, content, hash, fingerprint, existing[0] ?? null);
+  const result = await syncText(
+    watchedRoot,
+    relativePath,
+    content,
+    hash,
+    fingerprint,
+    existing[0] ?? null,
+  );
 
   // A new text artifact may have just resolved one or more previously-
   // stuck redlinks — both MD `[[X]]` (slug-form) and HTML hrefs whose
@@ -174,12 +186,13 @@ export async function syncFile(
   // between folders). Run the resolver after every create so live
   // watcher writes converge, not just the initial reconcile.
   if (result.action === "created") {
-    await reresolveBasenameRedlinks();
+    await reresolveBasenameRedlinks(watchedRoot);
   }
   return result;
 }
 
 async function syncText(
+  watchedRoot: string,
   relativePath: string,
   content: string,
   hash: string,
@@ -191,7 +204,8 @@ async function syncText(
   const resolvedLinks: { target: string; text: string | null; attrs: Record<string, string> }[] = [];
 
   if (isHtmlPath(relativePath)) {
-    const meta = parseHtmlMeta(content);
+    let workingContent = content;
+    const meta = parseHtmlMeta(workingContent);
     // Sidecars: always derive label from the binary's basename so
     // asset.label and sidecar.label match (paper.pdf → "paper" on
     // both rows). The embedded <title> is for human display, not
@@ -209,14 +223,39 @@ async function syncText(
     const pathRows = await sql`SELECT path FROM artifacts`;
     const known = new Set<string>();
     for (const row of pathRows) known.add(row.path as string);
-    for (const l of extractHtmlLinks(content, relativePath, known)) {
+    const heals: HrefHeal[] = [];
+    for (const l of extractHtmlLinks(workingContent, relativePath, known)) {
       if (l.resolved == null) continue;
+      // If extractHtmlLinks healed the resolution via basename
+      // fallback, queue the source-file edit. The doctrine: rewrite
+      // the href on disk so subsequent extractions see coherent
+      // state and "view source" matches what renders.
+      const literal = resolveHref(l.href, relativePath);
+      if (literal !== null && literal !== l.resolved) {
+        heals.push({ brokenTarget: literal, healedTarget: l.resolved });
+      }
       resolvedLinks.push({
         target: l.resolved,
         text: l.text || null,
         attrs: l.data ?? {},
       });
     }
+    if (heals.length > 0) {
+      const healed = applyHeals(workingContent, relativePath, heals);
+      if (healed.changed > 0) {
+        const absPath = join(watchedRoot, relativePath);
+        writeAtomic(absPath, healed.content);
+        // Re-derive hash + fingerprint from the post-heal file so
+        // the row we're about to write matches what's on disk —
+        // when the watcher fires on our own write, it'll hit the
+        // stat-fingerprint fast path and skip a redundant sync.
+        workingContent = healed.content;
+        hash = contentHash(workingContent);
+        const newStats = statSync(absPath);
+        fingerprint = statFingerprint(newStats);
+      }
+    }
+    content = workingContent;
   } else if (isMarkdownPath(relativePath)) {
     label = basename(relativePath, extname(relativePath));
     propsJson = JSON.stringify({ file_type: extname(relativePath).slice(1) });
@@ -420,7 +459,7 @@ export async function syncDirectory(
   // B.md was indexed, A's link to [[B]] got persisted as a literal
   // "B" redlink and would never converge without this sweep. Same
   // shape applies to HTML hrefs that pointed at an old folder path.
-  await reresolveBasenameRedlinks();
+  await reresolveBasenameRedlinks(watchedRoot);
 
   return summary;
 }
@@ -432,28 +471,40 @@ export async function syncDirectory(
  *   - MD slug-form (`target_path` with no slash, e.g. "B"): match
  *     against basename OR stem (with-or-without-extension), per the
  *     existing MD `[[X]]` semantics. Lets `[[paper]]` heal to
- *     `paper.pdf.html`.
+ *     `paper.pdf.html`. Index-only — the source `.md` keeps its
+ *     abstract `[[X]]` syntax (that's the point of slug resolution).
  *   - HTML path-form (`target_path` with a slash, e.g.
  *     "chartbook/article-one.html"): match against the target's own
- *     basename, extension-strict. Lets a moved-between-folders
- *     `./article-one.html` heal symmetrically with MD.
+ *     basename, extension-strict. When a unique fallback exists, ALSO
+ *     edit the source HTML on disk so the href spells the new path —
+ *     the doctrine is that the filesystem is truth, so corrections
+ *     get propagated as real file edits. Source-file write is
+ *     skipped silently when the inbound source can't be read
+ *     (deleted, permissions); the next reconcile retries.
  *
  * Ambiguous basenames (>1 match) are skipped in both shapes — the
  * link stays a redlink. For MD the operator can disambiguate with
- * `[[folder/X]]`; for HTML, the inbound article has to be edited.
+ * `[[folder/X]]`; for HTML, the inbound article has to be edited
+ * manually.
  *
  * Called after `syncDirectory` (reconcile case) and after every
  * `syncFile` create (live watcher case) so resolution converges
  * regardless of file-arrival order.
  */
-export async function reresolveBasenameRedlinks(): Promise<void> {
+export async function reresolveBasenameRedlinks(
+  watchedRoot: string,
+): Promise<void> {
   const sql = createSql();
+  // Pull source_path alongside target_path so we can locate the
+  // inbound article(s) for HTML source-file healing. Multiple inbound
+  // articles can share the same broken target — each needs its own
+  // file rewrite, so don't DISTINCT the target away.
   const rows = (await sql`
-    SELECT DISTINCT l.target_path
+    SELECT l.source_path, l.target_path
     FROM links l
     LEFT JOIN artifacts a ON a.path = l.target_path
     WHERE a.path IS NULL
-  `) as { target_path: string }[];
+  `) as { source_path: string; target_path: string }[];
   if (rows.length === 0) return;
 
   const allRows = (await sql`SELECT path FROM artifacts`) as { path: string }[];
@@ -478,11 +529,20 @@ export async function reresolveBasenameRedlinks(): Promise<void> {
     (byStrictBase[b] ??= []).push(r.path);
   }
 
+  // Group heals: SQL updates per unique target, HTML file edits per
+  // (source, [heals]) tuple. Same broken target can heal once in SQL
+  // but require N file rewrites if N inbound HTML articles point at
+  // it.
+  const sqlHeals = new Map<string, string>(); // brokenTarget → healedTarget
+  const htmlFileHeals = new Map<string, HrefHeal[]>(); // source_path → heals
+
   for (const row of rows) {
     const target = row.target_path;
+    const source = row.source_path;
     let candidates: string[] | undefined;
+    let isPathForm = false;
     if (target.includes("/")) {
-      // HTML path-form. Strict-basename match.
+      isPathForm = true;
       const targetBase = posix.basename(target).toLowerCase();
       candidates = byStrictBase[targetBase];
       // Don't self-rewrite to the same path (defensive; the redlink
@@ -491,13 +551,49 @@ export async function reresolveBasenameRedlinks(): Promise<void> {
         continue;
       }
     } else {
-      // MD slug-form: basename-or-stem match, original MD semantics.
       candidates = byBaseAndStem[target.toLowerCase()];
     }
     if (!candidates || candidates.length !== 1) continue;
+    const healed = candidates[0]!;
+    sqlHeals.set(target, healed);
+    // Source-file healing is HTML-only by design: MD `[[X]]` is an
+    // abstract slug that already resolves by basename — keeping
+    // `[[X]]` as written is the operator's intent. HTML hrefs claim
+    // a specific path; rewriting them to match reality is the honest
+    // move.
+    if (isPathForm && (source.endsWith(".html") || source.endsWith(".htm"))) {
+      const list = htmlFileHeals.get(source) ?? [];
+      list.push({ brokenTarget: target, healedTarget: healed });
+      htmlFileHeals.set(source, list);
+    }
+  }
+
+  for (const [broken, healed] of sqlHeals) {
     await sql.query(
       `UPDATE links SET target_path = ? WHERE target_path = ?`,
-      [candidates[0], target],
+      [healed, broken],
     );
+  }
+
+  for (const [sourcePath, heals] of htmlFileHeals) {
+    const absPath = join(watchedRoot, sourcePath);
+    let content: string;
+    try {
+      content = readFileSync(absPath, "utf-8");
+    } catch (err) {
+      console.error(
+        `[sync] heal: source ${sourcePath} unreadable — ${(err as Error).message}`,
+      );
+      continue;
+    }
+    const result = applyHeals(content, sourcePath, heals);
+    if (result.changed === 0) continue;
+    try {
+      writeAtomic(absPath, result.content);
+    } catch (err) {
+      console.error(
+        `[sync] heal: write failed for ${sourcePath} — ${(err as Error).message}`,
+      );
+    }
   }
 }

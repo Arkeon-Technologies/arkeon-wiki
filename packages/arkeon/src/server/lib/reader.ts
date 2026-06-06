@@ -15,26 +15,21 @@
 import { parse } from "node-html-parser";
 import { posix } from "node:path";
 
-import { relativeHref, resolveByBasename } from "./basename-fallback.js";
 import { resolveHref } from "./html-links.js";
 
 /**
- * Walk every `<a class="wikilink">` and reconcile its href with the
- * current artifact index. Three outcomes per anchor:
+ * Walk every `<a class="wikilink">` in served HTML; literal-resolve
+ * each href against the artifact index. If the resolved path isn't
+ * a known artifact, tag the anchor with the `redlink` class so the
+ * reader styles it as broken.
  *
- *   1. Literal-resolve hits → leave alone.
- *   2. Literal-resolve misses but basename is unique elsewhere →
- *      rewrite the anchor's `href` to a relative path from the
- *      source's directory to the basename-resolved target. The
- *      on-disk source file is NOT mutated; only the served HTML
- *      reflects the convergence, the same way the substrate
- *      converges its own link graph at index time.
- *   3. Literal-resolve misses AND basename match is ambiguous (or
- *      absent) → add the `redlink` class so the reader styles it
- *      and a click reveals the broken state.
- *
- * Same fallback contract `extractHtmlLinks` uses at index time, so a
- * served page and a `/backlinks` query agree on what's resolved.
+ * The reader is intentionally dumb-serve: no basename fallback, no
+ * href rewriting. If a href doesn't resolve here it's because sync
+ * couldn't (or chose not to) heal it on disk — that's a signal the
+ * user should see, not something the renderer should paper over.
+ * Basename-fallback heals happen in the sync path via source-file
+ * rewrites; by the time content reaches the reader, the href is
+ * either coherent on disk or genuinely broken.
  */
 export function rewriteWikilinks(
   html: string,
@@ -53,18 +48,10 @@ export function rewriteWikilinks(
     if (!href) continue;
     const resolved = resolveHref(href, fromPath);
     if (!resolved) continue;
-    if (knownPaths.has(resolved)) continue;
-    const fallback = resolveByBasename(resolved, knownPaths);
-    if (fallback !== null) {
-      // Rewrite the rendered href so the click navigates to the moved
-      // file. Source HTML on disk is untouched — basename fallback is
-      // a render-time concession to filesystem moves, not a corpus
-      // mutation.
-      a.setAttribute("href", relativeHref(fromPath, fallback));
-      continue;
+    if (!knownPaths.has(resolved)) {
+      tokens.add("redlink");
+      a.setAttribute("class", [...tokens].join(" "));
     }
-    tokens.add("redlink");
-    a.setAttribute("class", [...tokens].join(" "));
   }
   return root.toString();
 }
