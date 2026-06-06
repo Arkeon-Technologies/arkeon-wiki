@@ -99,6 +99,12 @@ async function waitForArtifact(
   path: string,
   timeoutMs = 10_000,
 ): Promise<void> {
+  // This poll depends on `/tags?path=…` returning a NON-2xx status
+  // (today: 404) when the artifact hasn't been indexed yet. If the
+  // route ever changes to "always 200 with an empty tag map," this
+  // loop silently returns instantly and the CLI cases race the
+  // watcher. Future-you: update the poll predicate when that
+  // happens — don't trust the loop to keep gating.
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
@@ -138,6 +144,14 @@ describe("cli shellout", () => {
     // that string so the `where` assertion matches verbatim — and so
     // `--api-url` overrides we pass below resolve identically to the
     // registry's view.
+    //
+    // Caveat for future-you: on hosts where Node's DNS prefers IPv6,
+    // `localhost` can resolve to `::1`. The daemon binds to
+    // `127.0.0.1` only, so a v6-first resolution would fail every
+    // fetch. CI (Ubuntu) and local macOS both resolve v4 first
+    // today; if a connect-refused mystery ever appears, swap to
+    // `127.0.0.1` and update the `where` assertion to match on port
+    // instead of the verbatim URL.
     baseUrl = `http://localhost:${port}`;
 
     // Corpus: one HTML article, one Markdown source with a wikilink
@@ -169,8 +183,11 @@ describe("cli shellout", () => {
           ...process.env,
           ARKEON_WIKI_HOME: stateDir,
         },
-        // Inherit so daemon logs reach the vitest reporter on failure.
-        stdio: ["ignore", "ignore", "ignore"],
+        // stdin ignored, stdout muted (daemon's "Ready" banner is
+        // noise during a green run), stderr inherited so any crash
+        // or unhandled rejection surfaces in the vitest reporter
+        // when something does go wrong on CI.
+        stdio: ["ignore", "ignore", "inherit"],
       },
     );
     daemon.on("error", (err) => {
