@@ -169,11 +169,12 @@ export async function syncFile(
   const result = await syncText(relativePath, content, hash, fingerprint, existing[0] ?? null);
 
   // A new text artifact may have just resolved one or more previously-
-  // stuck markdown redlinks (their [[X]] target slug matches the new
-  // file's basename). Run the resolver after every create so live
+  // stuck redlinks — both MD `[[X]]` (slug-form) and HTML hrefs whose
+  // basename matches the new file (path-form, healed when X moves
+  // between folders). Run the resolver after every create so live
   // watcher writes converge, not just the initial reconcile.
   if (result.action === "created") {
-    await reresolveMarkdownRedlinks();
+    await reresolveBasenameRedlinks();
   }
   return result;
 }
@@ -201,7 +202,14 @@ async function syncText(
       meta.title ??
       basename(relativePath, extname(relativePath));
     propsJson = JSON.stringify(meta.properties);
-    for (const l of extractHtmlLinks(content, relativePath)) {
+    // Pass `known` so extractHtmlLinks can apply basename fallback
+    // when a literal-relative-resolved href misses a file that's
+    // been moved between folders. Same shape MD already uses.
+    const sql = createSql();
+    const pathRows = await sql`SELECT path FROM artifacts`;
+    const known = new Set<string>();
+    for (const row of pathRows) known.add(row.path as string);
+    for (const l of extractHtmlLinks(content, relativePath, known)) {
       if (l.resolved == null) continue;
       resolvedLinks.push({
         target: l.resolved,
@@ -405,53 +413,91 @@ export async function syncDirectory(
     }
   }
 
-  // Second pass: re-resolve markdown redlinks whose target slug now
-  // matches an artifact basename. Necessary because syncFile resolves
-  // [[X]] against the index as it stood when the source was synced —
-  // if A.md was processed before B.md was indexed, A's link to [[B]]
-  // got persisted as a literal "B" redlink and would never converge
-  // without this sweep.
-  await reresolveMarkdownRedlinks();
+  // Second pass: re-resolve unresolved redlinks (both MD slug-form
+  // and HTML path-form) whose basename now matches an artifact.
+  // Necessary because syncFile resolves links against the index as it
+  // stood when the source was synced — if A.md was processed before
+  // B.md was indexed, A's link to [[B]] got persisted as a literal
+  // "B" redlink and would never converge without this sweep. Same
+  // shape applies to HTML hrefs that pointed at an old folder path.
+  await reresolveBasenameRedlinks();
 
   return summary;
 }
 
 /**
- * Walk every unresolved slug-form redlink and re-resolve against the
- * current artifact index. Called after `syncDirectory` (reconcile case)
- * and after every `syncFile` create (live watcher case) so markdown
- * link resolution converges regardless of file-arrival order.
+ * Walk every unresolved redlink and re-resolve against the current
+ * artifact index by basename. Two shapes handled in one pass:
+ *
+ *   - MD slug-form (`target_path` with no slash, e.g. "B"): match
+ *     against basename OR stem (with-or-without-extension), per the
+ *     existing MD `[[X]]` semantics. Lets `[[paper]]` heal to
+ *     `paper.pdf.html`.
+ *   - HTML path-form (`target_path` with a slash, e.g.
+ *     "chartbook/article-one.html"): match against the target's own
+ *     basename, extension-strict. Lets a moved-between-folders
+ *     `./article-one.html` heal symmetrically with MD.
+ *
+ * Ambiguous basenames (>1 match) are skipped in both shapes — the
+ * link stays a redlink. For MD the operator can disambiguate with
+ * `[[folder/X]]`; for HTML, the inbound article has to be edited.
+ *
+ * Called after `syncDirectory` (reconcile case) and after every
+ * `syncFile` create (live watcher case) so resolution converges
+ * regardless of file-arrival order.
  */
-export async function reresolveMarkdownRedlinks(): Promise<void> {
+export async function reresolveBasenameRedlinks(): Promise<void> {
   const sql = createSql();
   const rows = (await sql`
     SELECT DISTINCT l.target_path
     FROM links l
     LEFT JOIN artifacts a ON a.path = l.target_path
-    WHERE a.path IS NULL AND l.target_path NOT LIKE '%/%'
+    WHERE a.path IS NULL
   `) as { target_path: string }[];
   if (rows.length === 0) return;
 
   const allRows = (await sql`SELECT path FROM artifacts`) as { path: string }[];
-  // Index artifacts by both basename and basename-without-extension
-  // so [[paper]] resolves to paper.pdf.html and [[paper.pdf.html]] also
-  // resolves. Ambiguous basenames (>1 match) are skipped — the user can
-  // disambiguate with [[folder/X]].
-  const byBase: Record<string, string[]> = {};
+  // Two indices because the two redlink shapes need different match
+  // semantics:
+  //
+  //   - `byBaseAndStem` unions full basename AND stem (basename
+  //     without final extension). Mirrors the pre-change MD logic so
+  //     `[[paper]]` keeps resolving to `paper.pdf.html` and
+  //     `[[paper.pdf]]` keeps being ambiguous when both a `.pdf`
+  //     asset and its `.pdf.html` sidecar exist.
+  //   - `byStrictBase` indexes full basename only. HTML hrefs are
+  //     explicit about the extension; `./article.html` shouldn't
+  //     quietly heal to `article.md`.
+  const byBaseAndStem: Record<string, string[]> = {};
+  const byStrictBase: Record<string, string[]> = {};
   for (const r of allRows) {
     const b = posix.basename(r.path).toLowerCase();
     const s = b.replace(/\.[^.]+$/, "");
-    (byBase[b] ??= []).push(r.path);
-    if (s !== b) (byBase[s] ??= []).push(r.path);
+    (byBaseAndStem[b] ??= []).push(r.path);
+    if (s !== b) (byBaseAndStem[s] ??= []).push(r.path);
+    (byStrictBase[b] ??= []).push(r.path);
   }
 
   for (const row of rows) {
-    const slug = row.target_path.toLowerCase();
-    const candidates = byBase[slug];
+    const target = row.target_path;
+    let candidates: string[] | undefined;
+    if (target.includes("/")) {
+      // HTML path-form. Strict-basename match.
+      const targetBase = posix.basename(target).toLowerCase();
+      candidates = byStrictBase[targetBase];
+      // Don't self-rewrite to the same path (defensive; the redlink
+      // wouldn't exist if it already pointed at the present row).
+      if (candidates && candidates.length === 1 && candidates[0] === target) {
+        continue;
+      }
+    } else {
+      // MD slug-form: basename-or-stem match, original MD semantics.
+      candidates = byBaseAndStem[target.toLowerCase()];
+    }
     if (!candidates || candidates.length !== 1) continue;
     await sql.query(
       `UPDATE links SET target_path = ? WHERE target_path = ?`,
-      [candidates[0], row.target_path],
+      [candidates[0], target],
     );
   }
 }

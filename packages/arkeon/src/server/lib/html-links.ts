@@ -30,6 +30,8 @@
 import { parse } from "node-html-parser";
 import { posix } from "node:path";
 
+import { resolveByBasename } from "./basename-fallback.js";
+
 export interface HtmlLink {
   href: string;
   text: string;
@@ -42,7 +44,26 @@ function hasWikilinkClass(cls: string | undefined): boolean {
   return cls.split(/\s+/).some((token) => token === "wikilink");
 }
 
-export function extractHtmlLinks(html: string, fromPath: string): HtmlLink[] {
+/**
+ * Extract every `<a class="wikilink">` from `html` and resolve its
+ * href against the article's directory.
+ *
+ * When `knownPaths` is provided AND the literal-resolved path isn't
+ * in it, fall back to a strict basename-unique match. This makes HTML
+ * resolution symmetric with MD `[[X]]`: a target that moved between
+ * folders heals automatically as long as its basename is unique.
+ * Ambiguous basenames keep the literal path so the anchor still
+ * surfaces as a redlink — same dedup rule MD uses.
+ *
+ * Callers that don't have an index handy (or want strict literal
+ * resolution, e.g. for tests) can omit `knownPaths`; the resolver
+ * then returns only the literal-relative path.
+ */
+export function extractHtmlLinks(
+  html: string,
+  fromPath: string,
+  knownPaths?: ReadonlySet<string>,
+): HtmlLink[] {
   const root = parse(html);
   const out: HtmlLink[] = [];
   for (const a of root.querySelectorAll("a")) {
@@ -54,7 +75,13 @@ export function extractHtmlLinks(html: string, fromPath: string): HtmlLink[] {
     for (const [k, v] of Object.entries(a.attributes)) {
       if (k.startsWith("data-")) data[k.slice(5)] = String(v);
     }
-    out.push({ href, text, resolved: resolveHref(href, fromPath), data });
+    const literal = resolveHref(href, fromPath);
+    let resolved: string | null = literal;
+    if (literal !== null && knownPaths !== undefined && !knownPaths.has(literal)) {
+      const fallback = resolveByBasename(literal, knownPaths);
+      if (fallback !== null) resolved = fallback;
+    }
+    out.push({ href, text, resolved, data });
   }
   return out;
 }

@@ -1366,4 +1366,131 @@ describe("substrate", () => {
     const body = (await res.json()) as { artifacts: unknown[] };
     expect(Array.isArray(body.artifacts)).toBe(true);
   });
+
+  it("HTML href to a moved-between-folders file heals to the new location", async () => {
+    // Setup: inbound article references a sibling article via
+    // `./moved-target.html`. The target lives one folder down at
+    // `bf/sub/moved-target.html`. Today the literal-resolved path is
+    // `bf/moved-target.html` — wrong location. Basename fallback in
+    // sync + reader should heal the link to bf/sub/moved-target.html
+    // automatically.
+    mkdirSync(join(workdir, "bf/sub"), { recursive: true });
+    writeFileSync(
+      join(workdir, "bf/sub/moved-target.html"),
+      `<!doctype html><html><head><title>Moved Target</title></head><body><p>moved</p></body></html>`,
+    );
+    writeFileSync(
+      join(workdir, "bf/inbound.html"),
+      `<!doctype html><html><head><title>Inbound</title></head><body>
+         <a class="wikilink" href="./moved-target.html">moved</a>
+       </body></html>`,
+    );
+
+    // Wait for both files to land.
+    const sql = createSql();
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      const rows = await sql`
+        SELECT COUNT(*) AS n FROM artifacts
+        WHERE path IN ('bf/inbound.html', 'bf/sub/moved-target.html')
+      `;
+      if ((rows[0] as { n: number }).n === 2) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    // Index-level convergence: the link row should target the moved
+    // location, not the literal-resolved (and absent) bf/moved-target.html.
+    const linkRows = (await sql`
+      SELECT target_path FROM links WHERE source_path = 'bf/inbound.html'
+    `) as { target_path: string }[];
+    expect(linkRows.map((r) => r.target_path)).toContain(
+      "bf/sub/moved-target.html",
+    );
+
+    // Backlinks convergence: the moved file's backlinks should
+    // surface the inbound article without manual rewrites.
+    const back = await app.fetch(
+      new Request(
+        "http://test/backlinks?path=bf/sub/moved-target.html",
+      ),
+    );
+    expect(back.status).toBe(200);
+    const backBody = (await back.json()) as {
+      backlinks: Array<{ source_path: string }>;
+    };
+    expect(backBody.backlinks.map((b) => b.source_path)).toContain(
+      "bf/inbound.html",
+    );
+
+    // /redlinks should NOT report bf/moved-target.html — the basename
+    // fallback resolved it at sync time.
+    const red = await app.fetch(new Request("http://test/redlinks"));
+    const redBody = (await red.json()) as {
+      redlinks: Array<{ target_path: string }>;
+    };
+    expect(redBody.redlinks.map((r) => r.target_path)).not.toContain(
+      "bf/moved-target.html",
+    );
+
+    // Reader: served HTML should rewrite the href to the resolved
+    // path AND NOT carry the redlink class.
+    const served = await app.fetch(
+      new Request("http://test/bf/inbound.html"),
+    );
+    expect(served.status).toBe(200);
+    const html = await served.text();
+    // href rewritten to the sub-relative path.
+    expect(html).toMatch(
+      /<a class="wikilink" href="sub\/moved-target\.html">/,
+    );
+    // No redlink class added.
+    expect(html).not.toMatch(/wikilink[^"]*redlink/);
+  });
+
+  it("HTML href stays a redlink when basename is ambiguous (no silent guess)", async () => {
+    // Two files share the same basename in different folders.
+    // The inbound href spelling can't be auto-resolved because
+    // fallback has two candidates — it should remain a redlink.
+    mkdirSync(join(workdir, "ambig/a"), { recursive: true });
+    mkdirSync(join(workdir, "ambig/b"), { recursive: true });
+    writeFileSync(
+      join(workdir, "ambig/a/dup.html"),
+      `<!doctype html><html><head><title>A dup</title></head><body>a</body></html>`,
+    );
+    writeFileSync(
+      join(workdir, "ambig/b/dup.html"),
+      `<!doctype html><html><head><title>B dup</title></head><body>b</body></html>`,
+    );
+    writeFileSync(
+      join(workdir, "ambig/in.html"),
+      `<!doctype html><html><head><title>In</title></head><body>
+         <a class="wikilink" href="./dup.html">dup</a>
+       </body></html>`,
+    );
+
+    const sql = createSql();
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      const rows = await sql`
+        SELECT COUNT(*) AS n FROM artifacts
+        WHERE path IN ('ambig/a/dup.html','ambig/b/dup.html','ambig/in.html')
+      `;
+      if ((rows[0] as { n: number }).n === 3) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    // Link row points at the literal-resolved (missing) path —
+    // ambiguous fallback is not taken.
+    const linkRows = (await sql`
+      SELECT target_path FROM links WHERE source_path = 'ambig/in.html'
+    `) as { target_path: string }[];
+    expect(linkRows.map((r) => r.target_path)).toContain("ambig/dup.html");
+
+    // Reader marks the anchor as a redlink (still ambiguous at render time).
+    const served = await app.fetch(
+      new Request("http://test/ambig/in.html"),
+    );
+    const html = await served.text();
+    expect(html).toMatch(/class="wikilink redlink"/);
+  });
 });
