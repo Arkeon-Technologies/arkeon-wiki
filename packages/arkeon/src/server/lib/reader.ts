@@ -17,6 +17,20 @@ import { posix } from "node:path";
 
 import { resolveHref } from "./html-links.js";
 
+/**
+ * Walk every `<a class="wikilink">` in served HTML; literal-resolve
+ * each href against the artifact index. If the resolved path isn't
+ * a known artifact, tag the anchor with the `redlink` class so the
+ * reader styles it as broken.
+ *
+ * The reader is intentionally dumb-serve: no basename fallback, no
+ * href rewriting. If a href doesn't resolve here it's because sync
+ * couldn't (or chose not to) heal it on disk — that's a signal the
+ * user should see, not something the renderer should paper over.
+ * Basename-fallback heals happen in the sync path via source-file
+ * rewrites; by the time content reaches the reader, the href is
+ * either coherent on disk or genuinely broken.
+ */
 export function rewriteWikilinks(
   html: string,
   fromPath: string,

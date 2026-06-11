@@ -129,4 +129,41 @@ describe("extractHtmlLinks", () => {
     const html = `<img src="../images/chart.png" alt="chart">`;
     expect(extractHtmlLinks(html, "wiki/foo.html")).toEqual([]);
   });
+
+  it("falls back to a basename-unique match when knownPaths is provided and literal misses", () => {
+    // chartbook/article.html was the inbound href when the target
+    // lived there; the file has since moved to root. With knownPaths
+    // provided, extraction should heal the link to root article.html.
+    const html = `<a class="wikilink" href="./article.html">x</a>`;
+    const known = new Set(["chartbook/index.html", "article.html"]);
+    const out = extractHtmlLinks(html, "chartbook/index.html", known);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.resolved).toBe("article.html");
+  });
+
+  it("keeps the literal resolution when basename is ambiguous", () => {
+    // Two files share the basename — fallback can't pick, so the
+    // anchor stays a redlink at the literal-resolved path.
+    const html = `<a class="wikilink" href="./article.html">x</a>`;
+    const known = new Set([
+      "chartbook/index.html",
+      "iarpa/article.html",
+      "chartbook/article.html",
+    ]);
+    // Note: chartbook/article.html IS in known, so this is the
+    // "literal hit" path. Use a different fromPath to force the
+    // fallback consideration.
+    const out = extractHtmlLinks(html, "missing/index.html", known);
+    expect(out).toHaveLength(1);
+    // literal-resolved is missing/article.html → ambiguous fallback
+    // (two matches) → keep literal.
+    expect(out[0]!.resolved).toBe("missing/article.html");
+  });
+
+  it("without knownPaths, behavior is the pre-change literal resolve", () => {
+    const html = `<a class="wikilink" href="./article.html">x</a>`;
+    const out = extractHtmlLinks(html, "chartbook/index.html");
+    expect(out).toHaveLength(1);
+    expect(out[0]!.resolved).toBe("chartbook/article.html");
+  });
 });
